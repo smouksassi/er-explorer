@@ -1,0 +1,7 @@
+cff-version: 1.2.0
+title: ER Explorer
+message: "Please cite ER Explorer if used in research."
+authors:
+- family-names: Mouksassi
+  given-names: Samer
+license: MIT
