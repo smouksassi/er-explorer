@@ -1,0 +1,23 @@
+{
+  "name": "@er-explorer/visualization-engine",
+  "version": "0.0.1",
+  "private": false,
+  "description": "Visualization engine for ER Explorer to render publication-quality charts.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    "import": "./dist/index.js",
+    "require": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint . --ext .ts",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@er-explorer/statistical-engine": "workspace:*"
+  },
+  "files": ["dist"],
+  "keywords": ["er-explorer", "visualization", "svg"],
+  "license": "MIT"
+}
