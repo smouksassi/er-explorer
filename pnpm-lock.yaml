@@ -20,6 +20,9 @@ importers:
       eslint:
         specifier: ^8.57.0
         version: 8.57.1
+      pnpm:
+        specifier: ^11.9.0
+        version: 11.11.0
       rimraf:
         specifier: ^5.0.0
         version: 5.0.10
@@ -561,6 +564,11 @@ packages:
   picomatch@2.3.2:
     resolution: {integrity: sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==}
     engines: {node: '>=8.6'}
+
+  pnpm@11.11.0:
+    resolution: {integrity: sha512-RGP2X9gO2A1pvB1L8WPulPYFxzgPwxi7Wy6+FfjNEtScUaTVnpUbQB52TTtsp1HL9RvFDtcAGmvLSTXmhMNIgg==}
+    engines: {node: '>=22.13'}
+    hasBin: true
 
   prelude-ls@1.2.1:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
@@ -1244,6 +1252,8 @@ snapshots:
   path-type@4.0.0: {}
 
   picomatch@2.3.2: {}
+
+  pnpm@11.11.0: {}
 
   prelude-ls@1.2.1: {}
 
