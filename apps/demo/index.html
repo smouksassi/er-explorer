@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ER Explorer — Minimal Demo</title>
+<style>
+  :root {
+    --bg: #f6f7fb;
+    --panel: #ffffff;
+    --text: #182033;
+    --muted: #667085;
+    --border: #d8dfea;
+    --accent: #2563eb;
+    --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 22px; }
+  .eyebrow { color: var(--accent); font-weight: 800; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  h1 { margin: 0 0 8px 0; font-size: 28px; letter-spacing: -0.03em; }
+  .sub { margin: 0 0 18px 0; color: var(--muted); line-height: 1.5; max-width: 980px; font-size: 14px; }
+  .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .card, .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); }
+  .card { padding: 16px 18px; }
+  .kpi { font-size: 26px; font-weight: 800; line-height: 1; }
+  .kpi-label { margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+  .panel { padding: 12px 12px 8px 12px; margin-bottom: 18px; }
+  .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; padding: 6px 8px 10px 8px; }
+  .panel-title { font-weight: 800; font-size: 15px; }
+  .panel-note { color: var(--muted); font-size: 12.5px; max-width: 640px; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field label { font-size: 11px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+  select, button { border: 1px solid var(--border); background: #fff; color: var(--text); border-radius: 10px; padding: 7px 10px; cursor: pointer; font-weight: 600; font-size: 13px; font-family: inherit; }
+  button:hover, select:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.toggle { padding: 6px 9px; border: none; }
+  button.toggle.active { background: var(--accent); color: #fff; }
+  button.toggle:disabled { cursor: wait; opacity: 0.7; }
+  .checkbox-group { display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 10px; padding: 3px; background: #fff; }
+  .checkbox-group label { display: flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .checkbox-group label:has(input:checked) { background: #eef2ff; color: var(--accent); }
+  .checkbox-group input { accent-color: var(--accent); }
+  #status { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .readout { margin: 8px 0 0 0; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; color: #0f172a; font-size: 12px; line-height: 1.5; min-height: 20px; }
+  .readout .muted { color: var(--muted); }
+  .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; padding: 0 8px 10px 8px; }
+  .endpoint-rows { display: flex; flex-direction: column; gap: 4px; }
+  .endpoint-row + .endpoint-row { border-top: 1px dashed var(--border); padding-top: 8px; margin-top: 4px; }
+  .endpoint-row-label { font-weight: 800; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: #fff; background: #475569; display: inline-block; padding: 3px 10px; border-radius: 999px; margin: 2px 0 10px 8px; }
+  .panel-cell { border: 1px solid var(--border); border-radius: 14px; padding: 10px 10px 4px 10px; background: #fbfcfe; }
+  .panel-cell-title { font-weight: 800; font-size: 13px; color: #334155; margin-bottom: 4px; }
+  .chart { width: 100%; height: 380px; position: relative; touch-action: none; }
+  .chart.box { height: 300px; }
+  .footer-note { color: var(--muted); font-size: 12px; margin: 8px 0 0 0; padding: 0 8px 8px 8px; line-height: 1.5; }
+  svg { width: 100%; height: 100%; overflow: visible; display: block; }
+  .legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 0 8px 10px 8px; }
+  .dotKey { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+  .swatch { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
+  .tooltip { position: absolute; pointer-events: none; background: rgba(17, 24, 39, 0.95); color: #fff; border-radius: 10px; padding: 8px 10px; font-size: 12px; line-height: 1.35; box-shadow: 0 8px 20px rgba(0,0,0,.18); opacity: 0; transform: translate(-50%, -110%); white-space: nowrap; z-index: 5; transition: opacity .08s ease; }
+  #fileInput { display: none; }
+  @media (max-width: 1000px) { .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 700px) { .summary-grid { grid-template-columns: 1fr; } .panel-head { flex-direction: column; align-items: flex-start; } .chart { height: 340px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">ER Explorer — minimal demo</div>
+  <h1>Interactive exposure-response explorer</h1>
+  <p class="sub">
+    Real logistic exposure-response fit (Newton–Raphson IRLS) on an example clinical trial dataset, with a
+    95% confidence band computed either analytically (Wald) or by seeded case-resampling bootstrap. Select more
+    than one exposure metric to compare panels side by side. Drag a box in a scatter panel to select a subset of
+    patients (selection is linked across panels); click a dose group's box to project the fit at its interquartile
+    exposure range. Save the current view as a reproducible session file and reload it later.
+  </p>
+
+  <div class="summary-grid">
+    <div class="card"><div class="kpi" id="kpiN">—</div><div class="kpi-label">Patients in dataset</div></div>
+    <div class="card"><div class="kpi" id="kpiResponders">—</div><div class="kpi-label" id="kpiRespondersLabel">Responders (primary endpoint)</div></div>
+    <div class="card"><div class="kpi" id="kpiDoses">5</div><div class="kpi-label">Dose groups</div></div>
+    <div class="card"><div class="kpi" id="kpiShowing">—</div><div class="kpi-label">Rows in current selection</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <div class="panel-title">Exposure vs response</div>
+        <div class="panel-note">Points are jittered vertically for readability and colored by dose group. Dashed grey line is the overall fit; shaded band is the 95% CI. Selecting multiple exposures adds a column per exposure; selecting multiple endpoints adds a row per endpoint, so you can compare how response varies with a given exposure across endpoints - all panels share the same selection. When a reference-line split and "Observed % responders" are both on, a dark marker + 95% CI shows the raw observed response rate in each split bin. Clicking a dose row below adds that dose's own observed %/N marker in its own color too ("On dose click" toggle). If markers land close together they automatically stack into a small column with a thin leader line back to each one's true position, so labels never overlap. With exactly one exposure and 2+ endpoints selected, "Compare endpoints" switches to a different view: one panel per endpoint plus a final "(all)" panel overlaying every endpoint's curve together, colored and line-styled by endpoint instead of dose (no raw points in this view, to keep the overlay readable).</div>
+      </div>
+      <div class="controls">
+        <div class="field"><label>Exposure</label><div class="checkbox-group" id="exposureGroup">
+          <label><input type="checkbox" value="auc" checked /> AUC</label>
+          <label><input type="checkbox" value="cmax" /> CMAX</label>
+        </div></div>
+        <div class="field"><label>Endpoint</label><div class="checkbox-group" id="endpointGroup">
+          <label><input type="checkbox" value="icgi" checked /> ICGI</label>
+          <label><input type="checkbox" value="icgi2" /> ICGI2</label>
+          <label><input type="checkbox" value="icgi3" /> ICGI3</label>
+        </div></div>
+        <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="compareEndpointsGroup">
+          <label><input type="checkbox" id="compareEndpoints" disabled /> Compare endpoints</label>
+        </div></div>
+        <div class="field"><label for="ciSelect">CI method</label><select id="ciSelect"><option value="wald">Wald</option><option value="bootstrap">Bootstrap</option></select></div>
+        <div class="field"><label>Reference lines</label><div class="checkbox-group" id="refLineGroup">
+          <label><input type="radio" name="refLine" value="none" checked /> None</label>
+          <label><input type="radio" name="refLine" value="median" /> Median</label>
+          <label><input type="radio" name="refLine" value="tertiles" /> Tertiles</label>
+          <label><input type="radio" name="refLine" value="quartiles" /> Quartiles</label>
+        </div></div>
+        <div class="field"><label for="splitAnnotationMode">Group N</label><select id="splitAnnotationMode" disabled><option value="off">Off</option><option value="n">N</option><option value="n_pct">N (%)</option></select></div>
+        <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="splitAnnotationGroup">
+          <label><input type="checkbox" id="showObservedResp" disabled /> Observed % responders</label>
+        </div></div>
+        <div class="field"><label>On dose click</label><div class="checkbox-group" id="doseObservedGroup">
+          <label><input type="checkbox" id="showDoseObserved" checked /> Observed %/N</label>
+        </div></div>
+        <div class="field"><label>&nbsp;</label><button id="resetBtn" type="button">Reset selection</button></div>
+      </div>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="legend" id="endpointLegend" style="display:none; padding-top: 0;"></div>
+    <div id="scatterPanels" class="endpoint-rows"></div>
+    <div id="status" style="padding: 4px 8px 10px 8px;">Showing all rows</div>
+    <div class="footer-note" id="refLineNote" style="display:none; padding: 0 8px 8px 8px;">Reference line, group N, and observed-responder split bins are all computed on dosed patients only, excluding placebo (which is fixed at zero exposure by design). Placebo itself still gets its own observed-responder marker at zero exposure when that option is on.</div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div>
+        <div class="panel-title">Exposure distribution by dose</div>
+        <div class="panel-note">Click a row to toggle that dose group's projection onto the fit above. Multiple groups can be active at once. Placebo's exposure is fixed at zero by design, so its row shows only its patient count (N), with no box or distribution shape.</div>
+      </div>
+      <div class="controls">
+        <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="distModeGroup">
+          <button type="button" class="toggle active" data-mode="boxplot">Boxplot</button>
+          <button type="button" class="toggle" data-mode="violin">Distribution</button>
+        </div></div>
+      </div>
+    </div>
+    <div id="boxPanels" class="panel-grid"></div>
+  </div>
+
+  <div class="panel" style="padding: 14px 18px;">
+    <div class="panel-title" style="margin-bottom: 8px;">Session</div>
+    <div class="panel-note" style="margin-bottom: 10px;">Every setting above (exposure metric, endpoint, CI method, bootstrap seed, and current selection) is captured in a session file per <code>docs/REPRODUCIBILITY.md</code> — save it, hand it to a colleague, and reloading it reproduces this exact view.</div>
+    <div class="controls">
+      <button id="saveSessionBtn" class="primary" type="button">Save session</button>
+      <button id="loadSessionBtn" type="button">Load session…</button>
+      <input type="file" id="fileInput" accept="application/json" />
+      <span id="sessionStatus" style="color: var(--muted); font-size: 12.5px;"></span>
+    </div>
+  </div>
+
+  <p class="footer-note">Data: example exposure-response dataset (AUC/CMAX vs ICGI clinical response) bundled for demo purposes. Built directly on <code>@er-explorer/statistical-engine</code>, <code>@er-explorer/visualization-engine</code>, and <code>@er-explorer/session-engine</code> — see <code>docs/ARCHITECTURE.md</code>.</p>
+</div>
+<script src="./bundle.js"></script>
+</body>
+</html>

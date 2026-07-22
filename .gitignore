@@ -3,3 +3,7 @@
 .RData
 .Ruserdata
 node_modules
+dist
+.turbo
+*.tsbuildinfo
+apps/demo/src/data.generated.ts

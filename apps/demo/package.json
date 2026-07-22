@@ -1,0 +1,19 @@
+{
+  "name": "@er-explorer/demo",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Minimal interactive exposure-response demo app for ER Explorer, built on the statistical, visualization, and session engines.",
+  "scripts": {
+    "build": "node scripts/build-data.mjs && node scripts/build.mjs",
+    "clean": "rimraf dist src/data.generated.ts"
+  },
+  "dependencies": {
+    "@er-explorer/session-engine": "workspace:*",
+    "@er-explorer/statistical-engine": "workspace:*",
+    "@er-explorer/visualization-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  },
+  "license": "MIT"
+}
