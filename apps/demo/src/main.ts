@@ -169,8 +169,7 @@ const loadSessionBtn = $<HTMLButtonElement>("loadSessionBtn");
 const fileInput = $<HTMLInputElement>("fileInput");
 const sessionStatus = $<HTMLSpanElement>("sessionStatus");
 const kpiN = $<HTMLDivElement>("kpiN");
-const kpiResponders = $<HTMLDivElement>("kpiResponders");
-const kpiRespondersLabel = $<HTMLDivElement>("kpiRespondersLabel");
+const kpiRespondersBody = $<HTMLDivElement>("kpiRespondersBody");
 const kpiShowing = $<HTMLDivElement>("kpiShowing");
 
 const exposureValue = (r: ExposureResponseRecord, metric: ExposureMetric) => (metric === "auc" ? r.auc : r.cmax);
@@ -382,7 +381,7 @@ function render(): void {
 
   renderLegend();
   updateStatus(active.size);
-  updateKpis(active.size, primaryEndpoint);
+  updateKpis(active.size, endpoints);
   refLineNoteEl.style.display = state.referenceLineKind ? "block" : "none";
   // the two split annotations only mean anything once a reference-line split is chosen
   splitAnnotationModeEl.disabled = !state.referenceLineKind;
@@ -653,12 +652,29 @@ function updateStatus(activeCount: number): void {
   }
 }
 
-function updateKpis(activeCount: number, primaryEndpoint: Endpoint): void {
+/** Renders one row per selected endpoint in the top "Responders by endpoint" card, each split
+ * into Placebo vs Dosed (all non-placebo patients pooled) - a single pooled rate across every
+ * dose would blend a very different baseline (Placebo) into the treated-population rate, and
+ * previously this card only ever reflected one endpoint even when several were selected. */
+function updateKpis(activeCount: number, endpoints: Endpoint[]): void {
   kpiN.textContent = String(RECORDS.length);
-  const responders = RECORDS.filter((r) => endpointValue(r, primaryEndpoint) === 1).length;
-  kpiResponders.textContent = `${responders} (${((responders / RECORDS.length) * 100).toFixed(0)}%)`;
-  if (kpiRespondersLabel) kpiRespondersLabel.textContent = `Responders (${primaryEndpoint.toUpperCase()})`;
   kpiShowing.textContent = String(activeCount);
+
+  const placeboRecords = RECORDS.filter((r) => r.dose === "Placebo");
+  const dosedRecords = RECORDS.filter((r) => r.dose !== "Placebo");
+  const pct = (n: number, total: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
+
+  kpiRespondersBody.innerHTML = endpoints
+    .map((endpoint) => {
+      const placeboResponders = placeboRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
+      const dosedResponders = dosedRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
+      return `<div class="responder-row">
+        <span class="responder-endpoint">${endpoint.toUpperCase()}</span>
+        <span class="responder-group"><span class="muted">Placebo</span> <strong>${pct(placeboResponders, placeboRecords.length)}%</strong> <span class="muted">(${placeboResponders}/${placeboRecords.length})</span></span>
+        <span class="responder-group"><span class="muted">Dosed</span> <strong>${pct(dosedResponders, dosedRecords.length)}%</strong> <span class="muted">(${dosedResponders}/${dosedRecords.length})</span></span>
+      </div>`;
+    })
+    .join("");
 }
 
 function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoint: Endpoint, active: Set<number>): void {
@@ -1129,6 +1145,22 @@ fileInput.addEventListener("change", () => {
   const file = fileInput.files?.[0];
   if (file) loadSessionFromFile(file);
   fileInput.value = "";
+});
+
+// panel descriptive text is collapsed by default (it's useful but takes real vertical space) -
+// each "Show details" button just toggles its own associated note element, independent of any
+// app state, so this wiring is a plain DOM behavior rather than something round-tripped through
+// render().
+document.querySelectorAll<HTMLButtonElement>(".note-toggle").forEach((btn) => {
+  const targetId = btn.dataset.target;
+  const target = targetId ? document.getElementById(targetId) : null;
+  if (!target) return;
+  btn.addEventListener("click", () => {
+    const isHidden = target.style.display === "none";
+    target.style.display = isHidden ? "block" : "none";
+    btn.textContent = isHidden ? "Hide details ▴" : "Show details ▾";
+    btn.setAttribute("aria-expanded", String(isHidden));
+  });
 });
 
 render();

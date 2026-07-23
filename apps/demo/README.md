@@ -25,6 +25,15 @@ product.
   exposure metric regardless of endpoint count (dose exposure doesn't
   depend on which response endpoint you're looking at); it uses the first
   selected endpoint for its per-dose responder count.
+- The top "Responders by endpoint" card lists every currently-selected
+  endpoint (not just one), each split into Placebo vs Dosed (all
+  non-placebo patients pooled) responder rate + count — a single pooled
+  rate would blend Placebo's very different baseline into the treated
+  population's rate, so the two are always reported separately.
+- The descriptive text under each panel title is collapsed by default (a
+  "Show details" link expands it) so it doesn't eat vertical space before
+  you've asked for it; the controls for that panel sit below the text,
+  not beside it, so they don't shift around as the text collapses/expands.
 - **Compare endpoints** (optional toggle, only available with exactly one
   exposure metric and 2+ endpoints selected) — switches to a different
   layout, mirroring ggquickeda's endpoint-comparison facet: one panel per

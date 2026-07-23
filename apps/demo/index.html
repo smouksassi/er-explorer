@@ -20,15 +20,23 @@
   .eyebrow { color: var(--accent); font-weight: 800; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
   h1 { margin: 0 0 8px 0; font-size: 28px; letter-spacing: -0.03em; }
   .sub { margin: 0 0 18px 0; color: var(--muted); line-height: 1.5; max-width: 980px; font-size: 14px; }
-  .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
   .card, .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); }
   .card { padding: 16px 18px; }
   .kpi { font-size: 26px; font-weight: 800; line-height: 1; }
   .kpi-label { margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+  .responder-card { margin-bottom: 18px; }
+  .responder-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 5px 0; font-size: 13.5px; }
+  .responder-row + .responder-row { border-top: 1px dashed var(--border); margin-top: 3px; padding-top: 8px; }
+  .responder-endpoint { min-width: 58px; font-weight: 800; }
+  .responder-group .muted { color: var(--muted); font-weight: 600; }
   .panel { padding: 12px 12px 8px 12px; margin-bottom: 18px; }
-  .panel-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; padding: 6px 8px 10px 8px; }
+  .panel-head { display: flex; flex-direction: column; gap: 8px; padding: 6px 8px 10px 8px; }
+  .panel-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .panel-title { font-weight: 800; font-size: 15px; }
-  .panel-note { color: var(--muted); font-size: 12.5px; max-width: 640px; }
+  .note-toggle { background: none; border: none; color: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer; padding: 2px 6px; white-space: nowrap; }
+  .note-toggle:hover { text-decoration: underline; }
+  .panel-note { color: var(--muted); font-size: 12.5px; max-width: 760px; }
   .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .field { display: flex; flex-direction: column; gap: 3px; }
   .field label { font-size: 11px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
@@ -61,7 +69,7 @@
   .tooltip { position: absolute; pointer-events: none; background: rgba(17, 24, 39, 0.95); color: #fff; border-radius: 10px; padding: 8px 10px; font-size: 12px; line-height: 1.35; box-shadow: 0 8px 20px rgba(0,0,0,.18); opacity: 0; transform: translate(-50%, -110%); white-space: nowrap; z-index: 5; transition: opacity .08s ease; }
   #fileInput { display: none; }
   @media (max-width: 1000px) { .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 700px) { .summary-grid { grid-template-columns: 1fr; } .panel-head { flex-direction: column; align-items: flex-start; } .chart { height: 340px; } }
+  @media (max-width: 700px) { .summary-grid { grid-template-columns: 1fr; } .chart { height: 340px; } }
 </style>
 </head>
 <body>
@@ -79,17 +87,21 @@
 
   <div class="summary-grid">
     <div class="card"><div class="kpi" id="kpiN">—</div><div class="kpi-label">Patients in dataset</div></div>
-    <div class="card"><div class="kpi" id="kpiResponders">—</div><div class="kpi-label" id="kpiRespondersLabel">Responders (primary endpoint)</div></div>
     <div class="card"><div class="kpi" id="kpiDoses">5</div><div class="kpi-label">Dose groups</div></div>
     <div class="card"><div class="kpi" id="kpiShowing">—</div><div class="kpi-label">Rows in current selection</div></div>
+  </div>
+  <div class="card responder-card">
+    <div class="kpi-label" style="margin-top: 0;">Responders by endpoint — Placebo vs Dosed</div>
+    <div id="kpiRespondersBody" style="margin-top: 8px;"></div>
   </div>
 
   <div class="panel">
     <div class="panel-head">
-      <div>
+      <div class="panel-title-row">
         <div class="panel-title">Exposure vs response</div>
-        <div class="panel-note">Points are jittered vertically for readability and colored by dose group. Dashed grey line is the overall fit; shaded band is the 95% CI. Selecting multiple exposures adds a column per exposure; selecting multiple endpoints adds a row per endpoint, so you can compare how response varies with a given exposure across endpoints - all panels share the same selection. "Fitted probability + CI" marks each active "Group Exposures By" split line with the model's predicted response there in grey, e.g. "83.8 / fit 0.74 [0.70-0.78]" - separate from "Observed % responders", which instead shows the raw (non-model) observed rate per split bin in dark markers, for comparing fitted vs. observed side by side. Clicking a dose row below adds that dose's own observed %/N marker in its own color too ("On dose click" toggle). If markers land close together they automatically stack into a small column with a thin leader line back to each one's true position, so labels never overlap. With exactly one exposure and 2+ endpoints selected, "Compare endpoints" switches to a different view: one panel per endpoint plus a final "(all)" panel overlaying every endpoint's curve together, colored and line-styled by endpoint instead of dose (no raw points in this view, to keep the overlay readable).</div>
+        <button class="note-toggle" type="button" data-target="scatterNote" aria-expanded="false">Show details ▾</button>
       </div>
+      <div class="panel-note" id="scatterNote" style="display: none;">Points are jittered vertically for readability and colored by dose group. Dashed grey line is the overall fit; shaded band is the 95% CI. Selecting multiple exposures adds a column per exposure; selecting multiple endpoints adds a row per endpoint, so you can compare how response varies with a given exposure across endpoints - all panels share the same selection. "Fitted probability + CI" marks each active "Group Exposures By" split line with the model's predicted response there in grey, e.g. "83.8 / fit 0.74 [0.70-0.78]" - separate from "Observed % responders", which instead shows the raw (non-model) observed rate per split bin in dark markers, for comparing fitted vs. observed side by side. Clicking a dose row below adds that dose's own observed %/N marker in its own color too ("On dose click" toggle). If markers land close together they automatically stack into a small column with a thin leader line back to each one's true position, so labels never overlap. With exactly one exposure and 2+ endpoints selected, "Compare endpoints" switches to a different view: one panel per endpoint plus a final "(all)" panel overlaying every endpoint's curve together, colored and line-styled by endpoint instead of dose (no raw points in this view, to keep the overlay readable).</div>
       <div class="controls">
         <div class="field"><label>Exposure</label><div class="checkbox-group" id="exposureGroup">
           <label><input type="checkbox" value="auc" checked /> AUC</label>
@@ -129,10 +141,11 @@
 
   <div class="panel">
     <div class="panel-head">
-      <div>
+      <div class="panel-title-row">
         <div class="panel-title">Exposure distribution by dose</div>
-        <div class="panel-note">Click a row to toggle that dose group's projection onto the fit above. Multiple groups can be active at once. Placebo's exposure is fixed at zero by design, so its row shows only its patient count (N), with no box or distribution shape. The dashed Q1/Q3 lines always mark the same interquartile bounds used for that dose's projection, in both Boxplot and Distribution display modes. "Group N" (Off / N / N (%)) shows how many of each dose's own patients fall in each bin of the "Group Exposures By" split above, once a split is selected.</div>
+        <button class="note-toggle" type="button" data-target="distNote" aria-expanded="false">Show details ▾</button>
       </div>
+      <div class="panel-note" id="distNote" style="display: none;">Click a row to toggle that dose group's projection onto the fit above. Multiple groups can be active at once. Placebo's exposure is fixed at zero by design, so its row shows only its patient count (N), with no box or distribution shape. The dashed Q1/Q3 lines always mark the same interquartile bounds used for that dose's projection, in both Boxplot and Distribution display modes. "Group N" (Off / N / N (%)) shows how many of each dose's own patients fall in each bin of the "Group Exposures By" split above, once a split is selected.</div>
       <div class="controls">
         <div class="field"><label for="splitAnnotationMode">Group N</label><select id="splitAnnotationMode" disabled><option value="off">Off</option><option value="n">N</option><option value="n_pct">N (%)</option></select></div>
         <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="distModeGroup">
