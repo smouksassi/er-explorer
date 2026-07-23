@@ -1,5 +1,5 @@
 import type { ModelDefinition, PredictionResult, DistributionSummary } from "@er-explorer/statistical-engine";
-import { summarizeDistribution, kernelDensityEstimate } from "@er-explorer/statistical-engine";
+import { summarizeDistribution, kernelDensityEstimate, silvermanBandwidth } from "@er-explorer/statistical-engine";
 
 export type RenderTarget = "svg" | "canvas";
 
@@ -138,6 +138,12 @@ export interface ProjectedGroup {
   q3: number;
   whiskerLow: number;
   whiskerHigh: number;
+  /** This group's actual minimum and maximum observed exposure - optional, since older callers
+   * (or a group with only one distinct value) may not have both. When present, small hollow
+   * markers are drawn at the curve's value at min/max, in addition to the Q1/median/Q3 dots, so
+   * clicking a dose row shows the full observed range it was projected over, not just the IQR. */
+  min?: number;
+  max?: number;
   /** This dose group's own observed (non-model) response rate + 95% CI, drawn in the group's
    * own color next to its projected curve segment - lets "highlight this dose" answer both
    * "where does it sit on the fitted curve" and "what was its actual observed rate" at once. */
@@ -199,14 +205,17 @@ function renderReferenceLines(
 
     if (showValueAtBottom) {
       // the actual cut-point value (e.g. "63.1"), so the user can read off exactly what "T1
-      // (33%)" means in the plot's own units - deliberately not styled like the x-axis ticks
-      // (which are grey/muted) so it's clearly "this reference line's value", not another tick
+      // (33%)" means in the plot's own units. Styled in the same lighter grey as the scatter
+      // panel's reference-line fit marker above (#94a3b8) - both show "the value at this split
+      // line", so they're deliberately color-matched, and both deliberately differ from the
+      // (near-black) observed-rate markers and the muted x-axis tick grey, so none of the three
+      // reads as "just another tick".
       const valueText = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
       const halfWidth = (valueText.length * 6.4) / 2 + 3;
       if (xx - halfWidth < bottomRowRightEdge[bottomRow]) bottomRow = 1 - bottomRow;
       out += tag(
         "text",
-        { x: xx, y: plot.top + plot.height - 6 - bottomRow * 13, "text-anchor": "middle", fill: "#0f172a", "font-size": 10.5, "font-weight": 700, opacity: 0.8 },
+        { x: xx, y: plot.top + plot.height - 6 - bottomRow * 13, "text-anchor": "middle", fill: "#94a3b8", "font-size": 10.5, "font-weight": 700, opacity: 0.9 },
         esc(valueText)
       );
       bottomRowRightEdge[bottomRow] = xx + halfWidth;
@@ -231,23 +240,23 @@ export interface ObservedResponseBin {
   color?: string;
 }
 
-interface ObservedMarkerData {
-  proportion: number;
-  ciLower: number;
-  ciUpper: number;
-  n: number;
-  responders: number;
-}
-
-/** One observed-rate marker waiting to be laid out: a pixel x position, the data to plot, and
- * the color to render it in (dark/neutral for split bins, dose-matched for a dose projection). */
-interface PositionedObservedMarker {
+/** One curve-adjacent marker waiting to be laid out: a pixel x position, the y-domain value/CI
+ * bounds to plot (a proportion for observed-rate markers, a fitted probability for reference-line
+ * fit markers - anything on the same [0,1] y-axis), the color to render it in, and its two label
+ * lines (already formatted as strings, since different marker kinds show different content - an
+ * observed marker shows "pct%" / "n/N", a reference-line marker shows the exposure value / "fit
+ * x.xx [lo-hi]" - but both are laid out and drawn identically). */
+interface PositionedMarker {
   xx: number;
   color: string;
-  data: ObservedMarkerData;
+  yValue: number;
+  yLowValue: number;
+  yHighValue: number;
+  line1: string;
+  line2: string;
 }
 
-interface LaidOutObservedMarker extends PositionedObservedMarker {
+interface LaidOutMarker extends PositionedMarker {
   yMid: number;
   yLo: number;
   yHi: number;
@@ -259,21 +268,21 @@ const OBSERVED_LABEL_GAP = 5;
 const OBSERVED_CLUSTER_GAP_PX = 80;
 
 /**
- * Lays out observed-marker labels so nearby ones never overlap. Split-bin markers and per-dose
- * projection markers are laid out together (they compete for the same space), since a selected
- * dose's own median exposure often falls right next to a split cut point. Markers whose pixel-x
- * positions are close together are grouped into a cluster and stacked into a vertical column -
- * the one with the highest natural position anchors the stack, and the rest are placed directly
- * above it - each keeping a thin leader line back down to its true point. This is a small,
- * dependency-free stand-in for a proper force/repel layout (no D3, consistent with the rest of
- * this renderer).
+ * Lays out curve-adjacent marker labels so nearby ones never overlap. Observed-rate markers
+ * (split-bin and per-dose alike) and reference-line fit markers are laid out together (they
+ * compete for the same space), since a selected dose's own median exposure often falls right
+ * next to a split cut point. Markers whose pixel-x positions are close together are grouped into
+ * a cluster and stacked into a vertical column - the one with the highest natural position
+ * anchors the stack, and the rest are placed directly above it - each keeping a thin leader line
+ * back down to its true point. This is a small, dependency-free stand-in for a proper force/repel
+ * layout (no D3, consistent with the rest of this renderer).
  */
-function layoutObservedMarkers(markers: PositionedObservedMarker[], y: Scale, plotTop: number, plotBottom: number): LaidOutObservedMarker[] {
+function layoutMarkers(markers: PositionedMarker[], y: Scale, plotTop: number, plotBottom: number): LaidOutMarker[] {
   const withY = markers.map((m) => ({
     ...m,
-    yMid: y(m.data.proportion),
-    yLo: y(m.data.ciLower),
-    yHi: y(m.data.ciUpper)
+    yMid: y(m.yValue),
+    yLo: y(m.yLowValue),
+    yHi: y(m.yHighValue)
   }));
   const sorted = [...withY].sort((a, b) => a.xx - b.xx);
   const clusters: (typeof withY)[] = [];
@@ -286,7 +295,7 @@ function layoutObservedMarkers(markers: PositionedObservedMarker[], y: Scale, pl
   const minTop = plotTop + 2;
   const maxBottom = plotBottom - 2;
   const available = maxBottom - minTop;
-  const placed: LaidOutObservedMarker[] = [];
+  const placed: LaidOutMarker[] = [];
   clusters.forEach((cluster) => {
     const withNatural = cluster.map((m) => ({ ...m, natural: m.yHi - 34 })).sort((a, b) => a.natural - b.natural);
     const n = withNatural.length;
@@ -326,15 +335,12 @@ function layoutObservedMarkers(markers: PositionedObservedMarker[], y: Scale, pl
   return placed;
 }
 
-/** Renders one already-laid-out observed-rate marker: dot + CI error bar + "pct / n" label
- * (both lines colored to match, for easy visual matching to a dose), with a white halo/backdrop
+/** Renders one already-laid-out curve-adjacent marker: dot + CI error bar + its two label lines
+ * (both colored to match, for easy visual matching to a dose/curve), with a white halo/backdrop
  * so it stays legible over dense scatter points, and a leader line back to its true point
  * whenever the label had to be relocated to avoid a neighbor. */
-function renderObservedMarker(m: LaidOutObservedMarker): string {
-  const { xx, yMid, yLo, yHi, labelTop, color, data } = m;
-  const pct = Math.round(data.proportion * 100);
-  const line1 = `${pct}%`;
-  const line2 = `${data.responders}/${data.n}`;
+function renderMarker(m: LaidOutMarker): string {
+  const { xx, yMid, yLo, yHi, labelTop, color, line1, line2 } = m;
   const labelBoxWidth = Math.max(line1.length, line2.length) * 7 + 10;
   const labelBottom = labelTop + OBSERVED_LABEL_HEIGHT;
 
@@ -355,10 +361,10 @@ function renderObservedMarker(m: LaidOutObservedMarker): string {
   return out;
 }
 
-function renderObservedMarkers(markers: PositionedObservedMarker[], y: Scale, plotTop: number, plotBottom: number): string {
+function renderMarkers(markers: PositionedMarker[], y: Scale, plotTop: number, plotBottom: number): string {
   if (!markers.length) return "";
-  const laidOut = layoutObservedMarkers(markers, y, plotTop, plotBottom);
-  return tag("g", { class: "er-observed-markers" }, laidOut.map(renderObservedMarker).join(""));
+  const laidOut = layoutMarkers(markers, y, plotTop, plotBottom);
+  return tag("g", { class: "er-observed-markers" }, laidOut.map(renderMarker).join(""));
 }
 
 /** An additional fitted curve (+ optional CI band) overlaid in the same chart, e.g. one other
@@ -383,6 +389,11 @@ export interface LogisticScatterInput {
   /** Observed (non-model) response rate + CI per exposure-split bin, drawn atop the fitted
    * curve for a direct visual comparison. Optional - omit to hide. */
   observedBins?: ObservedResponseBin[];
+  /** When true (and referenceLines is non-empty), also mark each active reference line's fitted
+   * probability + CI right on the curve, e.g. "83.8" / "fit 0.74 [0.70-0.78]". Off by default -
+   * an opt-in overlay, same as observedBins, since it adds another marker competing for the same
+   * space and isn't always wanted. */
+  showReferenceFit?: boolean;
   /** Override the primary curve/band's default grey styling - used when this chart represents
    * one specific endpoint/series being compared against others, so its curve reads in that
    * series' own color rather than the neutral default. */
@@ -398,7 +409,11 @@ export interface LogisticScatterInput {
   options: ChartOptions;
 }
 
-const DEFAULT_MARGIN = { top: 22, right: 20, bottom: 56, left: 64 };
+// left margin matches renderDistributionChart's default exactly (96, sized for that chart's
+// dose-name row labels like "1800 mg") so the two vertically-stacked panels' x=0 pixel position
+// lines up - otherwise the scatter chart's narrower "0"/"1" y-axis labels would let its plot
+// start further left than the distribution panel below it, visibly misaligning the shared x-axis.
+const DEFAULT_MARGIN = { top: 22, right: 20, bottom: 56, left: 96 };
 
 export function renderLogisticScatterChart(input: LogisticScatterInput): RenderResult {
   const width = input.width ?? 1200;
@@ -470,15 +485,17 @@ export function renderLogisticScatterChart(input: LogisticScatterInput): RenderR
     }
   }
 
-  // collected across both sources (split bins + per-dose projections) so the layout pass can
-  // avoid overlap between them, not just within each source
-  const observedMarkers: PositionedObservedMarker[] = [];
+  // collected across all sources (split bins, per-dose projections, reference-line fit values)
+  // so the layout pass can avoid overlap between them, not just within each source
+  const observedMarkers: PositionedMarker[] = [];
 
-  // projected group overlays (Q1-Q3 emphasized segment, whisker-span thin segment, markers)
+  // projected group overlays (Q1-Q3 emphasized segment, min/max-span thin segment, markers)
   for (const p of input.projected ?? []) {
-    const segRange = input.curve.estimates.filter((e) => e.exposure >= p.whiskerLow && e.exposure <= p.whiskerHigh);
+    const rangeLow = p.min ?? p.whiskerLow;
+    const rangeHigh = p.max ?? p.whiskerHigh;
+    const segRange = input.curve.estimates.filter((e) => e.exposure >= rangeLow && e.exposure <= rangeHigh);
     const segCore = input.curve.estimates.filter((e) => e.exposure >= p.q1 && e.exposure <= p.q3);
-    const bandRange = (input.band ?? input.curve).estimates.filter((e) => e.exposure >= p.whiskerLow && e.exposure <= p.whiskerHigh);
+    const bandRange = (input.band ?? input.curve).estimates.filter((e) => e.exposure >= rangeLow && e.exposure <= rangeHigh);
     const segBand = bandPathFromEstimates(bandRange, x, y);
     if (segBand) parts.push(selfClosing("path", { d: segBand, fill: p.color, opacity: 0.1, stroke: "none" }));
     const segThin = curvePathFromEstimates(segRange, x, y);
@@ -500,12 +517,68 @@ export function renderLogisticScatterChart(input: LogisticScatterInput): RenderR
     parts.push(selfClosing("circle", { cx: x(p.q3), cy: y(pQ3), r: 4.6, fill: p.color, stroke: "#fff", "stroke-width": 1.2 }));
     parts.push(selfClosing("circle", { cx: x(p.median), cy: y(pMed), r: 4, fill: "#111827", stroke: "#fff", "stroke-width": 1.1 }));
 
+    // min/max: small hollow markers (filled white, colored outline) so they read as "the observed
+    // extremes" at a glance, distinct from the filled Q1/Q3 dots and the dark median dot.
+    if (p.min !== undefined) {
+      const pMin = at(p.min);
+      parts.push(selfClosing("line", { x1: x(p.min), y1: y(pMin), x2: x(p.min), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1, "stroke-dasharray": "1.5 3", opacity: 0.55 }));
+      parts.push(selfClosing("circle", { cx: x(p.min), cy: y(pMin), r: 3.4, fill: "#ffffff", stroke: p.color, "stroke-width": 1.6 }));
+    }
+    if (p.max !== undefined) {
+      const pMax = at(p.max);
+      parts.push(selfClosing("line", { x1: x(p.max), y1: y(pMax), x2: x(p.max), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1, "stroke-dasharray": "1.5 3", opacity: 0.55 }));
+      parts.push(selfClosing("circle", { cx: x(p.max), cy: y(pMax), r: 3.4, fill: "#ffffff", stroke: p.color, "stroke-width": 1.6 }));
+    }
+
     if (p.observed) {
-      observedMarkers.push({ xx: x(p.median), color: p.color, data: p.observed });
+      const pct = Math.round(p.observed.proportion * 100);
+      observedMarkers.push({
+        xx: x(p.median),
+        color: p.color,
+        yValue: p.observed.proportion,
+        yLowValue: p.observed.ciLower,
+        yHighValue: p.observed.ciUpper,
+        line1: `${pct}%`,
+        line2: `${p.observed.responders}/${p.observed.n}`
+      });
     }
   }
   for (const b of input.observedBins ?? []) {
-    observedMarkers.push({ xx: x(b.x), color: b.color ?? "#0f172a", data: b });
+    const pct = Math.round(b.proportion * 100);
+    observedMarkers.push({
+      xx: x(b.x),
+      color: b.color ?? "#0f172a",
+      yValue: b.proportion,
+      yLowValue: b.ciLower,
+      yHighValue: b.ciUpper,
+      line1: `${pct}%`,
+      line2: `${b.responders}/${b.n}`
+    });
+  }
+
+  // reference-line fit markers (opt-in): at each active median/tertile/quartile split line, show
+  // the logistic curve's own fitted probability + CI at that exposure - so "click median"
+  // answers not just "where is the cut point" (already shown by the dashed line + top label) but
+  // also "what does the model predict there", right on the curve itself. Rendered in a lighter
+  // grey than the (near-black) observed-rate markers, since the two are easy to confuse when
+  // both are visible at once - this one is the model's fit, not an observed count.
+  if (input.showReferenceFit) {
+    for (const ref of input.referenceLines ?? []) {
+      if (ref.value < input.xDomain[0] || ref.value > input.xDomain[1]) continue;
+      const bandSource = input.band ?? input.curve;
+      const fit = interpolateEstimate(input.curve.estimates, ref.value);
+      const ci = interpolateFullEstimate(bandSource.estimates, ref.value);
+      const valueText = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
+      observedMarkers.push({
+        xx: x(ref.value),
+        color: "#94a3b8",
+        yValue: fit,
+        yLowValue: ci.lower,
+        yHighValue: ci.upper,
+        line1: valueText,
+        line2: `fit ${fit.toFixed(2)} [${ci.lower.toFixed(2)}-${ci.upper.toFixed(2)}]`
+      });
+    }
   }
 
   // axes
@@ -559,7 +632,7 @@ export function renderLogisticScatterChart(input: LogisticScatterInput): RenderR
   }
   parts.push(tag("g", { class: "er-points" }, dots));
 
-  parts.push(renderObservedMarkers(observedMarkers, y, plot.top, plot.top + plot.height));
+  parts.push(renderMarkers(observedMarkers, y, plot.top, plot.top + plot.height));
 
   const svg = `<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">${parts.join("")}</svg>`;
 
@@ -590,6 +663,30 @@ function interpolateEstimate(estimates: PredictionResult["estimates"], exposure:
     }
   }
   return last.estimate;
+}
+
+/** Like `interpolateEstimate`, but also interpolates the CI bounds (`lower`/`upper`) alongside
+ * the point estimate - used for reference-line fit markers, which need to report a full
+ * "fit x.xx [lo-hi]" at an arbitrary exposure value, not just the point estimate. */
+function interpolateFullEstimate(estimates: PredictionResult["estimates"], exposure: number): { estimate: number; lower: number; upper: number } {
+  if (!estimates.length) return { estimate: NaN, lower: NaN, upper: NaN };
+  const first = estimates[0];
+  if (exposure <= first.exposure) return { estimate: first.estimate, lower: first.lower, upper: first.upper };
+  const last = estimates[estimates.length - 1];
+  if (exposure >= last.exposure) return { estimate: last.estimate, lower: last.lower, upper: last.upper };
+  for (let i = 0; i < estimates.length - 1; i++) {
+    const a = estimates[i];
+    const b = estimates[i + 1];
+    if (exposure >= a.exposure && exposure <= b.exposure) {
+      const t = (exposure - a.exposure) / (b.exposure - a.exposure || 1);
+      return {
+        estimate: a.estimate + t * (b.estimate - a.estimate),
+        lower: a.lower + t * (b.lower - a.lower),
+        upper: a.upper + t * (b.upper - a.upper)
+      };
+    }
+  }
+  return { estimate: last.estimate, lower: last.lower, upper: last.upper };
 }
 
 /* ---------------------------------------------------------------------- *
@@ -684,18 +781,23 @@ export function renderBoxplotChart(input: BoxplotChartInput): RenderResult {
 }
 
 /* ---------------------------------------------------------------------- *
- * Boxplot <-> violin distribution chart (animatable)
+ * Boxplot <-> distribution chart (animatable)
  *
- * Both representations are rendered as the same primitive: a closed,
- * vertically-mirrored "ridge" polygon per group, built from a shared array
- * of x-sample points and a per-sample half-height in pixels. A boxplot is
- * just the ridge with a stepped half-height profile (flat within the IQR,
- * thin across the whiskers, zero beyond); a violin is the ridge with a
- * half-height profile from a Gaussian KDE. Because both keyframes are
- * defined over the *same* x-samples, the app layer can linearly interpolate
- * between them frame by frame (a plain numeric lerp) and feed the result
- * back into buildRidgePath to get a smooth morph - no DOM diffing needed,
- * and no dependency on D3.
+ * Both representations are rendered as the same primitive: a closed ridge
+ * polygon per group, built from a shared array of x-sample points and a
+ * per-sample top/bottom pixel offset from the row's center line. A boxplot
+ * is the ridge with a stepped, *mirrored* offset profile (flat within the
+ * IQR, thin across the whiskers, zero beyond - top and bottom equal); the
+ * "distribution" mode is a one-sided ("half violin") ridge instead - its
+ * top offset comes from a Gaussian KDE, while its bottom offset is pinned
+ * to a flat baseline (the box's own half-height, so that edge doesn't jump
+ * when morphing from one mode to the other), so only the upper half of
+ * what would otherwise be a mirrored violin is ever drawn. Because both
+ * keyframes are defined over the *same* x-samples, the app layer can
+ * linearly interpolate between them frame by frame (a plain numeric lerp,
+ * independently for top and bottom) and feed the result back into
+ * buildAsymRidgePath to get a smooth morph - no DOM diffing needed, and no
+ * dependency on D3.
  * ---------------------------------------------------------------------- */
 
 export type DistributionMode = "boxplot" | "violin";
@@ -727,13 +829,21 @@ export function boxHalfHeightsPx(summary: DistributionSummary, xSamples: number[
   });
 }
 
-/** Build a closed, mirrored ridge/violin polygon path from per-sample half-heights (pixels). */
-export function buildRidgePath(xSamples: number[], halfHeightsPx: number[], xScale: Scale, cy: number): string {
-  const top = xSamples.map((xv, i) => [xScale(xv), cy - halfHeightsPx[i]] as [number, number]);
+/** Build a closed ridge polygon path from independent per-sample top and bottom offsets
+ * (pixels, each measured away from `cy`). A mirrored violin is just the special case where
+ * `topPx === bottomPx`; a one-sided ("half violin") distribution uses a small constant
+ * `bottomPx` (a flat baseline) with `topPx` tracing the density curve. */
+export function buildAsymRidgePath(xSamples: number[], topPx: number[], bottomPx: number[], xScale: Scale, cy: number): string {
+  const top = xSamples.map((xv, i) => [xScale(xv), cy - topPx[i]] as [number, number]);
   const bottom = xSamples
-    .map((xv, i) => [xScale(xv), cy + halfHeightsPx[i]] as [number, number])
+    .map((xv, i) => [xScale(xv), cy + bottomPx[i]] as [number, number])
     .reverse();
   return buildLinePath(top.concat(bottom)) + " Z";
+}
+
+/** Build a closed, mirrored ridge/violin polygon path from per-sample half-heights (pixels). */
+export function buildRidgePath(xSamples: number[], halfHeightsPx: number[], xScale: Scale, cy: number): string {
+  return buildAsymRidgePath(xSamples, halfHeightsPx, halfHeightsPx, xScale, cy);
 }
 
 export interface DistributionSplitAnnotation {
@@ -799,14 +909,27 @@ export function renderDistributionChart(input: DistributionChartInput): RenderRe
 
   const summaries = groups.map((g) => summarizeDistribution(g.values));
 
-  // per-group KDE, sampled on that group's own breakpoint-aware grid
+  // per-group KDE, sampled on that group's own breakpoint-aware grid. Critically, the grid only
+  // spans that group's own data range (+ a small bandwidth-based pad for a natural taper) rather
+  // than the shared chart-wide xDomain - otherwise the shape (and its flat "distribution mode"
+  // baseline) would stretch as a stray flat line across x-values the group has no data anywhere
+  // near, instead of tapering down to nothing right around its own min/max.
   const perGroup = groups.map((g, i) => {
     if (g.skipShape) return { xSamples: [] as number[], rawDensity: [] as number[], summary: null };
     const summary = summaries[i];
-    const xSamples = summary
-      ? buildSampleGrid(input.xDomain, [summary.whiskerLow, summary.q1, summary.q3, summary.whiskerHigh], baseCount)
-      : buildSampleGrid(input.xDomain, [], baseCount);
-    const rawDensity = kernelDensityEstimate(g.values, xSamples);
+    if (!summary) return { xSamples: buildSampleGrid(input.xDomain, [], baseCount), rawDensity: [] as number[], summary: null };
+    const bandwidth = silvermanBandwidth(g.values);
+    const pad = Math.max(bandwidth * 2.5, (summary.max - summary.min) * 0.02);
+    const localDomain: [number, number] = [
+      Math.max(input.xDomain[0], summary.min - pad),
+      Math.min(input.xDomain[1], summary.max + pad)
+    ];
+    const xSamples = buildSampleGrid(
+      localDomain,
+      [summary.whiskerLow, summary.q1, summary.q3, summary.whiskerHigh, summary.min, summary.max],
+      baseCount
+    );
+    const rawDensity = kernelDensityEstimate(g.values, xSamples, bandwidth);
     return { xSamples, rawDensity, summary };
   });
 
@@ -854,13 +977,20 @@ export function renderDistributionChart(input: DistributionChartInput): RenderRe
     // same max width, so shape is comparable across groups regardless of absolute density scale
     const groupMaxDensity = Math.max(1e-9, ...rawDensity);
     const densityHH = rawDensity.map((d) => (d / groupMaxDensity) * boxHalfHeightPx);
-    const activeHH = input.mode === "boxplot" ? boxHH : densityHH;
+    // boxplot mode is a fully mirrored ridge (top === bottom); distribution mode is a "half
+    // violin" - only the top edge traces the density curve, while the bottom edge sits flush on
+    // a flat baseline (reusing the box's own bottom edge height for visual continuity when
+    // morphing between the two modes), so it reads as a single-sided density rather than a
+    // mirrored blob.
+    const flatBaseline = xSamples.map(() => boxHalfHeightPx);
+    const activeTop = input.mode === "boxplot" ? boxHH : densityHH;
+    const activeBottom = input.mode === "boxplot" ? boxHH : flatBaseline;
 
     // an invisible full-row hit target (inside the same group as the visible shape, so a
     // click anywhere in the row - not just on the shape itself - bubbles to the group)
     let group = selfClosing("rect", { x: plot.left, y: cy - band / 2 + 1, width: plot.width, height: band - 2, fill: "transparent" });
 
-    const path = buildRidgePath(xSamples, activeHH, x, cy);
+    const path = buildAsymRidgePath(xSamples, activeTop, activeBottom, x, cy);
     group += selfClosing("path", {
       class: "er-ridge-shape",
       d: path,
@@ -878,6 +1008,12 @@ export function renderDistributionChart(input: DistributionChartInput): RenderRe
         stroke: g.color,
         "stroke-width": 2.4
       });
+      // Q1/Q3 markers: always visible (not mode-gated) since these are the exact values used
+      // for this dose's projection onto the fit above, regardless of whether the row is
+      // currently shown as a boxplot or a distribution.
+      let iqrLines = selfClosing("line", { x1: x(summary.q1), y1: cy - boxHalfHeightPx, x2: x(summary.q1), y2: cy + boxHalfHeightPx, stroke: g.color, "stroke-width": 1.4, "stroke-dasharray": "3 3", opacity: 0.8 });
+      iqrLines += selfClosing("line", { x1: x(summary.q3), y1: cy - boxHalfHeightPx, x2: x(summary.q3), y2: cy + boxHalfHeightPx, stroke: g.color, "stroke-width": 1.4, "stroke-dasharray": "3 3", opacity: 0.8 });
+      group += tag("g", { class: "er-iqr-lines" }, iqrLines);
       // whisker end-caps: a traditional boxplot convention, only meaningful in box mode (the
       // ridge itself already renders as a hairline that would otherwise look like a bare line)
       const capOpacity = input.mode === "boxplot" ? 1 : 0;
@@ -918,6 +1054,6 @@ export function renderDistributionChart(input: DistributionChartInput): RenderRe
   return {
     outputType: "svg",
     content: svg,
-    metadata: { width, height, plot, xScale: { domain: x.domain, range: x.range }, band, mode: input.mode, groups: groupMeta }
+    metadata: { width, height, plot, xScale: { domain: x.domain, range: x.range }, band, boxHalfHeightPx, mode: input.mode, groups: groupMeta }
   };
 }

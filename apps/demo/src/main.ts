@@ -12,7 +12,7 @@ import {
 import {
   renderLogisticScatterChart,
   renderDistributionChart,
-  buildRidgePath,
+  buildAsymRidgePath,
   scaleLinear,
   seededJitter,
   createVisualizationSpec,
@@ -100,6 +100,11 @@ interface DemoState {
   /** Show observed (non-model) response rate + 95% Wilson CI per split bin, plotted against the
    * fitted curve on the scatter panel, for a direct "observed vs fitted" comparison. */
   showObservedResponders: boolean;
+  /** Show each active reference-line split's own fitted probability + CI, marked right on the
+   * curve (e.g. "83.8" / "fit 0.74 [0.70-0.78]"). Off by default - opt-in, both because it's
+   * another marker competing for the same space as showObservedResponders, and because its grey
+   * styling is easy to mix up with the (near-black) observed markers if always on. */
+  showReferenceFit: boolean;
   /** Show each highlighted (clicked) dose's own observed %/N marker next to its projected curve
    * segment. On by default since it's the natural companion to clicking a dose row, but some
    * users will want the plain projection without it. */
@@ -123,6 +128,7 @@ const state: DemoState = {
   referenceLineKind: null,
   splitAnnotationMode: "off",
   showObservedResponders: false,
+  showReferenceFit: false,
   showDoseObserved: true,
   compareEndpoints: false
 };
@@ -133,6 +139,7 @@ const state: DemoState = {
 interface DistributionPanelHandle {
   xScale: Scale;
   groups: DistributionGroupMeta[];
+  boxHalfHeightPx: number;
   pathEls: (SVGPathElement | null)[];
   capEls: (SVGGElement | null)[];
 }
@@ -150,6 +157,7 @@ const refLineGroupEl = $<HTMLDivElement>("refLineGroup");
 const refLineNoteEl = $<HTMLDivElement>("refLineNote");
 const splitAnnotationModeEl = $<HTMLSelectElement>("splitAnnotationMode");
 const showObservedRespEl = $<HTMLInputElement>("showObservedResp");
+const showReferenceFitEl = $<HTMLInputElement>("showReferenceFit");
 const showDoseObservedEl = $<HTMLInputElement>("showDoseObserved");
 const endpointGroupEl = $<HTMLDivElement>("endpointGroup");
 const compareEndpointsEl = $<HTMLInputElement>("compareEndpoints");
@@ -379,6 +387,7 @@ function render(): void {
   // the two split annotations only mean anything once a reference-line split is chosen
   splitAnnotationModeEl.disabled = !state.referenceLineKind;
   showObservedRespEl.disabled = !state.referenceLineKind;
+  showReferenceFitEl.disabled = !state.referenceLineKind;
 }
 
 function renderScatterPanel(metric: ExposureMetric, endpoint: Endpoint, active: Set<number>, container: HTMLElement): void {
@@ -394,6 +403,8 @@ function renderScatterPanel(metric: ExposureMetric, endpoint: Endpoint, active: 
       median: number;
       whiskerLow: number;
       whiskerHigh: number;
+      min: number;
+      max: number;
       n: number;
       observed: { proportion: number; ciLower: number; ciUpper: number; n: number; responders: number };
     }
@@ -412,6 +423,8 @@ function renderScatterPanel(metric: ExposureMetric, endpoint: Endpoint, active: 
       median: s.median,
       whiskerLow: s.whiskerLow,
       whiskerHigh: s.whiskerHigh,
+      min: s.min,
+      max: s.max,
       n: vals.length,
       observed: { proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper, n: doseRecords.length, responders }
     };
@@ -448,6 +461,7 @@ function renderScatterPanel(metric: ExposureMetric, endpoint: Endpoint, active: 
     xDomain: [0, xMax],
     referenceLines: computeReferenceLines(metric),
     observedBins: computeObservedResponseBins(metric, endpoint),
+    showReferenceFit: state.showReferenceFit,
     width,
     height: 360,
     options: { title: "Exposure vs response", xAxisLabel: exposureLabel(metric), yAxisLabel: endpoint.toUpperCase(), renderTarget: "svg" }
@@ -505,7 +519,7 @@ function renderDistributionPanel(metric: ExposureMetric, endpoint: Endpoint, act
 
   const cell = document.createElement("div");
   cell.className = "panel-cell";
-  cell.innerHTML = `<div class="panel-cell-title">${exposureLabel(metric)}</div><div class="chart box"></div><div class="readout"><span class="muted">Click a row above to show projected fit values at Q1, median, and Q3.</span></div>`;
+  cell.innerHTML = `<div class="panel-cell-title">${exposureLabel(metric)}</div><div class="chart box"></div><div class="readout"><span class="muted">Click a row above to show projected fit values at Min, Q1, Median, Q3, and Max.</span></div>`;
   boxPanelsEl.appendChild(cell);
   const chartWrap = cell.querySelector(".chart") as HTMLDivElement;
   const readoutEl = cell.querySelector(".readout") as HTMLDivElement;
@@ -516,6 +530,7 @@ function renderDistributionPanel(metric: ExposureMetric, endpoint: Endpoint, act
 interface DistributionMeta {
   xScale: { domain: [number, number]; range: [number, number] };
   groups: DistributionGroupMeta[];
+  boxHalfHeightPx: number;
 }
 
 /**
@@ -566,6 +581,7 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
       xDomain: [0, xMax],
       referenceLines,
       observedBins,
+      showReferenceFit: state.showReferenceFit,
       curveColor: ENDPOINT_COLORS[endpoint],
       curveDash: ENDPOINT_DASH[endpoint],
       bandColor: ENDPOINT_COLORS[endpoint],
@@ -646,24 +662,24 @@ function updateKpis(activeCount: number, primaryEndpoint: Endpoint): void {
 }
 
 function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoint: Endpoint, active: Set<number>): void {
-  const groupStats: Record<string, { q1: number; median: number; q3: number }> = {};
+  const groupStats: Record<string, { min: number; q1: number; median: number; q3: number; max: number }> = {};
   for (const dose of state.selectedDoses) {
     const vals = RECORDS.filter((r) => active.has(r.id) && r.dose === dose)
       .map((r) => exposureValue(r, metric))
       .sort((a, b) => a - b);
     const s = summarizeDistribution(vals);
-    if (s) groupStats[dose] = { q1: s.q1, median: s.median, q3: s.q3 };
+    if (s) groupStats[dose] = { min: s.min, q1: s.q1, median: s.median, q3: s.q3, max: s.max };
   }
   const doses = [...state.selectedDoses].filter((d) => groupStats[d]);
   if (!doses.length) {
-    readoutEl.innerHTML = '<span class="muted">Click a box above to show projected fit values at Q1, median, and Q3.</span>';
+    readoutEl.innerHTML = '<span class="muted">Click a box above to show projected fit values at Min, Q1, Median, Q3, and Max.</span>';
     return;
   }
   const { model } = fitFor(metric, endpoint);
   const lines = doses.map((dose) => {
     const g = groupStats[dose];
     const fitAt = (x: number) => 1 / (1 + Math.exp(-(model.intercept + model.slope * x)));
-    return `<div><strong>${dose}</strong> &nbsp; Q1 ${exposureLabel(metric)} = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(3)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(3)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(3)})</div>`;
+    return `<div><strong style="color:${DOSE_COLORS[dose] ?? "#111827"}">${dose}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} (fit ${fitAt(g.min).toFixed(3)}) &nbsp; Q1 = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(3)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(3)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(3)}) &nbsp; Max = ${g.max.toFixed(1)} (fit ${fitAt(g.max).toFixed(3)})</div>`;
   });
   readoutEl.innerHTML = lines.join("");
 }
@@ -788,6 +804,7 @@ function attachDistributionInteractivity(
   distributionPanels.push({
     xScale: scaleLinear(meta.xScale.domain, meta.xScale.range),
     groups: meta.groups,
+    boxHalfHeightPx: meta.boxHalfHeightPx,
     pathEls,
     capEls
   });
@@ -799,8 +816,13 @@ function attachDistributionInteractivity(
 
 const easeInOutCubic = (t: number): number => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
-function halfHeightsFor(mode: DistributionMode, g: DistributionGroupMeta): number[] {
-  return mode === "boxplot" ? g.boxHalfHeights : g.densityHalfHeights;
+/** Top/bottom pixel offsets (from `cy`) for one distribution group in a given mode. Boxplot is
+ * a fully mirrored ridge (top === bottom); distribution is a "half violin" - only the top edge
+ * traces the density curve, while the bottom edge sits flush on a flat baseline (reusing the
+ * box's own half-height, so the shape's bottom edge doesn't move during the morph). */
+function topBottomFor(mode: DistributionMode, g: DistributionGroupMeta, boxHalfHeightPx: number): { top: number[]; bottom: number[] } {
+  if (mode === "boxplot") return { top: g.boxHalfHeights, bottom: g.boxHalfHeights };
+  return { top: g.densityHalfHeights, bottom: g.densityHalfHeights.map(() => boxHalfHeightPx) };
 }
 
 function transitionDistributionMode(targetMode: DistributionMode): void {
@@ -823,10 +845,11 @@ function transitionDistributionMode(targetMode: DistributionMode): void {
       panel.groups.forEach((g, i) => {
         const pathEl = panel.pathEls[i];
         if (pathEl) {
-          const from = halfHeightsFor(fromMode, g);
-          const to = halfHeightsFor(targetMode, g);
-          const interpolated = from.map((v, j) => v + (to[j] - v) * e);
-          pathEl.setAttribute("d", buildRidgePath(g.xSamples, interpolated, panel.xScale, g.cy));
+          const from = topBottomFor(fromMode, g, panel.boxHalfHeightPx);
+          const to = topBottomFor(targetMode, g, panel.boxHalfHeightPx);
+          const top = from.top.map((v, j) => v + (to.top[j] - v) * e);
+          const bottom = from.bottom.map((v, j) => v + (to.bottom[j] - v) * e);
+          pathEl.setAttribute("d", buildAsymRidgePath(g.xSamples, top, bottom, panel.xScale, g.cy));
         }
         const capEl = panel.capEls[i];
         if (capEl) capEl.setAttribute("opacity", String(fromCapOpacity + (toCapOpacity - fromCapOpacity) * e));
@@ -903,6 +926,7 @@ function buildSessionState(): SessionState {
       referenceLineKind: state.referenceLineKind,
       splitAnnotationMode: state.splitAnnotationMode,
       showObservedResponders: state.showObservedResponders,
+      showReferenceFit: state.showReferenceFit,
       showDoseObserved: state.showDoseObserved,
       compareEndpoints: state.compareEndpoints
     }
@@ -997,6 +1021,7 @@ function loadSessionFromFile(file: File): void {
         state.splitAnnotationMode = legacyShowSplitCounts === true ? "n" : "off";
       }
       state.showObservedResponders = session.settings["showObservedResponders"] === true;
+      state.showReferenceFit = session.settings["showReferenceFit"] === true;
       // default true (matches the app's default) so older session files without this key still
       // show the dose-observed marker rather than silently hiding it
       state.showDoseObserved = session.settings["showDoseObserved"] !== false;
@@ -1013,6 +1038,7 @@ function loadSessionFromFile(file: File): void {
       setRefLineRadio(state.referenceLineKind);
       splitAnnotationModeEl.value = state.splitAnnotationMode;
       showObservedRespEl.checked = state.showObservedResponders;
+      showReferenceFitEl.checked = state.showReferenceFit;
       showDoseObservedEl.checked = state.showDoseObserved;
       compareEndpointsEl.checked = state.compareEndpoints;
       render();
@@ -1057,6 +1083,10 @@ splitAnnotationModeEl.addEventListener("change", () => {
 });
 showObservedRespEl.addEventListener("change", () => {
   state.showObservedResponders = showObservedRespEl.checked;
+  render();
+});
+showReferenceFitEl.addEventListener("change", () => {
+  state.showReferenceFit = showReferenceFitEl.checked;
   render();
 });
 showDoseObservedEl.addEventListener("change", () => {

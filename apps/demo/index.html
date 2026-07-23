@@ -72,8 +72,9 @@
     Real logistic exposure-response fit (Newton–Raphson IRLS) on an example clinical trial dataset, with a
     95% confidence band computed either analytically (Wald) or by seeded case-resampling bootstrap. Select more
     than one exposure metric to compare panels side by side. Drag a box in a scatter panel to select a subset of
-    patients (selection is linked across panels); click a dose group's box to project the fit at its interquartile
-    exposure range. Save the current view as a reproducible session file and reload it later.
+    patients (selection is linked across panels); click a dose group's box to project the fit across its full
+    observed exposure range (min through max), with its interquartile range emphasized. Save the current view as
+    a reproducible session file and reload it later.
   </p>
 
   <div class="summary-grid">
@@ -87,7 +88,7 @@
     <div class="panel-head">
       <div>
         <div class="panel-title">Exposure vs response</div>
-        <div class="panel-note">Points are jittered vertically for readability and colored by dose group. Dashed grey line is the overall fit; shaded band is the 95% CI. Selecting multiple exposures adds a column per exposure; selecting multiple endpoints adds a row per endpoint, so you can compare how response varies with a given exposure across endpoints - all panels share the same selection. When a reference-line split and "Observed % responders" are both on, a dark marker + 95% CI shows the raw observed response rate in each split bin. Clicking a dose row below adds that dose's own observed %/N marker in its own color too ("On dose click" toggle). If markers land close together they automatically stack into a small column with a thin leader line back to each one's true position, so labels never overlap. With exactly one exposure and 2+ endpoints selected, "Compare endpoints" switches to a different view: one panel per endpoint plus a final "(all)" panel overlaying every endpoint's curve together, colored and line-styled by endpoint instead of dose (no raw points in this view, to keep the overlay readable).</div>
+        <div class="panel-note">Points are jittered vertically for readability and colored by dose group. Dashed grey line is the overall fit; shaded band is the 95% CI. Selecting multiple exposures adds a column per exposure; selecting multiple endpoints adds a row per endpoint, so you can compare how response varies with a given exposure across endpoints - all panels share the same selection. "Fitted probability + CI" marks each active "Group Exposures By" split line with the model's predicted response there in grey, e.g. "83.8 / fit 0.74 [0.70-0.78]" - separate from "Observed % responders", which instead shows the raw (non-model) observed rate per split bin in dark markers, for comparing fitted vs. observed side by side. Clicking a dose row below adds that dose's own observed %/N marker in its own color too ("On dose click" toggle). If markers land close together they automatically stack into a small column with a thin leader line back to each one's true position, so labels never overlap. With exactly one exposure and 2+ endpoints selected, "Compare endpoints" switches to a different view: one panel per endpoint plus a final "(all)" panel overlaying every endpoint's curve together, colored and line-styled by endpoint instead of dose (no raw points in this view, to keep the overlay readable).</div>
       </div>
       <div class="controls">
         <div class="field"><label>Exposure</label><div class="checkbox-group" id="exposureGroup">
@@ -103,15 +104,15 @@
           <label><input type="checkbox" id="compareEndpoints" disabled /> Compare endpoints</label>
         </div></div>
         <div class="field"><label for="ciSelect">CI method</label><select id="ciSelect"><option value="wald">Wald</option><option value="bootstrap">Bootstrap</option></select></div>
-        <div class="field"><label>Reference lines</label><div class="checkbox-group" id="refLineGroup">
+        <div class="field"><label>Group Exposures By:</label><div class="checkbox-group" id="refLineGroup">
           <label><input type="radio" name="refLine" value="none" checked /> None</label>
           <label><input type="radio" name="refLine" value="median" /> Median</label>
           <label><input type="radio" name="refLine" value="tertiles" /> Tertiles</label>
           <label><input type="radio" name="refLine" value="quartiles" /> Quartiles</label>
         </div></div>
-        <div class="field"><label for="splitAnnotationMode">Group N</label><select id="splitAnnotationMode" disabled><option value="off">Off</option><option value="n">N</option><option value="n_pct">N (%)</option></select></div>
         <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="splitAnnotationGroup">
           <label><input type="checkbox" id="showObservedResp" disabled /> Observed % responders</label>
+          <label><input type="checkbox" id="showReferenceFit" disabled /> Fitted probability + CI</label>
         </div></div>
         <div class="field"><label>On dose click</label><div class="checkbox-group" id="doseObservedGroup">
           <label><input type="checkbox" id="showDoseObserved" checked /> Observed %/N</label>
@@ -130,9 +131,10 @@
     <div class="panel-head">
       <div>
         <div class="panel-title">Exposure distribution by dose</div>
-        <div class="panel-note">Click a row to toggle that dose group's projection onto the fit above. Multiple groups can be active at once. Placebo's exposure is fixed at zero by design, so its row shows only its patient count (N), with no box or distribution shape.</div>
+        <div class="panel-note">Click a row to toggle that dose group's projection onto the fit above. Multiple groups can be active at once. Placebo's exposure is fixed at zero by design, so its row shows only its patient count (N), with no box or distribution shape. The dashed Q1/Q3 lines always mark the same interquartile bounds used for that dose's projection, in both Boxplot and Distribution display modes. "Group N" (Off / N / N (%)) shows how many of each dose's own patients fall in each bin of the "Group Exposures By" split above, once a split is selected.</div>
       </div>
       <div class="controls">
+        <div class="field"><label for="splitAnnotationMode">Group N</label><select id="splitAnnotationMode" disabled><option value="off">Off</option><option value="n">N</option><option value="n_pct">N (%)</option></select></div>
         <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="distModeGroup">
           <button type="button" class="toggle active" data-mode="boxplot">Boxplot</button>
           <button type="button" class="toggle" data-mode="violin">Distribution</button>
