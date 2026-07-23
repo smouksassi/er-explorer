@@ -114,6 +114,11 @@ interface DemoState {
    * (colored/dashed by endpoint instead of dose) plus an "(all)" panel overlaying every
    * endpoint's curve together - mirrors ggquickeda's endpoint-comparison facet layout. */
   compareEndpoints: boolean;
+  /** Only meaningful with compareEndpoints. Hides the individual per-endpoint panels, showing
+   * only the wide "(all)" overlay panel - a bigger, single combined view whose width the shared
+   * distribution-by-dose panel below it can match exactly, rather than sitting under a whole row
+   * of narrower panels. Off by default (shows the full faceted row, as before). */
+  onlyShowCombined: boolean;
 }
 
 const state: DemoState = {
@@ -130,7 +135,8 @@ const state: DemoState = {
   showObservedResponders: false,
   showReferenceFit: false,
   showDoseObserved: true,
-  compareEndpoints: false
+  compareEndpoints: false,
+  onlyShowCombined: false
 };
 
 /** One entry per currently-rendered distribution panel (one per selected exposure metric),
@@ -148,7 +154,6 @@ let distributionAnimating = false;
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const scatterPanelsEl = $<HTMLDivElement>("scatterPanels");
-const boxPanelsEl = $<HTMLDivElement>("boxPanels");
 const legendEl = $<HTMLDivElement>("legend");
 const statusEl = $<HTMLDivElement>("status");
 const exposureGroupEl = $<HTMLDivElement>("exposureGroup");
@@ -161,6 +166,7 @@ const showReferenceFitEl = $<HTMLInputElement>("showReferenceFit");
 const showDoseObservedEl = $<HTMLInputElement>("showDoseObserved");
 const endpointGroupEl = $<HTMLDivElement>("endpointGroup");
 const compareEndpointsEl = $<HTMLInputElement>("compareEndpoints");
+const onlyShowCombinedEl = $<HTMLInputElement>("onlyShowCombined");
 const endpointLegendEl = $<HTMLDivElement>("endpointLegend");
 const ciSelect = $<HTMLSelectElement>("ciSelect");
 const resetBtn = $<HTMLButtonElement>("resetBtn");
@@ -337,20 +343,21 @@ interface ScatterMeta {
 function render(): void {
   const metrics = selectedExposureMetrics();
   const endpoints = selectedEndpoints();
-  const primaryEndpoint = endpoints[0] ?? "icgi";
   const active = activeSet();
 
   scatterPanelsEl.innerHTML = "";
-  boxPanelsEl.innerHTML = "";
   distributionPanels = [];
 
   const comparisonEligible = metrics.length === 1 && endpoints.length > 1;
   compareEndpointsEl.disabled = !comparisonEligible;
+  onlyShowCombinedEl.disabled = !(state.compareEndpoints && comparisonEligible);
 
   if (state.compareEndpoints && comparisonEligible) {
-    renderEndpointComparisonRow(metrics[0], endpoints);
+    renderEndpointComparisonRow(metrics[0], endpoints, active);
     endpointLegendEl.style.display = "flex";
+    legendEl.style.display = "none";
   } else {
+    legendEl.style.display = "flex";
     // one row per endpoint, one column per exposure metric - mirrors facet_grid(Endpoint~expname)
     for (const endpoint of endpoints) {
       const rowEl = document.createElement("div");
@@ -370,13 +377,25 @@ function render(): void {
       }
     }
     endpointLegendEl.style.display = "none";
-  }
 
-  // the exposure distribution panel doesn't depend on endpoint (dose exposure is the same
-  // regardless of which response endpoint you're looking at) - it renders once per exposure
-  // metric, using the first selected endpoint only for its per-dose responder count
-  for (const metric of metrics) {
-    renderDistributionPanel(metric, primaryEndpoint, active);
+    // The exposure-by-dose distribution doesn't depend on endpoint (dose exposure is the same
+    // regardless of which response endpoint you're looking at), so it's shown once per exposure
+    // metric - not once per endpoint row - right after all the endpoint rows above, using the
+    // primary (first-selected) endpoint for its "n=60 (40 resp.)" responder-count text.
+    const primaryEndpoint = endpoints[0] ?? "icgi";
+    const sharedRow = document.createElement("div");
+    sharedRow.className = "endpoint-row";
+    const sharedGrid = document.createElement("div");
+    sharedGrid.className = "panel-grid";
+    sharedRow.appendChild(sharedGrid);
+    scatterPanelsEl.appendChild(sharedRow);
+    for (const metric of metrics) {
+      const cell = document.createElement("div");
+      cell.className = "panel-cell dist-shared";
+      cell.innerHTML = `<div class="panel-cell-title">${exposureLabel(metric)}</div>`;
+      sharedGrid.appendChild(cell);
+      appendDistributionMini(cell, metric, primaryEndpoint, active, panelWidth());
+    }
   }
 
   renderLegend();
@@ -389,7 +408,12 @@ function render(): void {
   showReferenceFitEl.disabled = !state.referenceLineKind;
 }
 
-function renderScatterPanel(metric: ExposureMetric, endpoint: Endpoint, active: Set<number>, container: HTMLElement): void {
+function renderScatterPanel(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  active: Set<number>,
+  container: HTMLElement
+): void {
   const { model, xs } = fitFor(metric, endpoint);
   const xMax = Math.max(...xs);
   const curve = curveFor(model, xs, xMax, endpoint);
@@ -478,50 +502,100 @@ function renderScatterPanel(metric: ExposureMetric, endpoint: Endpoint, active: 
   attachScatterInteractivity(chartWrap, tip, metric, endpoint, scatterResult.metadata as unknown as ScatterMeta);
 }
 
-function renderDistributionPanel(metric: ExposureMetric, endpoint: Endpoint, active: Set<number>): void {
+/** Appends a compact exposure-by-dose distribution strip (Boxplot, Distribution/half-violin, or
+ * Lineranges, per state.distributionMode). Shown once per exposure metric - not once per
+ * endpoint - since dose exposure itself doesn't depend on which response endpoint you're
+ * looking at.
+ *
+ * When `splitByEndpoints` is given (2+ endpoints, "Compare endpoints" mode), each dose is instead
+ * split into one sub-row per endpoint, colored by that endpoint and clustered together (dose
+ * name + Group N shown once per cluster, on the first sub-row) - since each endpoint has its own
+ * responder count even though the exposure values are identical across endpoints for a given
+ * dose. All of a dose's sub-rows share the same groupId, so clicking any of them toggles that
+ * whole dose cluster together, same as the plain single-row view. */
+function appendDistributionMini(
+  cell: HTMLElement,
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  active: Set<number>,
+  width: number,
+  splitByEndpoints?: Endpoint[]
+): void {
   const xs = RECORDS.map((r) => exposureValue(r, metric));
   const xMax = Math.max(...xs);
   const xDomain: [number, number] = [0, xMax];
 
-  const distGroups: DistributionGroupInput[] = DOSE_ORDER.slice()
-    .reverse()
-    .map((dose) => {
-      const isPlacebo = dose === "Placebo";
-      const rows = RECORDS.filter((r) => r.dose === dose);
-      const values = isPlacebo ? [] : rows.map((r) => exposureValue(r, metric));
-      const nResponders = rows.filter((r) => endpointValue(r, endpoint) === 1).length;
-      return {
-        groupId: dose,
-        label: dose,
-        color: DOSE_COLORS[dose],
-        values,
-        n: rows.length,
-        nResponders,
-        selected: state.selectedDoses.has(dose),
-        skipShape: isPlacebo,
-        splitAnnotations:
-          isPlacebo || state.splitAnnotationMode === "off" ? undefined : computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
-      };
-    })
-    .filter((g) => g.n > 0);
+  let distGroups: DistributionGroupInput[];
 
-  const width = panelWidth();
+  if (splitByEndpoints && splitByEndpoints.length > 1) {
+    distGroups = DOSE_ORDER.slice()
+      .reverse()
+      .flatMap((dose) => {
+        const isPlacebo = dose === "Placebo";
+        const rows = RECORDS.filter((r) => r.dose === dose);
+        if (!rows.length) return [];
+        const values = isPlacebo ? [] : rows.map((r) => exposureValue(r, metric));
+        return splitByEndpoints.map((ep, i) => ({
+          groupId: dose,
+          label: i === 0 ? dose : "",
+          color: ENDPOINT_COLORS[ep],
+          values,
+          n: rows.length,
+          nResponders: rows.filter((r) => endpointValue(r, ep) === 1).length,
+          selected: state.selectedDoses.has(dose),
+          skipShape: isPlacebo,
+          splitAnnotations:
+            i === 0 && !isPlacebo && state.splitAnnotationMode !== "off"
+              ? computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
+              : undefined
+        }));
+      });
+  } else {
+    distGroups = DOSE_ORDER.slice()
+      .reverse()
+      .map((dose) => {
+        const isPlacebo = dose === "Placebo";
+        const rows = RECORDS.filter((r) => r.dose === dose);
+        const values = isPlacebo ? [] : rows.map((r) => exposureValue(r, metric));
+        const nResponders = rows.filter((r) => endpointValue(r, endpoint) === 1).length;
+        return {
+          groupId: dose,
+          label: dose,
+          color: DOSE_COLORS[dose],
+          values,
+          n: rows.length,
+          nResponders,
+          selected: state.selectedDoses.has(dose),
+          skipShape: isPlacebo,
+          splitAnnotations:
+            isPlacebo || state.splitAnnotationMode === "off" ? undefined : computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
+        };
+      })
+      .filter((g) => g.n > 0);
+  }
+
+  // Taller when split into per-endpoint sub-rows (more, denser rows than the plain 5-dose view) -
+  // a wider per-row band keeps the Group N annotation text and box/whisker shape from crowding
+  // each other once there are 8-10+ rows instead of the usual 5.
+  const rowHeight = splitByEndpoints && splitByEndpoints.length > 1 ? 34 : 26;
+  const height = Math.max(200, distGroups.length * rowHeight + 60);
+
   const distResult = renderDistributionChart({
     groups: distGroups,
     xDomain: [0, xMax],
     mode: state.distributionMode,
     referenceLines: computeReferenceLines(metric),
     width,
-    height: 280,
+    height,
     options: { title: "Exposure by dose", xAxisLabel: exposureLabel(metric), yAxisLabel: "", renderTarget: "svg" }
   });
 
-  const cell = document.createElement("div");
-  cell.className = "panel-cell";
-  cell.innerHTML = `<div class="panel-cell-title">${exposureLabel(metric)}</div><div class="chart box"></div><div class="readout"><span class="muted">Click a row above to show projected fit values at Min, Q1, Median, Q3, and Max.</span></div>`;
-  boxPanelsEl.appendChild(cell);
-  const chartWrap = cell.querySelector(".chart") as HTMLDivElement;
-  const readoutEl = cell.querySelector(".readout") as HTMLDivElement;
+  const wrap = document.createElement("div");
+  wrap.className = "dist-inline";
+  wrap.innerHTML = `<div class="dist-inline-label">Exposure distribution by dose</div><div class="chart dist-inline-chart" style="height: ${height}px;"></div><div class="readout"><span class="muted">Click a row above to show projected fit values at Min, Q1, Median, Q3, and Max.</span></div>`;
+  cell.appendChild(wrap);
+  const chartWrap = wrap.querySelector(".chart") as HTMLDivElement;
+  const readoutEl = wrap.querySelector(".readout") as HTMLDivElement;
   chartWrap.innerHTML = distResult.content;
   attachDistributionInteractivity(chartWrap, metric, endpoint, active, readoutEl, distResult.metadata as unknown as DistributionMeta);
 }
@@ -539,11 +613,12 @@ interface DistributionMeta {
  * endpoint's curve/band/observed-marker together. No raw scatter points here (too cluttered with
  * several endpoints layered at once); the focus is purely on comparing the fitted curves.
  */
-function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint[]): void {
+function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint[], active: Set<number>): void {
   renderEndpointLegend(endpoints);
 
   const xMax = Math.max(...RECORDS.map((r) => exposureValue(r, metric)));
   const referenceLines = computeReferenceLines(metric);
+  const chartHeight = 360;
 
   const rowEl = document.createElement("div");
   rowEl.className = "endpoint-row";
@@ -552,7 +627,12 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
   rowEl.appendChild(rowGrid);
   scatterPanelsEl.appendChild(rowEl);
 
-  const width = Math.max(340, Math.floor(1200 / (endpoints.length + 1)));
+  // "Only show (all)" hides the individual per-endpoint panels, so the "(all)" overlay can use
+  // the full panel width (matching the distribution panel below it exactly, rather than sharing
+  // a row with several narrower panels) instead of the width-divided-by-panel-count used when
+  // showing the full faceted row.
+  const onlyAll = state.onlyShowCombined;
+  const width = onlyAll ? panelWidth() : Math.max(340, Math.floor(1200 / (endpoints.length + 1)));
 
   const fits = endpoints.map((endpoint) => {
     const { model, xs } = fitFor(metric, endpoint);
@@ -567,29 +647,31 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
   const appendPanel = (title: string, content: string) => {
     const cell = document.createElement("div");
     cell.className = "panel-cell";
-    cell.innerHTML = `<div class="panel-cell-title">${title}</div><div class="chart"></div>`;
+    cell.innerHTML = `<div class="panel-cell-title">${title}</div><div class="chart" style="height: ${chartHeight}px;"></div>`;
     rowGrid.appendChild(cell);
     (cell.querySelector(".chart") as HTMLDivElement).innerHTML = content;
   };
 
-  fits.forEach(({ endpoint, curve, observedBins }) => {
-    const result = renderLogisticScatterChart({
-      points: [],
-      curve,
-      groupColors: {},
-      xDomain: [0, xMax],
-      referenceLines,
-      observedBins,
-      showReferenceFit: state.showReferenceFit,
-      curveColor: ENDPOINT_COLORS[endpoint],
-      curveDash: ENDPOINT_DASH[endpoint],
-      bandColor: ENDPOINT_COLORS[endpoint],
-      width,
-      height: 360,
-      options: { title: "x", xAxisLabel: exposureLabel(metric), yAxisLabel: "Response", renderTarget: "svg" }
+  if (!onlyAll) {
+    fits.forEach(({ endpoint, curve, observedBins }) => {
+      const result = renderLogisticScatterChart({
+        points: [],
+        curve,
+        groupColors: {},
+        xDomain: [0, xMax],
+        referenceLines,
+        observedBins,
+        showReferenceFit: state.showReferenceFit,
+        curveColor: ENDPOINT_COLORS[endpoint],
+        curveDash: ENDPOINT_DASH[endpoint],
+        bandColor: ENDPOINT_COLORS[endpoint],
+        width,
+        height: chartHeight,
+        options: { title: "x", xAxisLabel: exposureLabel(metric), yAxisLabel: "Response", renderTarget: "svg" }
+      });
+      appendPanel(endpoint.toUpperCase(), result.content);
     });
-    appendPanel(endpoint.toUpperCase(), result.content);
-  });
+  }
 
   const [first, ...rest] = fits;
   if (first) {
@@ -607,11 +689,23 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
       bandColor: ENDPOINT_COLORS[first.endpoint],
       extraCurves,
       width,
-      height: 360,
+      height: chartHeight,
       options: { title: "x", xAxisLabel: exposureLabel(metric), yAxisLabel: "Response", renderTarget: "svg" }
     });
     appendPanel("(all)", result.content);
   }
+
+  // The exposure-by-dose distribution (Boxplot / Distribution / Lineranges - the same toggle used
+  // in the regular view) doesn't depend on which endpoint's curve it's being compared against, so
+  // it's shown once, shared beneath every endpoint panel above, rather than duplicated
+  // (identically - it's the exact same dose exposure data) under each one. Split into one
+  // sub-row per endpoint (colored by endpoint, clustered by dose) so the per-endpoint coloring
+  // and responder-count breakdown this view is built around isn't lost just because the panel
+  // itself is now shared/unduplicated.
+  const distCell = document.createElement("div");
+  distCell.className = "panel-cell dist-shared";
+  rowEl.appendChild(distCell);
+  appendDistributionMini(distCell, metric, endpoints[0], active, panelWidth(), endpoints);
 }
 
 function renderEndpointLegend(endpoints: Endpoint[]): void {
@@ -636,12 +730,25 @@ function renderLegend(): void {
   }
 }
 
+/** Whether the currently-rendered view is the endpoint-comparison overlay (curves colored by
+ * endpoint, not dose) - mirrors the same eligibility check used in render()/
+ * renderEndpointComparisonRow. Used to avoid coloring dose names by DOSE_COLORS in text that sits
+ * near that view, since a dose no longer maps to a single color there (it's split by endpoint). */
+function isEndpointComparisonActive(): boolean {
+  return state.compareEndpoints && selectedExposureMetrics().length === 1 && selectedEndpoints().length > 1;
+}
+
+function doseColorFor(dose: string): string {
+  return isEndpointComparisonActive() ? "#334155" : DOSE_COLORS[dose] ?? "#111827";
+}
+
 function updateStatus(activeCount: number): void {
   const total = RECORDS.length;
   // color each dose name to match its swatch/marker color, so it's easy to tell which
-  // highlighted dose is which at a glance, consistent with the rest of the UI
+  // highlighted dose is which at a glance, consistent with the rest of the UI - except in
+  // Compare Endpoints mode, where a dose no longer has one color (see doseColorFor).
   const doseNamesHtml = [...state.selectedDoses]
-    .map((dose) => `<strong style="color:${DOSE_COLORS[dose] ?? "#111827"}">${dose}</strong>`)
+    .map((dose) => `<strong style="color:${doseColorFor(dose)}">${dose}</strong>`)
     .join(", ");
   const focusHtml = state.selectedDoses.size ? `dose = ${doseNamesHtml}` : "";
   const brushText = state.brushedIds ? `${state.brushedIds.size} brushed` : "";
@@ -695,7 +802,7 @@ function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoi
   const lines = doses.map((dose) => {
     const g = groupStats[dose];
     const fitAt = (x: number) => 1 / (1 + Math.exp(-(model.intercept + model.slope * x)));
-    return `<div><strong style="color:${DOSE_COLORS[dose] ?? "#111827"}">${dose}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} (fit ${fitAt(g.min).toFixed(3)}) &nbsp; Q1 = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(3)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(3)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(3)}) &nbsp; Max = ${g.max.toFixed(1)} (fit ${fitAt(g.max).toFixed(3)})</div>`;
+    return `<div><strong style="color:${doseColorFor(dose)}">${dose}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} (fit ${fitAt(g.min).toFixed(3)}) &nbsp; Q1 = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(3)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(3)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(3)}) &nbsp; Max = ${g.max.toFixed(1)} (fit ${fitAt(g.max).toFixed(3)})</div>`;
   });
   readoutEl.innerHTML = lines.join("");
 }
@@ -844,6 +951,16 @@ function topBottomFor(mode: DistributionMode, g: DistributionGroupMeta, boxHalfH
 function transitionDistributionMode(targetMode: DistributionMode): void {
   if (distributionAnimating || targetMode === state.distributionMode) return;
   const fromMode = state.distributionMode;
+
+  // Lineranges isn't a ridge-path shape (it's a plain line + tick marks), so there's no path to
+  // morph to/from - just swap modes directly and re-render, rather than animating garbage.
+  if (fromMode === "lineranges" || targetMode === "lineranges") {
+    state.distributionMode = targetMode;
+    setDistModeButtonsActive(targetMode);
+    render();
+    return;
+  }
+
   distributionAnimating = true;
   setDistModeButtonsDisabled(true);
   setDistModeButtonsActive(targetMode);
@@ -944,7 +1061,8 @@ function buildSessionState(): SessionState {
       showObservedResponders: state.showObservedResponders,
       showReferenceFit: state.showReferenceFit,
       showDoseObserved: state.showDoseObserved,
-      compareEndpoints: state.compareEndpoints
+      compareEndpoints: state.compareEndpoints,
+      onlyShowCombined: state.onlyShowCombined
     }
   );
 }
@@ -1016,7 +1134,7 @@ function loadSessionFromFile(file: File): void {
       if (typeof session.settings["bootstrapSeed"] === "number") state.bootstrapSeed = session.settings["bootstrapSeed"] as number;
       if (typeof session.settings["bootstrapResamples"] === "number") state.bootstrapResamples = session.settings["bootstrapResamples"] as number;
       const distMode = session.settings["distributionMode"];
-      if (distMode === "boxplot" || distMode === "violin") state.distributionMode = distMode;
+      if (distMode === "boxplot" || distMode === "violin" || distMode === "lineranges") state.distributionMode = distMode;
       const refKindRaw = session.settings["referenceLineKind"];
       // fall back to the older multi-select session format for backward compatibility
       const legacyRefKinds = session.settings["referenceLineKinds"];
@@ -1042,6 +1160,7 @@ function loadSessionFromFile(file: File): void {
       // show the dose-observed marker rather than silently hiding it
       state.showDoseObserved = session.settings["showDoseObserved"] !== false;
       state.compareEndpoints = session.settings["compareEndpoints"] === true;
+      state.onlyShowCombined = session.settings["onlyShowCombined"] === true;
       const brushed = session.filters["brushedIds"];
       state.brushedIds = Array.isArray(brushed) ? new Set(brushed as number[]) : null;
       const doses = session.filters["selectedDoses"];
@@ -1057,6 +1176,7 @@ function loadSessionFromFile(file: File): void {
       showReferenceFitEl.checked = state.showReferenceFit;
       showDoseObservedEl.checked = state.showDoseObserved;
       compareEndpointsEl.checked = state.compareEndpoints;
+      onlyShowCombinedEl.checked = state.onlyShowCombined;
       render();
       sessionStatus.textContent = `Loaded session from ${session.metadata.createdAt}.`;
     } catch (err) {
@@ -1111,6 +1231,10 @@ showDoseObservedEl.addEventListener("change", () => {
 });
 compareEndpointsEl.addEventListener("change", () => {
   state.compareEndpoints = compareEndpointsEl.checked;
+  render();
+});
+onlyShowCombinedEl.addEventListener("change", () => {
+  state.onlyShowCombined = onlyShowCombinedEl.checked;
   render();
 });
 endpointGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {

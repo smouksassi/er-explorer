@@ -47,7 +47,31 @@ product.
   markers land at the same exposure position (common, since they're often
   binned on the same split points), the label layout falls back to spacing
   them evenly across the plot's full height rather than letting any run off
-  the top or bottom edge.
+  the top or bottom edge. An **Only show (all)** toggle hides the individual
+  per-endpoint panels entirely, leaving just the wide combined overlay - a
+  bigger single view whose width the distribution panel below it can match
+  exactly, rather than sitting under a whole row of narrower panels. The
+  dose legend (top) is hidden while this view is active, since coloring has
+  switched to per-endpoint; dose names elsewhere in the UI (the selection
+  status line, the projected-fit readout under the distribution panel) also
+  drop their usual per-dose color for the same reason - a dose no longer
+  maps to one color once endpoint coloring is active. The exposure
+  distribution-by-dose panel isn't hidden, but it also isn't duplicated
+  identically under every endpoint panel: it's shown once, shared beneath
+  all the endpoint panels (and the "(all)" panel), using the same Boxplot /
+  Distribution / Lineranges toggle and Group N control as the regular view
+  (see below) - but with each dose split into one sub-row per endpoint,
+  colored by that endpoint and clustered together (the dose name and its
+  Group N count are only labeled once, on the first sub-row of the
+  cluster), since the underlying exposure values are identical across
+  endpoints for a given dose but the responder count isn't. This mirrors
+  the reference R package's "lineranges colored by endpoint, split by dose"
+  annotation, just built on the same shared Boxplot/Distribution/Lineranges
+  machinery as the regular view rather than a separate, more limited
+  mechanism (an earlier version embedded the ranges directly under each
+  individual panel's own curve, colored uniformly per panel; that couldn't
+  show Group N and repeated identical data three times over, so it was
+  retired in favor of this single shared, endpoint-split panel).
 - Brushing (drag-select a region of a scatter) and clicking a dose-group row
   both filter/project the same underlying fit — no refitting on the raw
   fitted curve, only on what's projected. A clicked dose shows its Min, Q1,
@@ -74,27 +98,53 @@ product.
   running off-canvas. It's a small dependency-free stand-in for a proper
   label-repel/force layout — deliberately not pulling in D3 or a similar
   library just for this, consistent with the rest of the renderer.
-- Toggle the distribution panel (controls live next to it) between a
-  traditional boxplot (box at Q1-Q3, thin whisker line to the 1.5*IQR
-  bound, end-cap ticks, median line) and a "distribution" representation —
-  a one-sided ("half violin") density curve rising from a flat baseline,
-  rather than a fully mirrored violin. Both are rendered as the same ridge
-  primitive (a closed polygon with independent top/bottom pixel offsets per
-  x-sample; a boxplot uses equal top/bottom offsets, distribution mode uses
-  the KDE for the top and a flat baseline for the bottom), so toggling
-  smoothly morphs one shape into the other over ~500ms rather than
-  swapping components — no D3 dependency, just a per-frame numeric
-  interpolation between two precomputed keyframes. Each dose's shape is
+- The exposure distribution-by-dose chart is attached directly beneath the
+  exposure-vs-response plot(s) above it, inside the same card, rather than
+  living in a separate panel further down the page - a compact, single
+  combined visual per exposure metric. It's shown once per exposure metric
+  regardless of how many endpoints are selected - dose exposure is the same
+  data no matter which endpoint you're looking at, so repeating it
+  identically under every endpoint row would just be noise; in the regular
+  (non-comparison) grid it's positioned once, right after the last endpoint
+  row, using the first-selected endpoint for its "n=60 (40 resp.)"
+  responder-count text. In "Compare endpoints" mode it's likewise shown
+  once, shared beneath all of that metric's endpoint panels (and the
+  "(all)" panel) - but there each dose is split into one colored sub-row
+  per endpoint instead of a single dose-colored row, so the per-endpoint
+  responder breakdown isn't lost just because the panel itself isn't
+  duplicated (see above). Either way, its controls (Group N, distribution
+  mode toggle) live in the "Exposure vs response" panel's own control row
+  above. Toggle it between three display modes:
+  - **Boxplot** — box at Q1-Q3, thin whisker line to the 1.5*IQR bound,
+    end-cap ticks, median line.
+  - **Distribution** — a one-sided ("half violin") density curve rising
+    from a flat baseline, rather than a fully mirrored violin.
+  - **Lineranges** — a flattened boxplot: just a min-max bar with Q1/Q3
+    tick marks and a filled median dot, no filled shape at all - useful as
+    a quick, compact read when the full box/violin shape isn't needed, with
+    full feature parity since it's built on the same per-group rendering as
+    Boxplot/Distribution: Group N counts, click-to-project, and the "Group
+    Exposures By" split values all work identically in Lineranges mode.
+
+  Boxplot and Distribution are both rendered as the same ridge primitive (a
+  closed polygon with independent top/bottom pixel offsets per x-sample; a
+  boxplot uses equal top/bottom offsets, distribution mode uses the KDE for
+  the top and a flat baseline for the bottom), so toggling between just
+  those two smoothly morphs one shape into the other over ~500ms rather
+  than swapping components — no D3 dependency, just a per-frame numeric
+  interpolation between two precomputed keyframes. Lineranges isn't a
+  ridge-path shape at all (just a line and tick marks), so switching to or
+  from it is a plain instant swap rather than a morph. Each dose's shape is
   only ever drawn within (plus a small kernel-bandwidth pad around) that
   dose's own observed min-max range, not the full shared exposure axis —
   otherwise a narrow dose group would trail a flat, meaningless line out
   to the far edge of the chart just to match the axis width of a wider
-  group. Every dose row also shows dashed Q1/Q3 lines at all times, in
-  both display modes, since those are the exact values used for that
-  dose's projection onto the fit above. Placebo's exposure is a constant
-  zero by design, so its row skips the box/distribution shape (which would
-  just be a degenerate spike) but still shows its label and patient count
-  (N), consistent with every other dose row.
+  group. Every dose row also shows Q1/Q3 markers at all times, in every
+  display mode, since those are the exact values used for that dose's
+  projection onto the fit above. Placebo's exposure is a constant zero by
+  design, so its row skips the shape (which would just be a degenerate
+  spike) but still shows its label and patient count (N), consistent with
+  every other dose row.
 - A single, mutually-exclusive "Group Exposures By" split (median /
   tertiles / quartiles — pick one, mirroring the R `exposure_metric_split`
   parameter), computed on all dosed patients excluding placebo, drawn as

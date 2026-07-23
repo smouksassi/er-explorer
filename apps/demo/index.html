@@ -61,6 +61,11 @@
   .panel-cell-title { font-weight: 800; font-size: 13px; color: #334155; margin-bottom: 4px; }
   .chart { width: 100%; height: 380px; position: relative; touch-action: none; }
   .chart.box { height: 300px; }
+  .dist-inline { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e2e8f0; }
+  .dist-inline-label { font-weight: 700; font-size: 10.5px; color: #334155; opacity: 0.75; margin-bottom: 2px; }
+  .chart.dist-inline-chart { height: 190px; }
+  .dist-shared { margin-top: 12px; }
+  .dist-shared .dist-inline { margin-top: 0; padding-top: 0; border-top: none; }
   .footer-note { color: var(--muted); font-size: 12px; margin: 8px 0 0 0; padding: 0 8px 8px 8px; line-height: 1.5; }
   svg { width: 100%; height: 100%; overflow: visible; display: block; }
   .legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 0 8px 10px 8px; }
@@ -101,7 +106,7 @@
         <div class="panel-title">Exposure vs response</div>
         <button class="note-toggle" type="button" data-target="scatterNote" aria-expanded="false">Show details ▾</button>
       </div>
-      <div class="panel-note" id="scatterNote" style="display: none;">Points are jittered vertically for readability and colored by dose group. Dashed grey line is the overall fit; shaded band is the 95% CI. Selecting multiple exposures adds a column per exposure; selecting multiple endpoints adds a row per endpoint, so you can compare how response varies with a given exposure across endpoints - all panels share the same selection. "Fitted probability + CI" marks each active "Group Exposures By" split line with the model's predicted response there in grey, e.g. "83.8 / fit 0.74 [0.70-0.78]" - separate from "Observed % responders", which instead shows the raw (non-model) observed rate per split bin in dark markers, for comparing fitted vs. observed side by side. Clicking a dose row below adds that dose's own observed %/N marker in its own color too ("On dose click" toggle). If markers land close together they automatically stack into a small column with a thin leader line back to each one's true position, so labels never overlap. With exactly one exposure and 2+ endpoints selected, "Compare endpoints" switches to a different view: one panel per endpoint plus a final "(all)" panel overlaying every endpoint's curve together, colored and line-styled by endpoint instead of dose (no raw points in this view, to keep the overlay readable).</div>
+      <div class="panel-note" id="scatterNote" style="display: none;">Points are jittered vertically for readability and colored by dose group. Dashed grey line is the overall fit; shaded band is the 95% CI. Selecting multiple exposures adds a column per exposure; selecting multiple endpoints adds a row per endpoint, so you can compare how response varies with a given exposure across endpoints - all panels share the same selection. "Fitted probability + CI" marks each active "Group Exposures By" split line with the model's predicted response there in grey, e.g. "83.8 / fit 0.74 [0.70-0.78]" - separate from "Observed % responders", which instead shows the raw (non-model) observed rate per split bin in dark markers, for comparing fitted vs. observed side by side. Clicking a dose row below adds that dose's own observed %/N marker in its own color too ("On dose click" toggle). If markers land close together they automatically stack into a small column with a thin leader line back to each one's true position, so labels never overlap. Directly beneath every selected endpoint's own plot, a compact "Exposure distribution by dose" strip (Boxplot, Distribution/half-violin, or Lineranges, toggle above) shows the same dose groups on the identical x-axis - click a row to toggle that dose's projection onto the fit above (multiple groups can be active at once). "Lineranges" is a flattened boxplot: just a min-max bar with Q1/Q3 tick marks and a filled median dot, no filled shape - with full parity to Boxplot/Distribution (Group N, click-to-project, split-line values), since all three are just different renderings of the same underlying per-dose summary. Placebo's exposure is fixed at zero by design, so its row shows only its patient count (N), with no shape in any mode. The Q1/Q3 markers always reflect the same interquartile bounds used for that dose's projection, in every display mode. "Group N" (Off / N / N (%)) shows how many of each dose's own patients fall in each bin of the "Group Exposures By" split, once one is selected. This strip is shown once per exposure metric regardless of how many endpoints are selected - dose exposure itself is endpoint-independent, so repeating it identically under every endpoint row would just be noise; in the regular (non-comparison) view it sits once, right after the last endpoint row, using the first-selected endpoint for its "n=60 (40 resp.)" responder-count text. With exactly one exposure and 2+ endpoints selected, "Compare endpoints" switches to a different view: one panel per endpoint plus a final "(all)" panel overlaying every endpoint's curve together, colored and line-styled by endpoint instead of dose (no raw points in this view, to keep the overlay readable) - an additional "Only show (all)" toggle hides the individual per-endpoint panels entirely, leaving just the wide combined overlay with the distribution strip synced directly beneath it at matching width. In this view the distribution strip is still shown once (not duplicated per panel), but each dose is split into one colored sub-row per endpoint - clustered together, with the dose name and Group N count labeled once per cluster - so the per-endpoint responder breakdown isn't lost just because the panel itself isn't repeated. Dose names elsewhere in the UI (the selection status line, the projected-fit readout below this strip) drop their usual dose-swatch coloring while Compare Endpoints is active, since a dose no longer maps to one color there.</div>
       <div class="controls">
         <div class="field"><label>Exposure</label><div class="checkbox-group" id="exposureGroup">
           <label><input type="checkbox" value="auc" checked /> AUC</label>
@@ -114,6 +119,7 @@
         </div></div>
         <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="compareEndpointsGroup">
           <label><input type="checkbox" id="compareEndpoints" disabled /> Compare endpoints</label>
+          <label><input type="checkbox" id="onlyShowCombined" disabled /> Only show (all)</label>
         </div></div>
         <div class="field"><label for="ciSelect">CI method</label><select id="ciSelect"><option value="wald">Wald</option><option value="bootstrap">Bootstrap</option></select></div>
         <div class="field"><label>Group Exposures By:</label><div class="checkbox-group" id="refLineGroup">
@@ -129,6 +135,12 @@
         <div class="field"><label>On dose click</label><div class="checkbox-group" id="doseObservedGroup">
           <label><input type="checkbox" id="showDoseObserved" checked /> Observed %/N</label>
         </div></div>
+        <div class="field"><label for="splitAnnotationMode">Group N</label><select id="splitAnnotationMode" disabled><option value="off">Off</option><option value="n">N</option><option value="n_pct">N (%)</option></select></div>
+        <div class="field"><label>Distribution</label><div class="checkbox-group" id="distModeGroup">
+          <button type="button" class="toggle active" data-mode="boxplot">Boxplot</button>
+          <button type="button" class="toggle" data-mode="violin">Distribution</button>
+          <button type="button" class="toggle" data-mode="lineranges">Lineranges</button>
+        </div></div>
         <div class="field"><label>&nbsp;</label><button id="resetBtn" type="button">Reset selection</button></div>
       </div>
     </div>
@@ -137,24 +149,6 @@
     <div id="scatterPanels" class="endpoint-rows"></div>
     <div id="status" style="padding: 4px 8px 10px 8px;">Showing all rows</div>
     <div class="footer-note" id="refLineNote" style="display:none; padding: 0 8px 8px 8px;">Reference line, group N, and observed-responder split bins are all computed on dosed patients only, excluding placebo (which is fixed at zero exposure by design). Placebo itself still gets its own observed-responder marker at zero exposure when that option is on.</div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-head">
-      <div class="panel-title-row">
-        <div class="panel-title">Exposure distribution by dose</div>
-        <button class="note-toggle" type="button" data-target="distNote" aria-expanded="false">Show details ▾</button>
-      </div>
-      <div class="panel-note" id="distNote" style="display: none;">Click a row to toggle that dose group's projection onto the fit above. Multiple groups can be active at once. Placebo's exposure is fixed at zero by design, so its row shows only its patient count (N), with no box or distribution shape. The dashed Q1/Q3 lines always mark the same interquartile bounds used for that dose's projection, in both Boxplot and Distribution display modes. "Group N" (Off / N / N (%)) shows how many of each dose's own patients fall in each bin of the "Group Exposures By" split above, once a split is selected.</div>
-      <div class="controls">
-        <div class="field"><label for="splitAnnotationMode">Group N</label><select id="splitAnnotationMode" disabled><option value="off">Off</option><option value="n">N</option><option value="n_pct">N (%)</option></select></div>
-        <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="distModeGroup">
-          <button type="button" class="toggle active" data-mode="boxplot">Boxplot</button>
-          <button type="button" class="toggle" data-mode="violin">Distribution</button>
-        </div></div>
-      </div>
-    </div>
-    <div id="boxPanels" class="panel-grid"></div>
   </div>
 
   <div class="panel" style="padding: 14px 18px;">

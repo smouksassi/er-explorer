@@ -596,7 +596,9 @@ export function renderLogisticScatterChart(input: LogisticScatterInput): RenderR
     axis += selfClosing("line", { x1: plot.left - 6, y1: yy, x2: plot.left, y2: yy, stroke: "#94a3b8" });
     axis += tag("text", { x: plot.left - 10, y: yy + 4, "text-anchor": "end", fill: "#667085", "font-size": 12 }, esc(v));
   }
-  axis += tag("text", { x: plot.left + plot.width / 2, y: height - 12, "text-anchor": "middle", fill: "#334155", "font-size": 13, "font-weight": 700 }, esc(input.options.xAxisLabel));
+  // positioned relative to the plot's own bottom edge (not the overall chart height) so it stays
+  // put immediately under the tick labels
+  axis += tag("text", { x: plot.left + plot.width / 2, y: plot.top + plot.height + 40, "text-anchor": "middle", fill: "#334155", "font-size": 13, "font-weight": 700 }, esc(input.options.xAxisLabel));
   axis += tag(
     "text",
     { x: 18, y: plot.top + plot.height / 2, transform: `rotate(-90 18 ${plot.top + plot.height / 2})`, "text-anchor": "middle", fill: "#334155", "font-size": 13, "font-weight": 700 },
@@ -800,7 +802,7 @@ export function renderBoxplotChart(input: BoxplotChartInput): RenderResult {
  * dependency on D3.
  * ---------------------------------------------------------------------- */
 
-export type DistributionMode = "boxplot" | "violin";
+export type DistributionMode = "boxplot" | "violin" | "lineranges";
 
 /** Build the shared x-sample grid for one group: an even base grid across the
  * whole domain, plus the group's own distribution breakpoints so box edges
@@ -990,48 +992,79 @@ export function renderDistributionChart(input: DistributionChartInput): RenderRe
     // click anywhere in the row - not just on the shape itself - bubbles to the group)
     let group = selfClosing("rect", { x: plot.left, y: cy - band / 2 + 1, width: plot.width, height: band - 2, fill: "transparent" });
 
-    const path = buildAsymRidgePath(xSamples, activeTop, activeBottom, x, cy);
-    group += selfClosing("path", {
-      class: "er-ridge-shape",
-      d: path,
-      fill: g.selected ? g.color : "#ffffff",
-      opacity: g.selected ? 0.32 : input.mode === "boxplot" ? 1 : 0.85,
-      stroke: g.color,
-      "stroke-width": g.selected ? 2.4 : 1.6
-    });
-    if (summary) {
-      group += selfClosing("line", {
-        x1: x(summary.median),
-        y1: cy - boxHalfHeightPx,
-        x2: x(summary.median),
-        y2: cy + boxHalfHeightPx,
+    if (input.mode === "lineranges") {
+      // Flattened boxplot: a single horizontal min-max bar with Q1/Q3 tick marks and a filled
+      // median dot, no filled area - same visual language as the "Compare endpoints" view's own
+      // per-endpoint dose-ranges strip, just colored by dose instead of by endpoint, and living
+      // in this chart's normal group/click/Group-N infrastructure so it gets full parity with
+      // Boxplot/Distribution (Group N counts, click-to-project, reference-line split values)
+      // rather than being a separate, more limited mechanism.
+      if (summary) {
+        group += selfClosing("line", {
+          x1: x(summary.min),
+          y1: cy,
+          x2: x(summary.max),
+          y2: cy,
+          stroke: g.color,
+          "stroke-width": 5,
+          "stroke-linecap": "round",
+          opacity: g.selected ? 0.85 : 0.55
+        });
+        for (const q of [summary.q1, summary.q3]) {
+          const qx = x(q);
+          group += selfClosing("line", { x1: qx, y1: cy - 5, x2: qx, y2: cy + 5, stroke: g.color, "stroke-width": 2, opacity: 0.9 });
+        }
+        group += selfClosing("circle", { cx: x(summary.median), cy, r: 4, fill: g.color, stroke: "#fff", "stroke-width": 1.2 });
+      }
+    } else {
+      const path = buildAsymRidgePath(xSamples, activeTop, activeBottom, x, cy);
+      group += selfClosing("path", {
+        class: "er-ridge-shape",
+        d: path,
+        fill: g.selected ? g.color : "#ffffff",
+        opacity: g.selected ? 0.32 : input.mode === "boxplot" ? 1 : 0.85,
         stroke: g.color,
-        "stroke-width": 2.4
+        "stroke-width": g.selected ? 2.4 : 1.6
       });
-      // Q1/Q3 markers: always visible (not mode-gated) since these are the exact values used
-      // for this dose's projection onto the fit above, regardless of whether the row is
-      // currently shown as a boxplot or a distribution.
-      let iqrLines = selfClosing("line", { x1: x(summary.q1), y1: cy - boxHalfHeightPx, x2: x(summary.q1), y2: cy + boxHalfHeightPx, stroke: g.color, "stroke-width": 1.4, "stroke-dasharray": "3 3", opacity: 0.8 });
-      iqrLines += selfClosing("line", { x1: x(summary.q3), y1: cy - boxHalfHeightPx, x2: x(summary.q3), y2: cy + boxHalfHeightPx, stroke: g.color, "stroke-width": 1.4, "stroke-dasharray": "3 3", opacity: 0.8 });
-      group += tag("g", { class: "er-iqr-lines" }, iqrLines);
-      // whisker end-caps: a traditional boxplot convention, only meaningful in box mode (the
-      // ridge itself already renders as a hairline that would otherwise look like a bare line)
-      const capOpacity = input.mode === "boxplot" ? 1 : 0;
-      let caps = selfClosing("line", { x1: x(summary.whiskerLow), y1: cy - capHalfHeightPx, x2: x(summary.whiskerLow), y2: cy + capHalfHeightPx, stroke: g.color, "stroke-width": 1.6 });
-      caps += selfClosing("line", { x1: x(summary.whiskerHigh), y1: cy - capHalfHeightPx, x2: x(summary.whiskerHigh), y2: cy + capHalfHeightPx, stroke: g.color, "stroke-width": 1.6 });
-      group += tag("g", { class: "er-caps", opacity: capOpacity }, caps);
+      if (summary) {
+        group += selfClosing("line", {
+          x1: x(summary.median),
+          y1: cy - boxHalfHeightPx,
+          x2: x(summary.median),
+          y2: cy + boxHalfHeightPx,
+          stroke: g.color,
+          "stroke-width": 2.4
+        });
+        // Q1/Q3 markers: always visible (not mode-gated) since these are the exact values used
+        // for this dose's projection onto the fit above, regardless of whether the row is
+        // currently shown as a boxplot or a distribution.
+        let iqrLines = selfClosing("line", { x1: x(summary.q1), y1: cy - boxHalfHeightPx, x2: x(summary.q1), y2: cy + boxHalfHeightPx, stroke: g.color, "stroke-width": 1.4, "stroke-dasharray": "3 3", opacity: 0.8 });
+        iqrLines += selfClosing("line", { x1: x(summary.q3), y1: cy - boxHalfHeightPx, x2: x(summary.q3), y2: cy + boxHalfHeightPx, stroke: g.color, "stroke-width": 1.4, "stroke-dasharray": "3 3", opacity: 0.8 });
+        group += tag("g", { class: "er-iqr-lines" }, iqrLines);
+        // whisker end-caps: a traditional boxplot convention, only meaningful in box mode (the
+        // ridge itself already renders as a hairline that would otherwise look like a bare line)
+        const capOpacity = input.mode === "boxplot" ? 1 : 0;
+        let caps = selfClosing("line", { x1: x(summary.whiskerLow), y1: cy - capHalfHeightPx, x2: x(summary.whiskerLow), y2: cy + capHalfHeightPx, stroke: g.color, "stroke-width": 1.6 });
+        caps += selfClosing("line", { x1: x(summary.whiskerHigh), y1: cy - capHalfHeightPx, x2: x(summary.whiskerHigh), y2: cy + capHalfHeightPx, stroke: g.color, "stroke-width": 1.6 });
+        group += tag("g", { class: "er-caps", opacity: capOpacity }, caps);
+      }
     }
     if (g.splitAnnotations?.length) {
       // per-group split counts (e.g. how many of this row's own patients fall in each tertile
       // bin): plain small text, no background/border, sitting above the shape rather than on
       // top of it - a bordered callout there was tried first but reviewers found it made it
-      // hard to tell the annotation apart from the box/violin shape itself.
+      // hard to tell the annotation apart from the box/violin shape itself. Positioned relative
+      // to the box's own fixed half-height (not the row's full band) so it clears the shape by a
+      // consistent gap regardless of how tall/short the row's band happens to be - anchoring to
+      // band/2 instead could land the text inside the box once bands got tall enough (e.g. many
+      // rows packed into a "split by endpoint" view) for boxHalfHeightPx to be much smaller than
+      // band/2.
       let anns = "";
       g.splitAnnotations.forEach((a) => {
         const xx = x(a.x);
         anns += tag(
           "text",
-          { x: xx, y: cy - band / 2 + 11, "text-anchor": "middle", fill: g.color, "font-size": 10.5, "font-weight": 700, opacity: 0.85 },
+          { x: xx, y: cy - boxHalfHeightPx - 6, "text-anchor": "middle", fill: g.color, "font-size": 10.5, "font-weight": 700, opacity: 0.85 },
           esc(a.label)
         );
       });
