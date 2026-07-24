@@ -119,6 +119,12 @@ interface DemoState {
    * distribution-by-dose panel below it can match exactly, rather than sitting under a whole row
    * of narrower panels. Off by default (shows the full faceted row, as before). */
   onlyShowCombined: boolean;
+  /** Show the raw jittered per-patient scatter points on the exposure-vs-response panel(s).
+   * Applies to both the regular grid and Compare Endpoints (where points are colored by
+   * endpoint instead of dose). On by default in the regular grid; Compare Endpoints has
+   * historically kept them off since with several curves already overlaid, raw points add a lot
+   * of visual noise - but the toggle now applies uniformly to both views. */
+  showPoints: boolean;
 }
 
 const state: DemoState = {
@@ -136,7 +142,8 @@ const state: DemoState = {
   showReferenceFit: false,
   showDoseObserved: true,
   compareEndpoints: false,
-  onlyShowCombined: false
+  onlyShowCombined: false,
+  showPoints: true
 };
 
 /** One entry per currently-rendered distribution panel (one per selected exposure metric),
@@ -164,6 +171,7 @@ const splitAnnotationModeEl = $<HTMLSelectElement>("splitAnnotationMode");
 const showObservedRespEl = $<HTMLInputElement>("showObservedResp");
 const showReferenceFitEl = $<HTMLInputElement>("showReferenceFit");
 const showDoseObservedEl = $<HTMLInputElement>("showDoseObserved");
+const showPointsEl = $<HTMLInputElement>("showPoints");
 const endpointGroupEl = $<HTMLDivElement>("endpointGroup");
 const compareEndpointsEl = $<HTMLInputElement>("compareEndpoints");
 const onlyShowCombinedEl = $<HTMLInputElement>("onlyShowCombined");
@@ -364,12 +372,9 @@ function render(): void {
       rowEl.className = "endpoint-row";
       const rowGrid = document.createElement("div");
       rowGrid.className = "panel-grid";
-      if (endpoints.length > 1) {
-        const rowLabel = document.createElement("div");
-        rowLabel.className = "endpoint-row-label";
-        rowLabel.textContent = endpoint.toUpperCase();
-        rowEl.appendChild(rowLabel);
-      }
+      // No separate row-label pill here - each panel's own y-axis (rendered by
+      // renderScatterPanel) already carries the endpoint name, so a pill would just repeat it
+      // and eat vertical space for no new information.
       rowEl.appendChild(rowGrid);
       scatterPanelsEl.appendChild(rowEl);
       for (const metric of metrics) {
@@ -392,7 +397,6 @@ function render(): void {
     for (const metric of metrics) {
       const cell = document.createElement("div");
       cell.className = "panel-cell dist-shared";
-      cell.innerHTML = `<div class="panel-cell-title">${exposureLabel(metric)}</div>`;
       sharedGrid.appendChild(cell);
       appendDistributionMini(cell, metric, primaryEndpoint, active, panelWidth());
     }
@@ -477,7 +481,7 @@ function renderScatterPanel(
 
   const width = panelWidth();
   const scatterResult = renderLogisticScatterChart({
-    points,
+    points: state.showPoints ? points : [],
     curve,
     projected,
     groupColors: DOSE_COLORS,
@@ -492,7 +496,9 @@ function renderScatterPanel(
 
   const cell = document.createElement("div");
   cell.className = "panel-cell";
-  cell.innerHTML = `<div class="panel-cell-title">${exposureLabel(metric)}</div><div class="chart" data-metric="${metric}"></div>`;
+  // No panel-cell-title here - the chart's own x/y axis labels (exposure metric, endpoint) already
+  // carry this information, so a repeated text title above it would just add whitespace.
+  cell.innerHTML = `<div class="chart" data-metric="${metric}"></div>`;
   container.appendChild(cell);
   const chartWrap = cell.querySelector(".chart") as HTMLDivElement;
   chartWrap.innerHTML = scatterResult.content;
@@ -545,7 +551,7 @@ function appendDistributionMini(
           selected: state.selectedDoses.has(dose),
           skipShape: isPlacebo,
           splitAnnotations:
-            i === 0 && !isPlacebo && state.splitAnnotationMode !== "off"
+            !isPlacebo && state.splitAnnotationMode !== "off"
               ? computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
               : undefined
         }));
@@ -634,6 +640,19 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
   const onlyAll = state.onlyShowCombined;
   const width = onlyAll ? panelWidth() : Math.max(340, Math.floor(1200 / (endpoints.length + 1)));
 
+  // Raw jittered points, colored by endpoint instead of dose (gated by the shared "Show points"
+  // toggle) - one set per endpoint for its own panel, plus all endpoints combined for "(all)".
+  const pointsFor = (endpoint: Endpoint): ScatterPoint[] =>
+    RECORDS.map((r) => ({
+      id: r.id,
+      exposure: exposureValue(r, metric),
+      response: endpointValue(r, endpoint),
+      displayY: endpointValue(r, endpoint) + seededJitter(r.id),
+      groupId: endpoint,
+      label: `${exposureLabel(metric)} ${exposureValue(r, metric).toFixed(1)} · ${endpoint.toUpperCase()} ${endpointValue(r, endpoint)} · ${r.dose} · Study ${r.study}`,
+      selected: active.has(r.id)
+    }));
+
   const fits = endpoints.map((endpoint) => {
     const { model, xs } = fitFor(metric, endpoint);
     const curve = curveFor(model, xs, xMax, endpoint);
@@ -655,9 +674,9 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
   if (!onlyAll) {
     fits.forEach(({ endpoint, curve, observedBins }) => {
       const result = renderLogisticScatterChart({
-        points: [],
+        points: state.showPoints ? pointsFor(endpoint) : [],
         curve,
-        groupColors: {},
+        groupColors: { [endpoint]: ENDPOINT_COLORS[endpoint] },
         xDomain: [0, xMax],
         referenceLines,
         observedBins,
@@ -677,13 +696,16 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
   if (first) {
     const extraCurves: ExtraCurve[] = rest.map((f) => ({ curve: f.curve, color: ENDPOINT_COLORS[f.endpoint], dash: ENDPOINT_DASH[f.endpoint] }));
     const allObservedBins = fits.flatMap((f) => f.observedBins);
+    const allPoints = state.showPoints ? fits.flatMap((f) => pointsFor(f.endpoint)) : [];
+    const allGroupColors = Object.fromEntries(fits.map((f) => [f.endpoint, ENDPOINT_COLORS[f.endpoint]]));
     const result = renderLogisticScatterChart({
-      points: [],
+      points: allPoints,
       curve: first.curve,
-      groupColors: {},
+      groupColors: allGroupColors,
       xDomain: [0, xMax],
       referenceLines,
       observedBins: allObservedBins,
+      showReferenceFit: state.showReferenceFit,
       curveColor: ENDPOINT_COLORS[first.endpoint],
       curveDash: ENDPOINT_DASH[first.endpoint],
       bandColor: ENDPOINT_COLORS[first.endpoint],
@@ -1062,7 +1084,8 @@ function buildSessionState(): SessionState {
       showReferenceFit: state.showReferenceFit,
       showDoseObserved: state.showDoseObserved,
       compareEndpoints: state.compareEndpoints,
-      onlyShowCombined: state.onlyShowCombined
+      onlyShowCombined: state.onlyShowCombined,
+      showPoints: state.showPoints
     }
   );
 }
@@ -1161,6 +1184,7 @@ function loadSessionFromFile(file: File): void {
       state.showDoseObserved = session.settings["showDoseObserved"] !== false;
       state.compareEndpoints = session.settings["compareEndpoints"] === true;
       state.onlyShowCombined = session.settings["onlyShowCombined"] === true;
+      state.showPoints = session.settings["showPoints"] !== false;
       const brushed = session.filters["brushedIds"];
       state.brushedIds = Array.isArray(brushed) ? new Set(brushed as number[]) : null;
       const doses = session.filters["selectedDoses"];
@@ -1177,6 +1201,7 @@ function loadSessionFromFile(file: File): void {
       showDoseObservedEl.checked = state.showDoseObserved;
       compareEndpointsEl.checked = state.compareEndpoints;
       onlyShowCombinedEl.checked = state.onlyShowCombined;
+      showPointsEl.checked = state.showPoints;
       render();
       sessionStatus.textContent = `Loaded session from ${session.metadata.createdAt}.`;
     } catch (err) {
@@ -1235,6 +1260,11 @@ compareEndpointsEl.addEventListener("change", () => {
 });
 onlyShowCombinedEl.addEventListener("change", () => {
   state.onlyShowCombined = onlyShowCombinedEl.checked;
+  render();
+});
+
+showPointsEl.addEventListener("change", () => {
+  state.showPoints = showPointsEl.checked;
   render();
 });
 endpointGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {

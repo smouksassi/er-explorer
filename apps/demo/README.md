@@ -24,7 +24,17 @@ product.
   across endpoints. The exposure distribution panel below stays one row per
   exposure metric regardless of endpoint count (dose exposure doesn't
   depend on which response endpoint you're looking at); it uses the first
-  selected endpoint for its per-dose responder count.
+  selected endpoint for its per-dose responder count. Each panel's own axis
+  labels already carry the exposure metric (x) and endpoint (y), so this
+  grid deliberately skips a separate text title or endpoint-name pill above
+  each panel - repeating that as a heading would just eat vertical space for
+  no new information; panel padding and row spacing are kept tight for the
+  same reason.
+- A **Show points** toggle (on by default) shows/hides the raw jittered
+  per-patient scatter points on the exposure-vs-response panel(s) - applies
+  uniformly to the regular grid (points colored by dose, as always) and to
+  Compare Endpoints (points colored by endpoint instead, including in the
+  combined "(all)" panel where every endpoint's points appear together).
 - The top "Responders by endpoint" card lists every currently-selected
   endpoint (not just one), each split into Placebo vs Dosed (all
   non-placebo patients pooled) responder rate + count — a single pooled
@@ -42,12 +52,18 @@ product.
   coloring and line style (solid / dotted / dashed) switch from per-dose to
   per-endpoint, so the same curve stays identifiable once several are
   layered on top of each other in the "(all)" panel; a small legend shows
-  each endpoint's color/dash swatch. Raw scatter points are hidden in this
-  view to keep the overlay readable. When several endpoints' observed-rate
-  markers land at the same exposure position (common, since they're often
-  binned on the same split points), the label layout falls back to spacing
-  them evenly across the plot's full height rather than letting any run off
-  the top or bottom edge. An **Only show (all)** toggle hides the individual
+  each endpoint's color/dash swatch. The "Fitted probability + CI" toggle
+  works in every panel here too, including "(all)" - each overlaid curve
+  gets its own fit+CI marker in its own curve color at each active split
+  line, rather than one shared grey marker, so it's still clear which curve
+  each fit value belongs to. Raw scatter points follow the same "Show
+  points" toggle as the regular grid, colored by endpoint instead of dose
+  (in "(all)", every endpoint's points appear together, each in that
+  endpoint's color). When several endpoints' observed-rate markers land at
+  the same exposure position (common, since they're often binned on the
+  same split points), the label layout falls back to spacing them evenly
+  across the plot's full height rather than letting any run off the top or
+  bottom edge. An **Only show (all)** toggle hides the individual
   per-endpoint panels entirely, leaving just the wide combined overlay - a
   bigger single view whose width the distribution panel below it can match
   exactly, rather than sitting under a whole row of narrower panels. The
@@ -61,17 +77,17 @@ product.
   all the endpoint panels (and the "(all)" panel), using the same Boxplot /
   Distribution / Lineranges toggle and Group N control as the regular view
   (see below) - but with each dose split into one sub-row per endpoint,
-  colored by that endpoint and clustered together (the dose name and its
-  Group N count are only labeled once, on the first sub-row of the
-  cluster), since the underlying exposure values are identical across
-  endpoints for a given dose but the responder count isn't. This mirrors
-  the reference R package's "lineranges colored by endpoint, split by dose"
-  annotation, just built on the same shared Boxplot/Distribution/Lineranges
-  machinery as the regular view rather than a separate, more limited
-  mechanism (an earlier version embedded the ranges directly under each
-  individual panel's own curve, colored uniformly per panel; that couldn't
-  show Group N and repeated identical data three times over, so it was
-  retired in favor of this single shared, endpoint-split panel).
+  colored by that endpoint and clustered together. The dose name itself is
+  labeled once per cluster (it's identical across endpoints), but the Group
+  N count is shown on every sub-row, since the responder breakdown behind
+  it does differ per endpoint. This mirrors the reference R package's
+  "lineranges colored by endpoint, split by dose" annotation, just built on
+  the same shared Boxplot/Distribution/Lineranges machinery as the regular
+  view rather than a separate, more limited mechanism (an earlier version
+  embedded the ranges directly under each individual panel's own curve,
+  colored uniformly per panel; that couldn't show Group N and repeated
+  identical data three times over, so it was retired in favor of this
+  single shared, endpoint-split panel).
 - Brushing (drag-select a region of a scatter) and clicking a dose-group row
   both filter/project the same underlying fit — no refitting on the raw
   fitted curve, only on what's projected. A clicked dose shows its Min, Q1,

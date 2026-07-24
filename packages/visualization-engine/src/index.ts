@@ -561,23 +561,41 @@ export function renderLogisticScatterChart(input: LogisticScatterInput): RenderR
   // answers not just "where is the cut point" (already shown by the dashed line + top label) but
   // also "what does the model predict there", right on the curve itself. Rendered in a lighter
   // grey than the (near-black) observed-rate markers, since the two are easy to confuse when
-  // both are visible at once - this one is the model's fit, not an observed count.
+  // both are visible at once - this one is the model's fit, not an observed count. When other
+  // curves are overlaid (extraCurves - the "Compare endpoints" (all) panel), each curve gets its
+  // own fit marker in its own curve color instead of one shared grey marker, so it's still clear
+  // which curve each fit value belongs to once several are stacked at the same split line.
   if (input.showReferenceFit) {
+    const hasExtras = (input.extraCurves ?? []).length > 0;
     for (const ref of input.referenceLines ?? []) {
       if (ref.value < input.xDomain[0] || ref.value > input.xDomain[1]) continue;
+      const valueText = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
       const bandSource = input.band ?? input.curve;
       const fit = interpolateEstimate(input.curve.estimates, ref.value);
       const ci = interpolateFullEstimate(bandSource.estimates, ref.value);
-      const valueText = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
       observedMarkers.push({
         xx: x(ref.value),
-        color: "#94a3b8",
+        color: hasExtras ? input.curveColor ?? "#94a3b8" : "#94a3b8",
         yValue: fit,
         yLowValue: ci.lower,
         yHighValue: ci.upper,
         line1: valueText,
         line2: `fit ${fit.toFixed(2)} [${ci.lower.toFixed(2)}-${ci.upper.toFixed(2)}]`
       });
+      for (const extra of input.extraCurves ?? []) {
+        const extraBandSource = extra.band ?? extra.curve;
+        const extraFit = interpolateEstimate(extra.curve.estimates, ref.value);
+        const extraCi = interpolateFullEstimate(extraBandSource.estimates, ref.value);
+        observedMarkers.push({
+          xx: x(ref.value),
+          color: extra.color,
+          yValue: extraFit,
+          yLowValue: extraCi.lower,
+          yHighValue: extraCi.upper,
+          line1: valueText,
+          line2: `fit ${extraFit.toFixed(2)} [${extraCi.lower.toFixed(2)}-${extraCi.upper.toFixed(2)}]`
+        });
+      }
     }
   }
 
