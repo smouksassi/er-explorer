@@ -10,6 +10,7 @@
   "dependencies": {
     "@er-explorer/session-engine": "workspace:*",
     "@er-explorer/analysis": "workspace:*",
+    "@er-explorer/model-linear": "workspace:*",
     "@er-explorer/visualization-engine": "workspace:*"
   },
   "devDependencies": {

@@ -52,8 +52,8 @@ product.
   coloring and line style (solid / dotted / dashed) switch from per-dose to
   per-endpoint, so the same curve stays identifiable once several are
   layered on top of each other in the "(all)" panel; a small legend shows
-  each endpoint's color/dash swatch. The "Fitted probability + CI" toggle
-  works in every panel here too, including "(all)" - each overlaid curve
+  each endpoint's color/dash swatch. The "Fitted + CI" toggle (and "Split
+  value") works in every panel here too, including "(all)" - each overlaid curve
   gets its own fit+CI marker in its own curve color at each active split
   line, rather than one shared grey marker, so it's still clear which curve
   each fit value belongs to. Raw scatter points follow the same "Show
@@ -79,8 +79,8 @@ product.
   (see below) - but with each dose split into one sub-row per endpoint,
   colored by that endpoint and clustered together. The dose name itself is
   labeled once per cluster (it's identical across endpoints), but the Group
-  N count is shown on every sub-row, since the responder breakdown behind
-  it does differ per endpoint. This mirrors the reference R package's
+  N count is shown on every sub-row, since it's an exposure-split count and
+  isn't clustered away like the dose label is. This mirrors the reference R package's
   "lineranges colored by endpoint, split by dose" annotation, just built on
   the same shared Boxplot/Distribution/Lineranges machinery as the regular
   view rather than a separate, more limited mechanism (an earlier version
@@ -122,13 +122,13 @@ product.
   data no matter which endpoint you're looking at, so repeating it
   identically under every endpoint row would just be noise; in the regular
   (non-comparison) grid it's positioned once, right after the last endpoint
-  row, using the first-selected endpoint for its "n=60 (40 resp.)"
-  responder-count text. In "Compare endpoints" mode it's likewise shown
+  row. It deliberately never shows a responder count next to a dose's N,
+  since it's shared across every selected endpoint and a single count could
+  only ever reflect one of them - that per-dose observed rate is still
+  available, unambiguously, by clicking the row. In "Compare endpoints" mode it's likewise shown
   once, shared beneath all of that metric's endpoint panels (and the
   "(all)" panel) - but there each dose is split into one colored sub-row
-  per endpoint instead of a single dose-colored row, so the per-endpoint
-  responder breakdown isn't lost just because the panel itself isn't
-  duplicated (see above). Either way, its controls (Group N, distribution
+  per endpoint instead of a single dose-colored row (see above). Either way, its controls (Group N, distribution
   mode toggle) live in the "Exposure vs response" panel's own control row
   above. Toggle it between three display modes:
   - **Boxplot** — box at Q1-Q3, thin whisker line to the 1.5*IQR bound,
@@ -169,14 +169,13 @@ product.
   distribution panel below it share the same left margin by design, so a
   split line drawn at, say, AUC 83.8 lands at the exact same pixel column
   in both - the two panels' x-axes are meant to be read as one continuous
-  axis, not two independently-aligned ones. In the distribution panel the
-  cut line's actual value (e.g. "63.1") is also printed at the bottom, in
-  the same lighter grey as the scatter panel's "Fitted probability + CI"
-  marker (see below) - both show "the value at this split line", so
-  they're deliberately color-matched, and both deliberately differ from
-  the muted x-axis tick grey and the (near-black) observed-rate markers,
-  so none of the three reads as "just another tick". Three optional
-  add-ons, off by default:
+  axis, not two independently-aligned ones. Alongside the split's own cut
+  points, a Min and Max line (over the same non-placebo population) is
+  always drawn too. In the distribution panel each line's actual value
+  (e.g. "63.1") is always printed at the bottom; the scatter panel's
+  equivalent is opt-in via "Split value" (see below), so the exact same
+  value can optionally appear there too, color-matched to the distribution
+  panel's. Four optional add-ons, off by default:
   - **Group N** (Off / N / N (%), next to the distribution panel) — each
     dose row shows a plain text label above the shape for how many of its
     *own* patients fall in each split bin, either as a bare count ("16")
@@ -186,21 +185,26 @@ product.
     (non-model) response rate within each split bin (placebo forms its own
     bin at zero exposure), so the observed step-wise rate can be compared
     directly against the smooth fitted curve — mirrors ggquickeda's
-    "Observed probability by exposure split" annotation. Since the marker
-    sits in the same space as the scatter points and can otherwise get
-    lost in a dense cluster, it's drawn with a white halo/backdrop so it
-    stays legible without moving it off its true (data-accurate) position.
-  - **Fitted probability + CI** (in the exposure-vs-response panel) — each
-    active split line gets its own marker right on the fitted curve
-    showing both the cut point and what the model predicts there, e.g.
-    "83.8" / "fit 0.74 [0.70-0.78]" - so the split isn't just a location
-    marker, it also answers "what's the model's predicted response (and
-    CI) at that exposure". Rendered in a lighter grey than the (near-black)
-    "Observed % responders" markers, since the two are easy to mix up when
-    both are on - this one is the model's own fit, not an observed count.
-    All of these curve-adjacent markers (this one, observed bins, and a
-    clicked dose's own marker) share the same collision-avoidance layout,
-    so they never overlap even with all three on at once.
+    "Observed probability by exposure split" annotation. For a continuous
+    endpoint (BRLS/PRLS) there's no responder rate, so this instead shows
+    the observed mean response + 95% CI per bin. Since the marker sits in
+    the same space as the scatter points and can otherwise get lost in a
+    dense cluster, it's drawn with a white halo/backdrop so it stays
+    legible without moving it off its true (data-accurate) position.
+  - **Split value** (in the exposure-vs-response panel) — prints each
+    active split line's own exposure value (e.g. "83.8") beneath it, the
+    same value the distribution panel below always shows.
+  - **Fitted + CI** (in the exposure-vs-response panel) — each active split
+    line gets its own marker right on the fitted curve showing what the
+    model predicts there, e.g. "Fit 0.74 [0.70-0.78]" (a fitted response,
+    not a probability, for a continuous endpoint) - independent of "Split
+    value" above; the two used to be bundled into one marker. Rendered in a
+    lighter grey than the (near-black) "Observed % responders" markers,
+    since the two are easy to mix up when both are on - this one is the
+    model's own fit, not an observed count. All of these curve-adjacent
+    markers (this one, observed bins, and a clicked dose's own marker)
+    share the same collision-avoidance layout, so they never overlap even
+    with several on at once.
 - Session save/load via `@er-explorer/session-engine`: exposure metric(s),
   endpoint(s), CI method, bootstrap seed, distribution mode, reference-line
   selection, and current selection are captured in a small JSON session

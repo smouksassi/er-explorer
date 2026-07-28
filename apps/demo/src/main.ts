@@ -9,8 +9,10 @@ import {
   type LogisticModel,
   type PredictionResult
 } from "@er-explorer/analysis";
+import { linearAnalysisModel, meanConfidenceInterval, type LinearParams } from "@er-explorer/model-linear";
 import {
   renderLogisticScatterChart,
+  renderLinearScatterChart,
   renderDistributionChart,
   buildAsymRidgePath,
   scaleLinear,
@@ -19,6 +21,8 @@ import {
   type Scale,
   type ScatterPoint,
   type ProjectedGroup,
+  type LinearProjectedGroup,
+  type ObservedMeanBin,
   type DistributionGroupInput,
   type DistributionGroupMeta,
   type DistributionMode,
@@ -37,11 +41,18 @@ import {
 import { RECORDS, type ExposureResponseRecord } from "./data.generated";
 
 type ExposureMetric = "auc" | "cmax";
-type Endpoint = "icgi" | "icgi2" | "icgi3";
+type Endpoint = "icgi" | "icgi2" | "icgi3" | "brls" | "prls";
 type CIMethod = "wald" | "bootstrap";
 
 const EXPOSURE_ORDER: ExposureMetric[] = ["auc", "cmax"];
-const ENDPOINT_ORDER: Endpoint[] = ["icgi", "icgi2", "icgi3"];
+const ENDPOINT_ORDER: Endpoint[] = ["icgi", "icgi2", "icgi3", "brls", "prls"];
+/** BRLS/PRLS are continuous rating-scale endpoints (mean response +- CI, no responder concept) -
+ * fit with the @er-explorer/model-linear plugin instead of the legacy logistic implementation.
+ * Every other endpoint here is a binary responder/non-responder outcome. */
+const CONTINUOUS_ENDPOINTS: ReadonlySet<Endpoint> = new Set(["brls", "prls"]);
+function isContinuousEndpoint(endpoint: Endpoint): boolean {
+  return CONTINUOUS_ENDPOINTS.has(endpoint);
+}
 const DOSE_ORDER = ["Placebo", "600 mg", "1200 mg", "1800 mg", "2400 mg"];
 const DOSE_COLORS: Record<string, string> = {
   Placebo: "#1f77b4",
@@ -55,14 +66,18 @@ const DOSE_COLORS: Record<string, string> = {
 const ENDPOINT_COLORS: Record<Endpoint, string> = {
   icgi: "#4C72B0",
   icgi2: "#DDAA33",
-  icgi3: "#C44E52"
+  icgi3: "#C44E52",
+  brls: "#55A868",
+  prls: "#8172B2"
 };
 /** SVG stroke-dasharray per endpoint (solid / dotted / dashed) so overlaid curves stay
  * distinguishable even without color (e.g. print, colorblind-safe redundancy). */
 const ENDPOINT_DASH: Record<Endpoint, string> = {
   icgi: "",
   icgi2: "2 4",
-  icgi3: "9 4"
+  icgi3: "9 4",
+  brls: "4 3",
+  prls: "1 3"
 };
 const DATASET_ID = "effICGI-demo-v1";
 /** Placebo is excluded from box/violin *shapes* in the exposure distribution panel: by design
@@ -100,11 +115,17 @@ interface DemoState {
   /** Show observed (non-model) response rate + 95% Wilson CI per split bin, plotted against the
    * fitted curve on the scatter panel, for a direct "observed vs fitted" comparison. */
   showObservedResponders: boolean;
-  /** Show each active reference-line split's own fitted probability + CI, marked right on the
-   * curve (e.g. "83.8" / "fit 0.74 [0.70-0.78]"). Off by default - opt-in, both because it's
-   * another marker competing for the same space as showObservedResponders, and because its grey
-   * styling is easy to mix up with the (near-black) observed markers if always on. */
+  /** Show each active reference-line split's own fitted value + CI, marked right on the curve
+   * (e.g. "Fit 0.74 [0.70-0.78]"; for a continuous endpoint this is a fitted response, not a
+   * probability). Independent of showSplitValue below - the two used to be bundled into one
+   * marker. Off by default - opt-in, both because it's another marker competing for the same
+   * space as showObservedResponders, and because its grey styling is easy to mix up with the
+   * (near-black) observed markers if always on. */
   showReferenceFit: boolean;
+  /** Show each active reference-line split's own exposure value (e.g. "83.8") printed beneath the
+   * line on the scatter panel - the same value the distribution panel below it always shows.
+   * Independent of showReferenceFit. Off by default. */
+  showSplitValue: boolean;
   /** Show each highlighted (clicked) dose's own observed %/N marker next to its projected curve
    * segment. On by default since it's the natural companion to clicking a dose row, but some
    * users will want the plain projection without it. */
@@ -140,6 +161,7 @@ const state: DemoState = {
   splitAnnotationMode: "off",
   showObservedResponders: false,
   showReferenceFit: false,
+  showSplitValue: false,
   showDoseObserved: true,
   compareEndpoints: false,
   onlyShowCombined: false,
@@ -170,6 +192,7 @@ const refLineNoteEl = $<HTMLDivElement>("refLineNote");
 const splitAnnotationModeEl = $<HTMLSelectElement>("splitAnnotationMode");
 const showObservedRespEl = $<HTMLInputElement>("showObservedResp");
 const showReferenceFitEl = $<HTMLInputElement>("showReferenceFit");
+const showSplitValueEl = $<HTMLInputElement>("showSplitValue");
 const showDoseObservedEl = $<HTMLInputElement>("showDoseObserved");
 const showPointsEl = $<HTMLInputElement>("showPoints");
 const endpointGroupEl = $<HTMLDivElement>("endpointGroup");
@@ -187,7 +210,27 @@ const kpiRespondersBody = $<HTMLDivElement>("kpiRespondersBody");
 const kpiShowing = $<HTMLDivElement>("kpiShowing");
 
 const exposureValue = (r: ExposureResponseRecord, metric: ExposureMetric) => (metric === "auc" ? r.auc : r.cmax);
-const endpointValue = (r: ExposureResponseRecord, endpoint: Endpoint) => (endpoint === "icgi" ? r.icgi : endpoint === "icgi2" ? r.icgi2 : r.icgi3);
+/** BRLS/PRLS are `number | null` in the generated data (a handful of patients have no
+ * post-baseline rating at a given visit) - a missing value comes back as `NaN` here rather than
+ * `null`, so any accidental unfiltered arithmetic on it visibly propagates as NaN instead of
+ * silently coercing null to 0. ICGI/ICGI2/ICGI3 are never missing, so this is a no-op for them. */
+const endpointValue = (r: ExposureResponseRecord, endpoint: Endpoint): number =>
+  endpoint === "icgi"
+    ? r.icgi
+    : endpoint === "icgi2"
+      ? r.icgi2
+      : endpoint === "icgi3"
+        ? r.icgi3
+        : endpoint === "brls"
+          ? r.brls ?? NaN
+          : r.prls ?? NaN;
+/** Every record whose response for `endpoint` is actually present - the base row set every
+ * fit/plot/summary for that endpoint should use instead of `RECORDS` directly, so the handful of
+ * patients missing a BRLS/PRLS rating are excluded rather than plotted/fit as if their response
+ * were 0. A no-op filter for the binary endpoints, which are never missing. */
+function recordsWithEndpoint(endpoint: Endpoint): ExposureResponseRecord[] {
+  return RECORDS.filter((r) => Number.isFinite(endpointValue(r, endpoint)));
+}
 const exposureLabel = (metric: ExposureMetric) => metric.toUpperCase();
 
 function selectedExposureMetrics(): ExposureMetric[] {
@@ -204,18 +247,52 @@ function panelWidth(): number {
   return Math.max(480, Math.floor(1200 / count));
 }
 
-function fitFor(metric: ExposureMetric, endpoint: Endpoint): { model: LogisticModel; xs: number[]; ys: number[] } {
+/** A fitted model for one metric/endpoint pair, tagged by which family produced it - "logistic"
+ * for the existing binary responder endpoints (ICGI/ICGI2/ICGI3), "linear" (the
+ * @er-explorer/model-linear plugin) for the continuous rating-scale endpoints (BRLS/PRLS). Both
+ * `LogisticModel` and `LinearParams` expose `intercept`/`slope`, so most call sites only need to
+ * branch on `kind` where the two families' meaning actually diverges (the response scale, and
+ * whether a fitted value needs a sigmoid transform). */
+type EndpointFit = { kind: "logistic"; model: LogisticModel } | { kind: "linear"; model: LinearParams };
+
+function fitFor(metric: ExposureMetric, endpoint: Endpoint): { fit: EndpointFit; xs: number[]; ys: number[] } {
   const xs = RECORDS.map((r) => exposureValue(r, metric));
   const ys = RECORDS.map((r) => endpointValue(r, endpoint));
+  if (isContinuousEndpoint(endpoint)) {
+    const outcome = linearAnalysisModel.fit({ exposures: xs, responses: ys });
+    if (!outcome.optimization.converged) throw new Error(`Unable to fit linear model for ${metric}/${endpoint}`);
+    return { fit: { kind: "linear", model: outcome.params }, xs, ys };
+  }
   const model = fitLogisticModel(xs, ys);
   if (!model) throw new Error(`Unable to fit logistic model for ${metric}/${endpoint}`);
-  return { model, xs, ys };
+  return { fit: { kind: "logistic", model }, xs, ys };
 }
 
-function curveFor(model: LogisticModel, xs: number[], xMax: number, endpoint: Endpoint): PredictionResult {
+function curveFor(fit: EndpointFit, xs: number[], ys: number[], xMax: number): PredictionResult {
   const dense = Array.from({ length: 121 }, (_, i) => (i * xMax) / 120);
-  if (state.ciMethod === "wald") return predictLogisticWaldResult(model, dense);
-  return bootstrapLogisticCI(xs, RECORDS.map((r) => endpointValue(r, endpoint)), dense, {
+  if (fit.kind === "linear") {
+    const surface = linearAnalysisModel.predict(fit.model);
+    const points = surface.evaluate(dense);
+    const ci =
+      state.ciMethod === "bootstrap"
+        ? linearAnalysisModel.confidenceInterval(
+            fit.model,
+            { exposures: xs, responses: ys },
+            { exposures: dense, method: "bootstrap", bootstrap: { resamples: state.bootstrapResamples, seed: state.bootstrapSeed, level: 0.95 } }
+          )
+        : linearAnalysisModel.confidenceInterval(fit.model, { exposures: xs, responses: ys }, { exposures: dense, method: "wald" });
+    return {
+      estimates: dense.map((exposure, i) => ({
+        exposure,
+        estimate: points[i].estimate,
+        lower: ci[i]?.lower ?? NaN,
+        upper: ci[i]?.upper ?? NaN
+      })),
+      metadata: {}
+    };
+  }
+  if (state.ciMethod === "wald") return predictLogisticWaldResult(fit.model, dense);
+  return bootstrapLogisticCI(xs, ys, dense, {
     resamples: state.bootstrapResamples,
     seed: state.bootstrapSeed
   });
@@ -252,6 +329,39 @@ function computeReferenceLines(metric: ExposureMetric): ReferenceLine[] {
     if (!labels.includes(label)) labels.push(label);
     byValue.set(value, labels);
   }
+  return [...byValue.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([value, labels]) => ({ value, label: labels.join(" / ") }));
+}
+
+/**
+ * The lines actually drawn on a chart: `computeReferenceLines`'s split cut points, plus a Min and
+ * Max line at the same (non-placebo) population's exposure extremes - mirroring the author's
+ * original R function's output. Deliberately kept separate from `computeReferenceLines` itself,
+ * since that function's cut points also double as the *bin boundaries* for
+ * `computeSplitAnnotations`/`computeObservedResponseBins`/`computeObservedMeanBins` - Min/Max
+ * would be meaningless (and would silently double-count bins) there, but are exactly what a
+ * caller building a chart's `referenceLines` prop wants.
+ */
+function computeDisplayReferenceLines(metric: ExposureMetric): ReferenceLine[] {
+  const splits = computeReferenceLines(metric);
+  if (!splits.length) return splits;
+  const values = RECORDS.filter((r) => r.dose !== "Placebo")
+    .map((r) => exposureValue(r, metric))
+    .sort((a, b) => a - b);
+  if (!values.length) return splits;
+  const min = Math.round(values[0] * 100) / 100;
+  const max = Math.round(values[values.length - 1] * 100) / 100;
+
+  const byValue = new Map<number, string[]>();
+  const add = (value: number, label: string) => {
+    const labels = byValue.get(value) ?? [];
+    if (!labels.includes(label)) labels.push(label);
+    byValue.set(value, labels);
+  };
+  add(min, "Min");
+  for (const s of splits) add(s.value, s.label);
+  add(max, "Max");
   return [...byValue.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([value, labels]) => ({ value, label: labels.join(" / ") }));
@@ -333,6 +443,44 @@ function computeObservedResponseBins(metric: ExposureMetric, endpoint: Endpoint)
   return bins;
 }
 
+/**
+ * The continuous-endpoint counterpart of `computeObservedResponseBins`: instead of a responder
+ * rate + Wilson CI per exposure-split bin, this reports the raw observed mean response + 95% CI
+ * (`meanConfidenceInterval`) - there is no responder/non-responder concept for BRLS/PRLS.
+ */
+function computeObservedMeanBins(metric: ExposureMetric, endpoint: Endpoint): ObservedMeanBin[] {
+  if (!state.showObservedResponders || !state.referenceLineKind) return [];
+  const cutpoints = computeReferenceLines(metric).map((r) => r.value);
+  if (!cutpoints.length) return [];
+
+  const bins: ObservedMeanBin[] = [];
+
+  const withEndpoint = recordsWithEndpoint(endpoint);
+  const placeboRows = withEndpoint.filter((r) => r.dose === "Placebo");
+  if (placeboRows.length) {
+    const mci = meanConfidenceInterval(placeboRows.map((r) => endpointValue(r, endpoint)));
+    bins.push({ x: 0, mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n });
+  }
+
+  const dosedRows = withEndpoint.filter((r) => r.dose !== "Placebo");
+  const binCount = cutpoints.length + 1;
+  const buckets: ExposureResponseRecord[][] = Array.from({ length: binCount }, () => []);
+  dosedRows.forEach((r) => {
+    const v = exposureValue(r, metric);
+    let bin = 0;
+    while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
+    buckets[bin].push(r);
+  });
+  buckets.forEach((rows) => {
+    if (!rows.length) return;
+    const mci = meanConfidenceInterval(rows.map((r) => endpointValue(r, endpoint)));
+    const meanX = rows.reduce((sum, r) => sum + exposureValue(r, metric), 0) / rows.length;
+    bins.push({ x: meanX, mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n });
+  });
+
+  return bins;
+}
+
 /** The active patient set is shared across every exposure panel: a brush made in one panel's
  * coordinate space still resolves to patient ids, which highlight the same patients everywhere. */
 function activeSet(): Set<number> {
@@ -356,7 +504,13 @@ function render(): void {
   scatterPanelsEl.innerHTML = "";
   distributionPanels = [];
 
-  const comparisonEligible = metrics.length === 1 && endpoints.length > 1;
+  // "Compare endpoints" overlays every selected endpoint's curve on the same response axis, so
+  // it's only meaningful when they all share the same scale - either every selected endpoint is
+  // a binary responder outcome (probability axis) or every one is a continuous rating scale
+  // (though even then, two different continuous endpoints, e.g. BRLS and PRLS, generally sit on
+  // different scales - this restriction just avoids ever mixing a [0,1] probability curve with a
+  // rating-scale curve in the same panel).
+  const comparisonEligible = metrics.length === 1 && endpoints.length > 1 && endpoints.every((e) => !isContinuousEndpoint(e));
   compareEndpointsEl.disabled = !comparisonEligible;
   onlyShowCombinedEl.disabled = !(state.compareEndpoints && comparisonEligible);
 
@@ -410,6 +564,7 @@ function render(): void {
   splitAnnotationModeEl.disabled = !state.referenceLineKind;
   showObservedRespEl.disabled = !state.referenceLineKind;
   showReferenceFitEl.disabled = !state.referenceLineKind;
+  showSplitValueEl.disabled = !state.referenceLineKind;
 }
 
 function renderScatterPanel(
@@ -418,81 +573,150 @@ function renderScatterPanel(
   active: Set<number>,
   container: HTMLElement
 ): void {
-  const { model, xs } = fitFor(metric, endpoint);
+  const { fit, xs, ys } = fitFor(metric, endpoint);
   const xMax = Math.max(...xs);
-  const curve = curveFor(model, xs, xMax, endpoint);
+  const curve = curveFor(fit, xs, ys, xMax);
+  const continuous = isContinuousEndpoint(endpoint);
 
-  const groupStats: Record<
-    string,
-    {
-      q1: number;
-      q3: number;
-      median: number;
-      whiskerLow: number;
-      whiskerHigh: number;
-      min: number;
-      max: number;
-      n: number;
-      observed: { proportion: number; ciLower: number; ciUpper: number; n: number; responders: number };
-    }
-  > = {};
-  for (const dose of DOSE_ORDER) {
-    const doseRecords = RECORDS.filter((r) => active.has(r.id) && r.dose === dose);
-    const vals = doseRecords.map((r) => exposureValue(r, metric)).sort((a, b) => a - b);
-    if (!vals.length) continue;
-    const s = summarizeDistribution(vals);
-    if (!s) continue;
-    const responders = doseRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
-    const ci = wilsonScoreInterval(responders, doseRecords.length);
-    groupStats[dose] = {
-      q1: s.q1,
-      q3: s.q3,
-      median: s.median,
-      whiskerLow: s.whiskerLow,
-      whiskerHigh: s.whiskerHigh,
-      min: s.min,
-      max: s.max,
-      n: vals.length,
-      observed: { proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper, n: doseRecords.length, responders }
-    };
-  }
-
-  const points: ScatterPoint[] = RECORDS.map((r) => ({
+  const points: ScatterPoint[] = recordsWithEndpoint(endpoint).map((r) => ({
     id: r.id,
     exposure: exposureValue(r, metric),
     response: endpointValue(r, endpoint),
-    displayY: endpointValue(r, endpoint) + seededJitter(r.id),
+    // binary responses (0/1) get a small vertical jitter so overlapping points are visible; a
+    // continuous rating-scale response is plotted at its own actual value.
+    displayY: continuous ? endpointValue(r, endpoint) : endpointValue(r, endpoint) + seededJitter(r.id),
     groupId: r.dose,
     label: `${exposureLabel(metric)} ${exposureValue(r, metric).toFixed(1)} · ${endpoint.toUpperCase()} ${endpointValue(r, endpoint)} · ${r.dose} · Study ${r.study}`,
     selected: active.has(r.id)
   }));
 
-  const projected: ProjectedGroup[] = [...state.selectedDoses]
-    .filter((dose) => groupStats[dose])
-    .map((dose) => {
-      const { observed, ...rest } = groupStats[dose]!;
-      return {
-        groupId: dose,
-        color: DOSE_COLORS[dose] ?? "#111827",
-        ...rest,
-        observed: state.showDoseObserved ? observed : undefined
-      };
-    });
-
   const width = panelWidth();
-  const scatterResult = renderLogisticScatterChart({
-    points: state.showPoints ? points : [],
-    curve,
-    projected,
-    groupColors: DOSE_COLORS,
-    xDomain: [0, xMax],
-    referenceLines: computeReferenceLines(metric),
-    observedBins: computeObservedResponseBins(metric, endpoint),
-    showReferenceFit: state.showReferenceFit,
-    width,
-    height: 360,
-    options: { title: "Exposure vs response", xAxisLabel: exposureLabel(metric), yAxisLabel: endpoint.toUpperCase(), renderTarget: "svg" }
-  });
+  let scatterResult: { content: string; metadata: Record<string, unknown> };
+
+  if (continuous) {
+    const groupStats: Record<
+      string,
+      {
+        q1: number;
+        q3: number;
+        median: number;
+        whiskerLow: number;
+        whiskerHigh: number;
+        min: number;
+        max: number;
+        n: number;
+        observedMean: { mean: number; ciLower: number; ciUpper: number; n: number };
+      }
+    > = {};
+    for (const dose of DOSE_ORDER) {
+      const doseRecords = recordsWithEndpoint(endpoint).filter((r) => active.has(r.id) && r.dose === dose);
+      const vals = doseRecords.map((r) => exposureValue(r, metric)).sort((a, b) => a - b);
+      if (!vals.length) continue;
+      const s = summarizeDistribution(vals);
+      if (!s) continue;
+      const mci = meanConfidenceInterval(doseRecords.map((r) => endpointValue(r, endpoint)));
+      groupStats[dose] = {
+        q1: s.q1,
+        q3: s.q3,
+        median: s.median,
+        whiskerLow: s.whiskerLow,
+        whiskerHigh: s.whiskerHigh,
+        min: s.min,
+        max: s.max,
+        n: vals.length,
+        observedMean: { mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n }
+      };
+    }
+
+    const projected: LinearProjectedGroup[] = [...state.selectedDoses]
+      .filter((dose) => groupStats[dose])
+      .map((dose) => {
+        const { observedMean, ...rest } = groupStats[dose]!;
+        return {
+          groupId: dose,
+          color: DOSE_COLORS[dose] ?? "#111827",
+          ...rest,
+          observedMean: state.showDoseObserved ? observedMean : undefined
+        };
+      });
+
+    scatterResult = renderLinearScatterChart({
+      points: state.showPoints ? points : [],
+      curve,
+      projected,
+      groupColors: DOSE_COLORS,
+      xDomain: [0, xMax],
+      referenceLines: computeDisplayReferenceLines(metric),
+      observedMeanBins: computeObservedMeanBins(metric, endpoint),
+      showReferenceFit: state.showReferenceFit,
+      showSplitValue: state.showSplitValue,
+      width,
+      height: 360,
+      options: { title: "Exposure vs response", xAxisLabel: exposureLabel(metric), yAxisLabel: endpoint.toUpperCase(), renderTarget: "svg" }
+    });
+  } else {
+    const groupStats: Record<
+      string,
+      {
+        q1: number;
+        q3: number;
+        median: number;
+        whiskerLow: number;
+        whiskerHigh: number;
+        min: number;
+        max: number;
+        n: number;
+        observed: { proportion: number; ciLower: number; ciUpper: number; n: number; responders: number };
+      }
+    > = {};
+    for (const dose of DOSE_ORDER) {
+      const doseRecords = RECORDS.filter((r) => active.has(r.id) && r.dose === dose);
+      const vals = doseRecords.map((r) => exposureValue(r, metric)).sort((a, b) => a - b);
+      if (!vals.length) continue;
+      const s = summarizeDistribution(vals);
+      if (!s) continue;
+      const responders = doseRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
+      const ci = wilsonScoreInterval(responders, doseRecords.length);
+      groupStats[dose] = {
+        q1: s.q1,
+        q3: s.q3,
+        median: s.median,
+        whiskerLow: s.whiskerLow,
+        whiskerHigh: s.whiskerHigh,
+        min: s.min,
+        max: s.max,
+        n: vals.length,
+        observed: { proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper, n: doseRecords.length, responders }
+      };
+    }
+
+    const projected: ProjectedGroup[] = [...state.selectedDoses]
+      .filter((dose) => groupStats[dose])
+      .map((dose) => {
+        const { observed, ...rest } = groupStats[dose]!;
+        return {
+          groupId: dose,
+          color: DOSE_COLORS[dose] ?? "#111827",
+          ...rest,
+          observed: state.showDoseObserved ? observed : undefined
+        };
+      });
+
+    scatterResult = renderLogisticScatterChart({
+      points: state.showPoints ? points : [],
+      curve,
+      projected,
+      groupColors: DOSE_COLORS,
+      xDomain: [0, xMax],
+      referenceLines: computeDisplayReferenceLines(metric),
+      observedBins: computeObservedResponseBins(metric, endpoint),
+      showReferenceFit: state.showReferenceFit,
+      showSplitValue: state.showSplitValue,
+      width,
+      height: 360,
+      options: { title: "Exposure vs response", xAxisLabel: exposureLabel(metric), yAxisLabel: endpoint.toUpperCase(), renderTarget: "svg" }
+    });
+  }
 
   const cell = document.createElement("div");
   cell.className = "panel-cell";
@@ -547,7 +771,9 @@ function appendDistributionMini(
           color: ENDPOINT_COLORS[ep],
           values,
           n: rows.length,
-          nResponders: rows.filter((r) => endpointValue(r, ep) === 1).length,
+          // per-dose responder counts used to be shown here ("n=60 (40 resp.)"), but that
+          // observed %/N is already available (and unambiguous, since it's for one clicked dose
+          // at a time) by clicking the box/row above - see showDoseObserved.
           selected: state.selectedDoses.has(dose),
           skipShape: isPlacebo,
           splitAnnotations:
@@ -563,14 +789,17 @@ function appendDistributionMini(
         const isPlacebo = dose === "Placebo";
         const rows = RECORDS.filter((r) => r.dose === dose);
         const values = isPlacebo ? [] : rows.map((r) => exposureValue(r, metric));
-        const nResponders = rows.filter((r) => endpointValue(r, endpoint) === 1).length;
         return {
           groupId: dose,
           label: dose,
           color: DOSE_COLORS[dose],
           values,
           n: rows.length,
-          nResponders,
+          // Deliberately no responder count here: this shared strip is shown once per exposure
+          // metric regardless of how many endpoints are selected, so a responder count here
+          // could only ever reflect one of them - misleadingly silent about the rest. That
+          // per-dose observed %/N is still available, unambiguously, by clicking the row (see
+          // showDoseObserved) which reports it for whichever endpoint panel it's clicked under.
           selected: state.selectedDoses.has(dose),
           skipShape: isPlacebo,
           splitAnnotations:
@@ -590,7 +819,7 @@ function appendDistributionMini(
     groups: distGroups,
     xDomain: [0, xMax],
     mode: state.distributionMode,
-    referenceLines: computeReferenceLines(metric),
+    referenceLines: computeDisplayReferenceLines(metric),
     width,
     height,
     options: { title: "Exposure by dose", xAxisLabel: exposureLabel(metric), yAxisLabel: "", renderTarget: "svg" }
@@ -623,7 +852,7 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
   renderEndpointLegend(endpoints);
 
   const xMax = Math.max(...RECORDS.map((r) => exposureValue(r, metric)));
-  const referenceLines = computeReferenceLines(metric);
+  const referenceLines = computeDisplayReferenceLines(metric);
   const chartHeight = 360;
 
   const rowEl = document.createElement("div");
@@ -654,8 +883,10 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
     }));
 
   const fits = endpoints.map((endpoint) => {
-    const { model, xs } = fitFor(metric, endpoint);
-    const curve = curveFor(model, xs, xMax, endpoint);
+    // this comparison view is only ever reached with binary (logistic) endpoints - see
+    // comparisonEligible in render(), which excludes any continuous (linear) endpoint.
+    const { fit, xs, ys } = fitFor(metric, endpoint);
+    const curve = curveFor(fit, xs, ys, xMax);
     const observedBins: ObservedResponseBin[] = computeObservedResponseBins(metric, endpoint).map((b) => ({
       ...b,
       color: ENDPOINT_COLORS[endpoint]
@@ -681,6 +912,7 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
         referenceLines,
         observedBins,
         showReferenceFit: state.showReferenceFit,
+        showSplitValue: state.showSplitValue,
         curveColor: ENDPOINT_COLORS[endpoint],
         curveDash: ENDPOINT_DASH[endpoint],
         bandColor: ENDPOINT_COLORS[endpoint],
@@ -706,6 +938,7 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
       referenceLines,
       observedBins: allObservedBins,
       showReferenceFit: state.showReferenceFit,
+      showSplitValue: state.showSplitValue,
       curveColor: ENDPOINT_COLORS[first.endpoint],
       curveDash: ENDPOINT_DASH[first.endpoint],
       bandColor: ENDPOINT_COLORS[first.endpoint],
@@ -795,6 +1028,19 @@ function updateKpis(activeCount: number, endpoints: Endpoint[]): void {
 
   kpiRespondersBody.innerHTML = endpoints
     .map((endpoint) => {
+      // A continuous endpoint (BRLS/PRLS) has no responder/non-responder concept - this row
+      // reports the observed mean response + 95% CI + n contributing instead of a % responders.
+      if (isContinuousEndpoint(endpoint)) {
+        const hasValue = (r: ExposureResponseRecord) => Number.isFinite(endpointValue(r, endpoint));
+        const placeboMci = meanConfidenceInterval(placeboRecords.filter(hasValue).map((r) => endpointValue(r, endpoint)));
+        const dosedMci = meanConfidenceInterval(dosedRecords.filter(hasValue).map((r) => endpointValue(r, endpoint)));
+        const fmt = (m: { mean: number; lower: number; upper: number }) => `${m.mean.toFixed(1)} [${m.lower.toFixed(1)}-${m.upper.toFixed(1)}]`;
+        return `<div class="responder-row">
+          <span class="responder-endpoint">${endpoint.toUpperCase()}</span>
+          <span class="responder-group"><span class="muted">Placebo</span> <strong>${fmt(placeboMci)}</strong> <span class="muted">(n=${placeboMci.n})</span></span>
+          <span class="responder-group"><span class="muted">Dosed</span> <strong>${fmt(dosedMci)}</strong> <span class="muted">(n=${dosedMci.n})</span></span>
+        </div>`;
+      }
       const placeboResponders = placeboRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
       const dosedResponders = dosedRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
       return `<div class="responder-row">
@@ -820,11 +1066,14 @@ function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoi
     readoutEl.innerHTML = '<span class="muted">Click a box above to show projected fit values at Min, Q1, Median, Q3, and Max.</span>';
     return;
   }
-  const { model } = fitFor(metric, endpoint);
+  const { fit } = fitFor(metric, endpoint);
+  const continuous = isContinuousEndpoint(endpoint);
+  const decimals = continuous ? 1 : 3;
+  const fitAt = (x: number) =>
+    fit.kind === "linear" ? fit.model.intercept + fit.model.slope * x : 1 / (1 + Math.exp(-(fit.model.intercept + fit.model.slope * x)));
   const lines = doses.map((dose) => {
     const g = groupStats[dose];
-    const fitAt = (x: number) => 1 / (1 + Math.exp(-(model.intercept + model.slope * x)));
-    return `<div><strong style="color:${doseColorFor(dose)}">${dose}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} (fit ${fitAt(g.min).toFixed(3)}) &nbsp; Q1 = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(3)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(3)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(3)}) &nbsp; Max = ${g.max.toFixed(1)} (fit ${fitAt(g.max).toFixed(3)})</div>`;
+    return `<div><strong style="color:${doseColorFor(dose)}">${dose}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} (fit ${fitAt(g.min).toFixed(decimals)}) &nbsp; Q1 = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(decimals)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(decimals)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(decimals)}) &nbsp; Max = ${g.max.toFixed(1)} (fit ${fitAt(g.max).toFixed(decimals)})</div>`;
   });
   readoutEl.innerHTML = lines.join("");
 }
@@ -908,9 +1157,14 @@ function attachScatterInteractivity(chartWrap: HTMLDivElement, tip: HTMLDivEleme
     const maxExposure = x.invert(Math.max(drag.x0, drag.x1));
     const minY = y.invert(Math.max(drag.y0, drag.y1));
     const maxY = y.invert(Math.min(drag.y0, drag.y1));
+    const continuous = isContinuousEndpoint(endpoint);
     const selected = RECORDS.filter((r) => {
       const ex = exposureValue(r, metric);
-      const disp = endpointValue(r, endpoint) + seededJitter(r.id);
+      // matches how points are actually plotted in renderScatterPanel: a continuous response is
+      // shown at its own value (no jitter); a missing continuous response (NaN) never satisfies
+      // this range check, so those rows are simply never brushable, matching that they're never
+      // drawn as a point either.
+      const disp = continuous ? endpointValue(r, endpoint) : endpointValue(r, endpoint) + seededJitter(r.id);
       return ex >= minExposure && ex <= maxExposure && disp >= minY && disp <= maxY;
     });
     state.brushedIds = new Set(selected.map((r) => r.id));
@@ -1047,16 +1301,17 @@ function buildSessionState(): SessionState {
   const endpoints = selectedEndpoints();
   const primaryMetric = metrics[0] ?? "auc";
   const primaryEndpoint = endpoints[0] ?? "icgi";
+  const continuous = isContinuousEndpoint(primaryEndpoint);
   const model = createModelDefinition(
-    `${primaryEndpoint}-${primaryMetric}-logistic`,
-    "logistic",
-    `Logistic exposure-response: ${primaryEndpoint.toUpperCase()} ~ ${exposureLabel(primaryMetric)}${
+    `${primaryEndpoint}-${primaryMetric}-${continuous ? "linear" : "logistic"}`,
+    continuous ? "linear" : "logistic",
+    `${continuous ? "Linear" : "Logistic"} exposure-response: ${primaryEndpoint.toUpperCase()} ~ ${exposureLabel(primaryMetric)}${
       metrics.length > 1 ? ` (+${metrics.length - 1} more exposure panel(s))` : ""
     }${endpoints.length > 1 ? ` (+${endpoints.length - 1} more endpoint row(s))` : ""}`
   );
-  const { model: fit, xs } = fitFor(primaryMetric, primaryEndpoint);
+  const { fit, xs, ys } = fitFor(primaryMetric, primaryEndpoint);
   const xMax = Math.max(...xs);
-  const curve = curveFor(fit, xs, xMax, primaryEndpoint);
+  const curve = curveFor(fit, xs, ys, xMax);
   const visualization = createVisualizationSpec(`${DATASET_ID}-scatter`, model, curve, {
     title: "Exposure vs response",
     xAxisLabel: exposureLabel(primaryMetric),
@@ -1082,6 +1337,7 @@ function buildSessionState(): SessionState {
       splitAnnotationMode: state.splitAnnotationMode,
       showObservedResponders: state.showObservedResponders,
       showReferenceFit: state.showReferenceFit,
+      showSplitValue: state.showSplitValue,
       showDoseObserved: state.showDoseObserved,
       compareEndpoints: state.compareEndpoints,
       onlyShowCombined: state.onlyShowCombined,
@@ -1145,9 +1401,10 @@ function loadSessionFromFile(file: File): void {
       // fall back to the older single-endpoint session format for backward compatibility
       const legacyEndpoint = session.settings["endpoint"];
       let endpoints: Endpoint[] = [];
+      const isKnownEndpoint = (e: unknown): e is Endpoint => e === "icgi" || e === "icgi2" || e === "icgi3" || e === "brls" || e === "prls";
       if (Array.isArray(endpointsRaw)) {
-        endpoints = endpointsRaw.filter((e): e is Endpoint => e === "icgi" || e === "icgi2" || e === "icgi3");
-      } else if (legacyEndpoint === "icgi" || legacyEndpoint === "icgi2" || legacyEndpoint === "icgi3") {
+        endpoints = endpointsRaw.filter(isKnownEndpoint);
+      } else if (isKnownEndpoint(legacyEndpoint)) {
         endpoints = [legacyEndpoint];
       }
       if (!endpoints.length) endpoints = ["icgi"];
@@ -1179,6 +1436,7 @@ function loadSessionFromFile(file: File): void {
       }
       state.showObservedResponders = session.settings["showObservedResponders"] === true;
       state.showReferenceFit = session.settings["showReferenceFit"] === true;
+      state.showSplitValue = session.settings["showSplitValue"] === true;
       // default true (matches the app's default) so older session files without this key still
       // show the dose-observed marker rather than silently hiding it
       state.showDoseObserved = session.settings["showDoseObserved"] !== false;
@@ -1198,6 +1456,7 @@ function loadSessionFromFile(file: File): void {
       splitAnnotationModeEl.value = state.splitAnnotationMode;
       showObservedRespEl.checked = state.showObservedResponders;
       showReferenceFitEl.checked = state.showReferenceFit;
+      showSplitValueEl.checked = state.showSplitValue;
       showDoseObservedEl.checked = state.showDoseObserved;
       compareEndpointsEl.checked = state.compareEndpoints;
       onlyShowCombinedEl.checked = state.onlyShowCombined;
@@ -1248,6 +1507,10 @@ showObservedRespEl.addEventListener("change", () => {
 });
 showReferenceFitEl.addEventListener("change", () => {
   state.showReferenceFit = showReferenceFitEl.checked;
+  render();
+});
+showSplitValueEl.addEventListener("change", () => {
+  state.showSplitValue = showSplitValueEl.checked;
   render();
 });
 showDoseObservedEl.addEventListener("change", () => {

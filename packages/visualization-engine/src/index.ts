@@ -390,10 +390,16 @@ export interface LogisticScatterInput {
    * curve for a direct visual comparison. Optional - omit to hide. */
   observedBins?: ObservedResponseBin[];
   /** When true (and referenceLines is non-empty), also mark each active reference line's fitted
-   * probability + CI right on the curve, e.g. "83.8" / "fit 0.74 [0.70-0.78]". Off by default -
-   * an opt-in overlay, same as observedBins, since it adds another marker competing for the same
-   * space and isn't always wanted. */
+   * value + CI right on the curve, e.g. "Fit 0.74 [0.70-0.78]". Independent of `showSplitValue`
+   * below - the two used to be bundled into one marker, but a caller may want either without the
+   * other. Off by default - an opt-in overlay, same as observedBins, since it adds another marker
+   * competing for the same space and isn't always wanted. */
   showReferenceFit?: boolean;
+  /** When true (and referenceLines is non-empty), also print each active reference line's own
+   * exposure value (e.g. "83.8") beneath the line - the same "value at the bottom" the
+   * distribution chart always shows, just optional here since the scatter chart already has more
+   * competing for space. Independent of `showReferenceFit`. Off by default. */
+  showSplitValue?: boolean;
   /** Override the primary curve/band's default grey styling - used when this chart represents
    * one specific endpoint/series being compared against others, so its curve reads in that
    * series' own color rather than the neutral default. */
@@ -556,20 +562,20 @@ export function renderLogisticScatterChart(input: LogisticScatterInput): RenderR
     });
   }
 
-  // reference-line fit markers (opt-in): at each active median/tertile/quartile split line, show
-  // the logistic curve's own fitted probability + CI at that exposure - so "click median"
-  // answers not just "where is the cut point" (already shown by the dashed line + top label) but
-  // also "what does the model predict there", right on the curve itself. Rendered in a lighter
-  // grey than the (near-black) observed-rate markers, since the two are easy to confuse when
-  // both are visible at once - this one is the model's fit, not an observed count. When other
-  // curves are overlaid (extraCurves - the "Compare endpoints" (all) panel), each curve gets its
-  // own fit marker in its own curve color instead of one shared grey marker, so it's still clear
-  // which curve each fit value belongs to once several are stacked at the same split line.
+  // reference-line fit markers (opt-in, independent of showSplitValue below): at each active
+  // median/tertile/quartile split line, show the logistic curve's own fitted value + CI at that
+  // exposure - so "click median" answers not just "where is the cut point" (already shown by the
+  // dashed line + top label, and optionally its raw exposure value via showSplitValue) but also
+  // "what does the model predict there", right on the curve itself. Rendered in a lighter grey
+  // than the (near-black) observed-rate markers, since the two are easy to confuse when both are
+  // visible at once - this one is the model's fit, not an observed count. When other curves are
+  // overlaid (extraCurves - the "Compare endpoints" (all) panel), each curve gets its own fit
+  // marker in its own curve color instead of one shared grey marker, so it's still clear which
+  // curve each fit value belongs to once several are stacked at the same split line.
   if (input.showReferenceFit) {
     const hasExtras = (input.extraCurves ?? []).length > 0;
     for (const ref of input.referenceLines ?? []) {
       if (ref.value < input.xDomain[0] || ref.value > input.xDomain[1]) continue;
-      const valueText = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
       const bandSource = input.band ?? input.curve;
       const fit = interpolateEstimate(input.curve.estimates, ref.value);
       const ci = interpolateFullEstimate(bandSource.estimates, ref.value);
@@ -579,8 +585,8 @@ export function renderLogisticScatterChart(input: LogisticScatterInput): RenderR
         yValue: fit,
         yLowValue: ci.lower,
         yHighValue: ci.upper,
-        line1: valueText,
-        line2: `fit ${fit.toFixed(2)} [${ci.lower.toFixed(2)}-${ci.upper.toFixed(2)}]`
+        line1: `Fit ${fit.toFixed(2)}`,
+        line2: `[${ci.lower.toFixed(2)}-${ci.upper.toFixed(2)}]`
       });
       for (const extra of input.extraCurves ?? []) {
         const extraBandSource = extra.band ?? extra.curve;
@@ -592,8 +598,8 @@ export function renderLogisticScatterChart(input: LogisticScatterInput): RenderR
           yValue: extraFit,
           yLowValue: extraCi.lower,
           yHighValue: extraCi.upper,
-          line1: valueText,
-          line2: `fit ${extraFit.toFixed(2)} [${extraCi.lower.toFixed(2)}-${extraCi.upper.toFixed(2)}]`
+          line1: `Fit ${extraFit.toFixed(2)}`,
+          line2: `[${extraCi.lower.toFixed(2)}-${extraCi.upper.toFixed(2)}]`
         });
       }
     }
@@ -624,7 +630,7 @@ export function renderLogisticScatterChart(input: LogisticScatterInput): RenderR
   );
   parts.push(tag("g", { class: "er-axis" }, axis));
 
-  parts.push(renderReferenceLines(input.referenceLines, input.xDomain, x, plot));
+  parts.push(renderReferenceLines(input.referenceLines, input.xDomain, x, plot, input.showSplitValue));
 
   // scatter points
   let dots = "";
@@ -707,6 +713,344 @@ function interpolateFullEstimate(estimates: PredictionResult["estimates"], expos
     }
   }
   return { estimate: last.estimate, lower: last.lower, upper: last.upper };
+}
+
+/* ---------------------------------------------------------------------- *
+ * Linear (continuous-endpoint) exposure-response scatter + fit chart
+ *
+ * The continuous counterpart of renderLogisticScatterChart above: a
+ * continuous endpoint (e.g. BRLS/PRLS) has no fixed [0,1] probability
+ * range and no responder/non-responder concept, so this chart uses a
+ * response axis sized to the data itself, and "observed" markers show a
+ * group's raw mean response + 95% CI + n contributing
+ * (`meanConfidenceInterval`, from `@er-explorer/model-linear`) in place of
+ * a responder rate + Wilson CI. Everything else - scales, band/curve
+ * paths, reference lines, marker layout/rendering - is the same
+ * dependency-free machinery shared with the binary chart above.
+ * ---------------------------------------------------------------------- */
+
+export interface LinearProjectedGroup {
+  groupId: string | number;
+  color: string;
+  q1: number;
+  median: number;
+  q3: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+  min?: number;
+  max?: number;
+  /** This dose group's own observed mean response + 95% CI + n contributing - the continuous
+   * counterpart of ProjectedGroup.observed's responder rate. */
+  observedMean?: {
+    mean: number;
+    ciLower: number;
+    ciUpper: number;
+    n: number;
+  };
+}
+
+/** One observed-mean marker: a group's raw (non-model) mean response + 95% CI within a bin of
+ * the active exposure split - the continuous counterpart of ObservedResponseBin. */
+export interface ObservedMeanBin {
+  x: number;
+  mean: number;
+  ciLower: number;
+  ciUpper: number;
+  n: number;
+  /** Override the marker's default dark/neutral color - used when comparing multiple curves in
+   * the same chart, where each curve's own markers should match it. */
+  color?: string;
+}
+
+export interface LinearScatterInput {
+  points: ScatterPoint[];
+  curve: PredictionResult;
+  band?: PredictionResult;
+  projected?: LinearProjectedGroup[];
+  groupColors: Record<string, string>;
+  xDomain: [number, number];
+  /** Response-axis domain. If omitted, computed from the plotted points and the curve/band's CI
+   * bounds, with a small padding - unlike the binary chart, a continuous endpoint has no fixed
+   * [0,1] range to fall back on. */
+  yDomain?: [number, number];
+  referenceLines?: ReferenceLine[];
+  /** Observed (non-model) mean response + CI per exposure-split bin, drawn atop the fitted line
+   * for a direct visual comparison. Optional - omit to hide. */
+  observedMeanBins?: ObservedMeanBin[];
+  /** Mark each active reference line's fitted value + CI right on the curve, e.g. "Fit 23.4
+   * [22.1-24.7]". Independent of `showSplitValue` below. Off by default. */
+  showReferenceFit?: boolean;
+  /** Print each active reference line's own exposure value (e.g. "83.8") beneath the line.
+   * Independent of `showReferenceFit`. Off by default. */
+  showSplitValue?: boolean;
+  curveColor?: string;
+  curveDash?: string;
+  bandColor?: string;
+  extraCurves?: ExtraCurve[];
+  width?: number;
+  height?: number;
+  margin?: { top: number; right: number; bottom: number; left: number };
+  options: ChartOptions;
+}
+
+function niceYTicks(domain: [number, number], count = 5): number[] {
+  const [lo, hi] = domain;
+  return Array.from({ length: count }, (_, i) => lo + ((hi - lo) * i) / (count - 1));
+}
+
+function formatAxisValue(v: number): string {
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
+}
+
+export function renderLinearScatterChart(input: LinearScatterInput): RenderResult {
+  const width = input.width ?? 1200;
+  const height = input.height ?? 420;
+  const margin = input.margin ?? DEFAULT_MARGIN;
+  const plot = { left: margin.left, top: margin.top, width: width - margin.left - margin.right, height: height - margin.top - margin.bottom };
+
+  const yDomain: [number, number] =
+    input.yDomain ??
+    (() => {
+      const values: number[] = [
+        ...input.points.map((p) => p.displayY ?? p.response),
+        ...input.curve.estimates.flatMap((e) => [e.lower, e.upper]).filter((v) => isFinite(v))
+      ];
+      if (!values.length) return [0, 1];
+      const lo = Math.min(...values);
+      const hi = Math.max(...values);
+      const pad = Math.max((hi - lo) * 0.08, 0.5);
+      return [lo - pad, hi + pad];
+    })();
+
+  const x = scaleLinear(input.xDomain, [plot.left, plot.left + plot.width]);
+  const y = scaleLinear(yDomain, [plot.top + plot.height, plot.top]);
+  const yTicks = niceYTicks(yDomain);
+
+  const parts: string[] = [];
+
+  // grid
+  const xTicks = 6;
+  let grid = "";
+  for (let i = 0; i <= xTicks; i++) {
+    const xv = input.xDomain[0] + (input.xDomain[1] - input.xDomain[0]) * (i / xTicks);
+    const xx = x(xv);
+    grid += selfClosing("line", { x1: xx, y1: plot.top, x2: xx, y2: plot.top + plot.height, stroke: "#edf1f7" });
+  }
+  for (const v of yTicks) {
+    const yy = y(v);
+    grid += selfClosing("line", { x1: plot.left, y1: yy, x2: plot.left + plot.width, y2: yy, stroke: "#edf1f7" });
+  }
+  parts.push(tag("g", { class: "er-grid" }, grid));
+
+  // CI band + fitted line (colors/dash overridable, same convention as the binary chart)
+  const bandSource = input.band ?? input.curve;
+  const bandPath = bandPathFromEstimates(bandSource.estimates, x, y);
+  if (bandPath) {
+    parts.push(selfClosing("path", { d: bandPath, fill: input.bandColor ?? "#94a3b8", opacity: 0.18, stroke: "none" }));
+  }
+  const curvePath = curvePathFromEstimates(input.curve.estimates, x, y);
+  if (curvePath) {
+    parts.push(
+      selfClosing("path", {
+        d: curvePath,
+        fill: "none",
+        stroke: input.curveColor ?? "#64748b",
+        "stroke-width": 2,
+        "stroke-dasharray": input.curveDash ?? "7 5",
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+        opacity: 0.85
+      })
+    );
+  }
+
+  for (const extra of input.extraCurves ?? []) {
+    const extraBandSource = extra.band ?? extra.curve;
+    const extraBandPath = bandPathFromEstimates(extraBandSource.estimates, x, y);
+    if (extraBandPath) parts.push(selfClosing("path", { d: extraBandPath, fill: extra.color, opacity: 0.14, stroke: "none" }));
+    const extraCurvePath = curvePathFromEstimates(extra.curve.estimates, x, y);
+    if (extraCurvePath) {
+      parts.push(
+        selfClosing("path", {
+          d: extraCurvePath,
+          fill: "none",
+          stroke: extra.color,
+          "stroke-width": 2,
+          "stroke-dasharray": extra.dash ?? "7 5",
+          "stroke-linecap": "round",
+          "stroke-linejoin": "round",
+          opacity: 0.85
+        })
+      );
+    }
+  }
+
+  const observedMarkers: PositionedMarker[] = [];
+
+  // projected group overlays (Q1-Q3 emphasized segment, min/max-span thin segment, markers) -
+  // identical geometry to the binary chart, just against the continuous curve/band
+  for (const p of input.projected ?? []) {
+    const rangeLow = p.min ?? p.whiskerLow;
+    const rangeHigh = p.max ?? p.whiskerHigh;
+    const segRange = input.curve.estimates.filter((e) => e.exposure >= rangeLow && e.exposure <= rangeHigh);
+    const segCore = input.curve.estimates.filter((e) => e.exposure >= p.q1 && e.exposure <= p.q3);
+    const bandRange = (input.band ?? input.curve).estimates.filter((e) => e.exposure >= rangeLow && e.exposure <= rangeHigh);
+    const segBand = bandPathFromEstimates(bandRange, x, y);
+    if (segBand) parts.push(selfClosing("path", { d: segBand, fill: p.color, opacity: 0.1, stroke: "none" }));
+    const segThin = curvePathFromEstimates(segRange, x, y);
+    if (segThin) parts.push(selfClosing("path", { d: segThin, fill: "none", stroke: p.color, "stroke-width": 1.8, opacity: 0.48, "stroke-linecap": "round" }));
+    const segThick = curvePathFromEstimates(segCore, x, y);
+    if (segThick) parts.push(selfClosing("path", { d: segThick, fill: "none", stroke: p.color, "stroke-width": 3.8, opacity: 0.98, "stroke-linecap": "round" }));
+
+    const at = (xv: number) => interpolateEstimate(input.curve.estimates, xv);
+    const pQ1 = at(p.q1);
+    const pQ3 = at(p.q3);
+    const pMed = at(p.median);
+    parts.push(selfClosing("rect", { x: x(p.q1), y: plot.top + 2, width: Math.max(1, x(p.q3) - x(p.q1)), height: plot.height - 4, fill: p.color, opacity: 0.06, rx: 8 }));
+    parts.push(selfClosing("line", { x1: x(p.q1), y1: y(pQ1), x2: x(p.q1), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1.4, "stroke-dasharray": "4 4", opacity: 0.75 }));
+    parts.push(selfClosing("line", { x1: x(p.q3), y1: y(pQ3), x2: x(p.q3), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1.4, "stroke-dasharray": "4 4", opacity: 0.75 }));
+    parts.push(selfClosing("circle", { cx: x(p.q1), cy: y(pQ1), r: 4.6, fill: p.color, stroke: "#fff", "stroke-width": 1.2 }));
+    parts.push(selfClosing("circle", { cx: x(p.q3), cy: y(pQ3), r: 4.6, fill: p.color, stroke: "#fff", "stroke-width": 1.2 }));
+    parts.push(selfClosing("circle", { cx: x(p.median), cy: y(pMed), r: 4, fill: "#111827", stroke: "#fff", "stroke-width": 1.1 }));
+
+    if (p.min !== undefined) {
+      const pMin = at(p.min);
+      parts.push(selfClosing("line", { x1: x(p.min), y1: y(pMin), x2: x(p.min), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1, "stroke-dasharray": "1.5 3", opacity: 0.55 }));
+      parts.push(selfClosing("circle", { cx: x(p.min), cy: y(pMin), r: 3.4, fill: "#ffffff", stroke: p.color, "stroke-width": 1.6 }));
+    }
+    if (p.max !== undefined) {
+      const pMax = at(p.max);
+      parts.push(selfClosing("line", { x1: x(p.max), y1: y(pMax), x2: x(p.max), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1, "stroke-dasharray": "1.5 3", opacity: 0.55 }));
+      parts.push(selfClosing("circle", { cx: x(p.max), cy: y(pMax), r: 3.4, fill: "#ffffff", stroke: p.color, "stroke-width": 1.6 }));
+    }
+
+    if (p.observedMean) {
+      observedMarkers.push({
+        xx: x(p.median),
+        color: p.color,
+        yValue: p.observedMean.mean,
+        yLowValue: p.observedMean.ciLower,
+        yHighValue: p.observedMean.ciUpper,
+        line1: p.observedMean.mean.toFixed(1),
+        line2: `n=${p.observedMean.n}`
+      });
+    }
+  }
+  for (const b of input.observedMeanBins ?? []) {
+    observedMarkers.push({
+      xx: x(b.x),
+      color: b.color ?? "#0f172a",
+      yValue: b.mean,
+      yLowValue: b.ciLower,
+      yHighValue: b.ciUpper,
+      line1: b.mean.toFixed(1),
+      line2: `n=${b.n}`
+    });
+  }
+
+  // reference-line fit markers (opt-in, independent of showSplitValue below): same idea as the
+  // binary chart's, reporting the linear fit's own estimate + CI at each active
+  // median/tertile/quartile split, in fitted-response units rather than a probability.
+  if (input.showReferenceFit) {
+    const hasExtras = (input.extraCurves ?? []).length > 0;
+    for (const ref of input.referenceLines ?? []) {
+      if (ref.value < input.xDomain[0] || ref.value > input.xDomain[1]) continue;
+      const bandSource = input.band ?? input.curve;
+      const fit = interpolateEstimate(input.curve.estimates, ref.value);
+      const ci = interpolateFullEstimate(bandSource.estimates, ref.value);
+      observedMarkers.push({
+        xx: x(ref.value),
+        color: hasExtras ? input.curveColor ?? "#94a3b8" : "#94a3b8",
+        yValue: fit,
+        yLowValue: ci.lower,
+        yHighValue: ci.upper,
+        line1: `Fit ${fit.toFixed(1)}`,
+        line2: `[${ci.lower.toFixed(1)}-${ci.upper.toFixed(1)}]`
+      });
+      for (const extra of input.extraCurves ?? []) {
+        const extraBandSource = extra.band ?? extra.curve;
+        const extraFit = interpolateEstimate(extra.curve.estimates, ref.value);
+        const extraCi = interpolateFullEstimate(extraBandSource.estimates, ref.value);
+        observedMarkers.push({
+          xx: x(ref.value),
+          color: extra.color,
+          yValue: extraFit,
+          yLowValue: extraCi.lower,
+          yHighValue: extraCi.upper,
+          line1: `Fit ${extraFit.toFixed(1)}`,
+          line2: `[${extraCi.lower.toFixed(1)}-${extraCi.upper.toFixed(1)}]`
+        });
+      }
+    }
+  }
+
+  // axes
+  let axis = "";
+  axis += selfClosing("line", { x1: plot.left, y1: plot.top + plot.height, x2: plot.left + plot.width, y2: plot.top + plot.height, stroke: "#94a3b8" });
+  axis += selfClosing("line", { x1: plot.left, y1: plot.top, x2: plot.left, y2: plot.top + plot.height, stroke: "#94a3b8" });
+  for (let i = 0; i <= xTicks; i++) {
+    const xv = input.xDomain[0] + (input.xDomain[1] - input.xDomain[0]) * (i / xTicks);
+    const xx = x(xv);
+    axis += selfClosing("line", { x1: xx, y1: plot.top + plot.height, x2: xx, y2: plot.top + plot.height + 6, stroke: "#94a3b8" });
+    axis += tag("text", { x: xx, y: plot.top + plot.height + 22, "text-anchor": "middle", fill: "#667085", "font-size": 12 }, esc(xv >= 100 ? xv.toFixed(0) : xv.toFixed(1)));
+  }
+  for (const v of yTicks) {
+    const yy = y(v);
+    axis += selfClosing("line", { x1: plot.left - 6, y1: yy, x2: plot.left, y2: yy, stroke: "#94a3b8" });
+    axis += tag("text", { x: plot.left - 10, y: yy + 4, "text-anchor": "end", fill: "#667085", "font-size": 12 }, esc(formatAxisValue(v)));
+  }
+  axis += tag("text", { x: plot.left + plot.width / 2, y: plot.top + plot.height + 40, "text-anchor": "middle", fill: "#334155", "font-size": 13, "font-weight": 700 }, esc(input.options.xAxisLabel));
+  axis += tag(
+    "text",
+    { x: 18, y: plot.top + plot.height / 2, transform: `rotate(-90 18 ${plot.top + plot.height / 2})`, "text-anchor": "middle", fill: "#334155", "font-size": 13, "font-weight": 700 },
+    esc(input.options.yAxisLabel)
+  );
+  parts.push(tag("g", { class: "er-axis" }, axis));
+
+  parts.push(renderReferenceLines(input.referenceLines, input.xDomain, x, plot, input.showSplitValue));
+
+  // scatter points - the raw response value itself (no [0,1] jitter needed the way the binary
+  // chart jitters overlapping 0/1 points, though a caller may still supply displayY if desired)
+  let dots = "";
+  for (const p of input.points) {
+    const cx = x(p.exposure);
+    const cy = y(p.displayY ?? p.response);
+    const color = input.groupColors[String(p.groupId)] ?? "#64748b";
+    dots += tag(
+      "circle",
+      {
+        cx,
+        cy,
+        r: p.selected ? 4.2 : 3.1,
+        fill: color,
+        opacity: p.selected ? 0.84 : 0.14,
+        stroke: p.selected ? "#ffffff" : "none",
+        "stroke-width": 1,
+        "data-id": p.id,
+        "data-group": p.groupId,
+        "data-exposure": p.exposure,
+        "data-response": p.response
+      },
+      p.label ? tag("title", {}, esc(p.label)) : ""
+    );
+  }
+  parts.push(tag("g", { class: "er-points" }, dots));
+
+  parts.push(renderMarkers(observedMarkers, y, plot.top, plot.top + plot.height));
+
+  const svg = `<svg viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">${parts.join("")}</svg>`;
+
+  return {
+    outputType: "svg",
+    content: svg,
+    metadata: {
+      width,
+      height,
+      plot,
+      xScale: { domain: x.domain, range: x.range },
+      yScale: { domain: y.domain, range: y.range }
+    }
+  };
 }
 
 /* ---------------------------------------------------------------------- *
