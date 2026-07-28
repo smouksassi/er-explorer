@@ -130,16 +130,12 @@ interface DemoState {
    * segment. On by default since it's the natural companion to clicking a dose row, but some
    * users will want the plain projection without it. */
   showDoseObserved: boolean;
-  /** Optional alternate view: only meaningful with exactly one exposure metric and 2+ endpoints
-   * selected. Replaces the usual dose-colored endpoint-row grid with one panel per endpoint
-   * (colored/dashed by endpoint instead of dose) plus an "(all)" panel overlaying every
-   * endpoint's curve together - mirrors ggquickeda's endpoint-comparison facet layout. */
+  /** Optional alternate view: only meaningful with 2+ endpoints selected (all sharing the same
+   * binary/continuous kind). Replaces the usual dose-colored endpoint-row grid with a single
+   * "(all)" panel per exposure metric, overlaying every selected endpoint's curve together
+   * (colored/dashed by endpoint instead of dose) - mirrors ggquickeda's endpoint-comparison facet
+   * layout, generalized to any number of exposure metrics. */
   compareEndpoints: boolean;
-  /** Only meaningful with compareEndpoints. Hides the individual per-endpoint panels, showing
-   * only the wide "(all)" overlay panel - a bigger, single combined view whose width the shared
-   * distribution-by-dose panel below it can match exactly, rather than sitting under a whole row
-   * of narrower panels. Off by default (shows the full faceted row, as before). */
-  onlyShowCombined: boolean;
   /** Show the raw jittered per-patient scatter points on the exposure-vs-response panel(s).
    * Applies to both the regular grid and Compare Endpoints (where points are colored by
    * endpoint instead of dose). On by default in the regular grid; Compare Endpoints has
@@ -164,7 +160,6 @@ const state: DemoState = {
   showSplitValue: false,
   showDoseObserved: true,
   compareEndpoints: false,
-  onlyShowCombined: false,
   showPoints: true
 };
 
@@ -197,7 +192,6 @@ const showDoseObservedEl = $<HTMLInputElement>("showDoseObserved");
 const showPointsEl = $<HTMLInputElement>("showPoints");
 const endpointGroupEl = $<HTMLDivElement>("endpointGroup");
 const compareEndpointsEl = $<HTMLInputElement>("compareEndpoints");
-const onlyShowCombinedEl = $<HTMLInputElement>("onlyShowCombined");
 const endpointLegendEl = $<HTMLDivElement>("endpointLegend");
 const ciSelect = $<HTMLSelectElement>("ciSelect");
 const resetBtn = $<HTMLButtonElement>("resetBtn");
@@ -509,13 +503,13 @@ function render(): void {
   // a binary responder outcome (probability axis) or every one is a continuous rating scale
   // (though even then, two different continuous endpoints, e.g. BRLS and PRLS, generally sit on
   // different scales - this restriction just avoids ever mixing a [0,1] probability curve with a
-  // rating-scale curve in the same panel).
-  const comparisonEligible = metrics.length === 1 && endpoints.length > 1 && endpoints.every((e) => !isContinuousEndpoint(e));
+  // rating-scale curve in the same panel). Any number of exposure metrics is fine - each gets its
+  // own overlaid "(all)" column.
+  const comparisonEligible = endpoints.length > 1 && endpoints.every((e) => !isContinuousEndpoint(e));
   compareEndpointsEl.disabled = !comparisonEligible;
-  onlyShowCombinedEl.disabled = !(state.compareEndpoints && comparisonEligible);
 
   if (state.compareEndpoints && comparisonEligible) {
-    renderEndpointComparisonRow(metrics[0], endpoints, active);
+    renderEndpointComparisonRow(metrics, endpoints, active);
     endpointLegendEl.style.display = "flex";
     legendEl.style.display = "none";
   } else {
@@ -565,6 +559,68 @@ function render(): void {
   showObservedRespEl.disabled = !state.referenceLineKind;
   showReferenceFitEl.disabled = !state.referenceLineKind;
   showSplitValueEl.disabled = !state.referenceLineKind;
+}
+
+interface BinaryDoseGroupStats {
+  q1: number;
+  q3: number;
+  median: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+  min: number;
+  max: number;
+  n: number;
+  observed: { proportion: number; ciLower: number; ciUpper: number; n: number; responders: number };
+}
+
+/** Per-dose exposure quantiles (Q1/median/Q3/whiskers/min/max) + observed responder rate (95%
+ * Wilson CI) for a binary endpoint, restricted to `active` patients - the data a dose row's
+ * projection onto the fitted curve is built from. Shared by the regular per-endpoint grid
+ * (`renderScatterPanel`) and the "Compare endpoints" overlay (`renderEndpointComparisonRow`), so
+ * clicking a dose row projects consistently in both views. */
+function computeBinaryDoseGroupStats(metric: ExposureMetric, endpoint: Endpoint, active: Set<number>): Record<string, BinaryDoseGroupStats> {
+  const groupStats: Record<string, BinaryDoseGroupStats> = {};
+  for (const dose of DOSE_ORDER) {
+    const doseRecords = RECORDS.filter((r) => active.has(r.id) && r.dose === dose);
+    const vals = doseRecords.map((r) => exposureValue(r, metric)).sort((a, b) => a - b);
+    if (!vals.length) continue;
+    const s = summarizeDistribution(vals);
+    if (!s) continue;
+    const responders = doseRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
+    const ci = wilsonScoreInterval(responders, doseRecords.length);
+    groupStats[dose] = {
+      q1: s.q1,
+      q3: s.q3,
+      median: s.median,
+      whiskerLow: s.whiskerLow,
+      whiskerHigh: s.whiskerHigh,
+      min: s.min,
+      max: s.max,
+      n: vals.length,
+      observed: { proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper, n: doseRecords.length, responders }
+    };
+  }
+  return groupStats;
+}
+
+/** The clicked-dose projection for a binary endpoint's chart, built from `computeBinaryDoseGroupStats` -
+ * shared by both `renderScatterPanel` and `renderEndpointComparisonRow`. Each projected group is
+ * colored by dose by default (the regular per-endpoint grid, where dose is the meaningful
+ * distinction on that single curve); `colorOverride` lets "Compare endpoints" mode color every
+ * dose's projection by the endpoint's own color instead, so the projection reads as "this curve's
+ * highlight" rather than blending into the dose-colored points/legend of a different endpoint. */
+function projectedGroupsFor(groupStats: Record<string, BinaryDoseGroupStats>, colorOverride?: string): ProjectedGroup[] {
+  return [...state.selectedDoses]
+    .filter((dose) => groupStats[dose])
+    .map((dose) => {
+      const { observed, ...rest } = groupStats[dose]!;
+      return {
+        groupId: dose,
+        color: colorOverride ?? DOSE_COLORS[dose] ?? "#111827",
+        ...rest,
+        observed: state.showDoseObserved ? observed : undefined
+      };
+    });
 }
 
 function renderScatterPanel(
@@ -655,52 +711,8 @@ function renderScatterPanel(
       options: { title: "Exposure vs response", xAxisLabel: exposureLabel(metric), yAxisLabel: endpoint.toUpperCase(), renderTarget: "svg" }
     });
   } else {
-    const groupStats: Record<
-      string,
-      {
-        q1: number;
-        q3: number;
-        median: number;
-        whiskerLow: number;
-        whiskerHigh: number;
-        min: number;
-        max: number;
-        n: number;
-        observed: { proportion: number; ciLower: number; ciUpper: number; n: number; responders: number };
-      }
-    > = {};
-    for (const dose of DOSE_ORDER) {
-      const doseRecords = RECORDS.filter((r) => active.has(r.id) && r.dose === dose);
-      const vals = doseRecords.map((r) => exposureValue(r, metric)).sort((a, b) => a - b);
-      if (!vals.length) continue;
-      const s = summarizeDistribution(vals);
-      if (!s) continue;
-      const responders = doseRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
-      const ci = wilsonScoreInterval(responders, doseRecords.length);
-      groupStats[dose] = {
-        q1: s.q1,
-        q3: s.q3,
-        median: s.median,
-        whiskerLow: s.whiskerLow,
-        whiskerHigh: s.whiskerHigh,
-        min: s.min,
-        max: s.max,
-        n: vals.length,
-        observed: { proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper, n: doseRecords.length, responders }
-      };
-    }
-
-    const projected: ProjectedGroup[] = [...state.selectedDoses]
-      .filter((dose) => groupStats[dose])
-      .map((dose) => {
-        const { observed, ...rest } = groupStats[dose]!;
-        return {
-          groupId: dose,
-          color: DOSE_COLORS[dose] ?? "#111827",
-          ...rest,
-          observed: state.showDoseObserved ? observed : undefined
-        };
-      });
+    const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
+    const projected = projectedGroupsFor(groupStats);
 
     scatterResult = renderLogisticScatterChart({
       points: state.showPoints ? points : [],
@@ -842,18 +854,18 @@ interface DistributionMeta {
 }
 
 /**
- * Optional alternate view (only offered with exactly one exposure metric and 2+ endpoints
- * selected): instead of one dose-colored row per endpoint, render one panel per endpoint -
- * colored and dashed by endpoint instead of dose - plus a final "(all)" panel overlaying every
- * endpoint's curve/band/observed-marker together. No raw scatter points here (too cluttered with
- * several endpoints layered at once); the focus is purely on comparing the fitted curves.
+ * Optional alternate view (only offered with 2+ endpoints selected): instead of one dose-colored
+ * row per endpoint, overlays every selected endpoint's curve/band/observed-marker together in a
+ * single "(all)" panel per exposure metric - colored and dashed by endpoint instead of dose. Any
+ * number of exposure metrics can be selected; each gets its own overlay column in the same row
+ * (mirroring the regular grid's one-column-per-metric layout), rather than multiplying into a
+ * full endpoints x metrics grid.
  */
-function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint[], active: Set<number>): void {
+function renderEndpointComparisonRow(metrics: ExposureMetric[], endpoints: Endpoint[], active: Set<number>): void {
   renderEndpointLegend(endpoints);
 
-  const xMax = Math.max(...RECORDS.map((r) => exposureValue(r, metric)));
-  const referenceLines = computeDisplayReferenceLines(metric);
   const chartHeight = 360;
+  const width = panelWidth();
 
   const rowEl = document.createElement("div");
   rowEl.className = "endpoint-row";
@@ -862,77 +874,61 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
   rowEl.appendChild(rowGrid);
   scatterPanelsEl.appendChild(rowEl);
 
-  // "Only show (all)" hides the individual per-endpoint panels, so the "(all)" overlay can use
-  // the full panel width (matching the distribution panel below it exactly, rather than sharing
-  // a row with several narrower panels) instead of the width-divided-by-panel-count used when
-  // showing the full faceted row.
-  const onlyAll = state.onlyShowCombined;
-  const width = onlyAll ? panelWidth() : Math.max(340, Math.floor(1200 / (endpoints.length + 1)));
+  // Only the combined "(all)" overlay is ever shown here - one column per selected exposure
+  // metric, mirroring the regular grid's one-column-per-metric layout. Individual per-endpoint
+  // panels (and the "Only show (all)" toggle that used to switch between the two) were dropped:
+  // with 2+ exposure metrics they'd multiply into a full endpoints x metrics grid, defeating the
+  // point of a compact side-by-side comparison, so the overlay is simply always the view.
+  for (const metric of metrics) {
+    const xMax = Math.max(...RECORDS.map((r) => exposureValue(r, metric)));
+    const referenceLines = computeDisplayReferenceLines(metric);
 
-  // Raw jittered points, colored by endpoint instead of dose (gated by the shared "Show points"
-  // toggle) - one set per endpoint for its own panel, plus all endpoints combined for "(all)".
-  const pointsFor = (endpoint: Endpoint): ScatterPoint[] =>
-    RECORDS.map((r) => ({
-      id: r.id,
-      exposure: exposureValue(r, metric),
-      response: endpointValue(r, endpoint),
-      displayY: endpointValue(r, endpoint) + seededJitter(r.id),
-      groupId: endpoint,
-      label: `${exposureLabel(metric)} ${exposureValue(r, metric).toFixed(1)} · ${endpoint.toUpperCase()} ${endpointValue(r, endpoint)} · ${r.dose} · Study ${r.study}`,
-      selected: active.has(r.id)
-    }));
+    // Raw jittered points, colored by endpoint instead of dose (gated by the shared "Show
+    // points" toggle) - one set per endpoint, all overlaid together in this metric's panel.
+    const pointsFor = (endpoint: Endpoint): ScatterPoint[] =>
+      RECORDS.map((r) => ({
+        id: r.id,
+        exposure: exposureValue(r, metric),
+        response: endpointValue(r, endpoint),
+        displayY: endpointValue(r, endpoint) + seededJitter(r.id),
+        groupId: endpoint,
+        label: `${exposureLabel(metric)} ${exposureValue(r, metric).toFixed(1)} · ${endpoint.toUpperCase()} ${endpointValue(r, endpoint)} · ${r.dose} · Study ${r.study}`,
+        selected: active.has(r.id)
+      }));
 
-  const fits = endpoints.map((endpoint) => {
-    // this comparison view is only ever reached with binary (logistic) endpoints - see
-    // comparisonEligible in render(), which excludes any continuous (linear) endpoint.
-    const { fit, xs, ys } = fitFor(metric, endpoint);
-    const curve = curveFor(fit, xs, ys, xMax);
-    const observedBins: ObservedResponseBin[] = computeObservedResponseBins(metric, endpoint).map((b) => ({
-      ...b,
-      color: ENDPOINT_COLORS[endpoint]
-    }));
-    return { endpoint, curve, observedBins };
-  });
-
-  const appendPanel = (title: string, content: string) => {
-    const cell = document.createElement("div");
-    cell.className = "panel-cell";
-    cell.innerHTML = `<div class="panel-cell-title">${title}</div><div class="chart" style="height: ${chartHeight}px;"></div>`;
-    rowGrid.appendChild(cell);
-    (cell.querySelector(".chart") as HTMLDivElement).innerHTML = content;
-  };
-
-  if (!onlyAll) {
-    fits.forEach(({ endpoint, curve, observedBins }) => {
-      const result = renderLogisticScatterChart({
-        points: state.showPoints ? pointsFor(endpoint) : [],
-        curve,
-        groupColors: { [endpoint]: ENDPOINT_COLORS[endpoint] },
-        xDomain: [0, xMax],
-        referenceLines,
-        observedBins,
-        showReferenceFit: state.showReferenceFit,
-        showSplitValue: state.showSplitValue,
-        curveColor: ENDPOINT_COLORS[endpoint],
-        curveDash: ENDPOINT_DASH[endpoint],
-        bandColor: ENDPOINT_COLORS[endpoint],
-        width,
-        height: chartHeight,
-        options: { title: "x", xAxisLabel: exposureLabel(metric), yAxisLabel: "Response", renderTarget: "svg" }
-      });
-      appendPanel(endpoint.toUpperCase(), result.content);
+    const fits = endpoints.map((endpoint) => {
+      // this comparison view is only ever reached with binary (logistic) endpoints - see
+      // comparisonEligible in render(), which excludes any continuous (linear) endpoint.
+      const { fit, xs, ys } = fitFor(metric, endpoint);
+      const curve = curveFor(fit, xs, ys, xMax);
+      const observedBins: ObservedResponseBin[] = computeObservedResponseBins(metric, endpoint).map((b) => ({
+        ...b,
+        color: ENDPOINT_COLORS[endpoint]
+      }));
+      // Each endpoint gets its own dose-click projection, drawn against its own curve and colored
+      // by that endpoint (not by dose) - so clicking a dose row highlights every overlaid
+      // endpoint's curve at once, each in its own color, instead of only the primary endpoint's.
+      const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
+      const projected = projectedGroupsFor(groupStats, ENDPOINT_COLORS[endpoint]);
+      return { endpoint, curve, observedBins, projected };
     });
-  }
 
-  const [first, ...rest] = fits;
-  if (first) {
-    const extraCurves: ExtraCurve[] = rest.map((f) => ({ curve: f.curve, color: ENDPOINT_COLORS[f.endpoint], dash: ENDPOINT_DASH[f.endpoint] }));
+    const [first, ...rest] = fits;
+    if (!first) continue;
+
+    const extraCurves: ExtraCurve[] = rest.map((f) => ({
+      curve: f.curve,
+      color: ENDPOINT_COLORS[f.endpoint],
+      dash: ENDPOINT_DASH[f.endpoint],
+      projected: f.projected
+    }));
     const allObservedBins = fits.flatMap((f) => f.observedBins);
     const allPoints = state.showPoints ? fits.flatMap((f) => pointsFor(f.endpoint)) : [];
     const allGroupColors = Object.fromEntries(fits.map((f) => [f.endpoint, ENDPOINT_COLORS[f.endpoint]]));
     const result = renderLogisticScatterChart({
       points: allPoints,
       curve: first.curve,
+      projected: first.projected,
       groupColors: allGroupColors,
       xDomain: [0, xMax],
       referenceLines,
@@ -947,20 +943,38 @@ function renderEndpointComparisonRow(metric: ExposureMetric, endpoints: Endpoint
       height: chartHeight,
       options: { title: "x", xAxisLabel: exposureLabel(metric), yAxisLabel: "Response", renderTarget: "svg" }
     });
-    appendPanel("(all)", result.content);
+
+    // Deliberately no attachScatterInteractivity here (unlike the regular grid): its brush-select
+    // math resolves a drag rectangle to patient ids via a single endpoint's response value, which
+    // would be wrong for points drawn from several different endpoints overlaid at once. Hover
+    // tooltips read each point's own data-* attributes already baked into the SVG, so those would
+    // be accurate, but brushing isn't - simplest to leave both off here rather than ship a
+    // half-correct interaction.
+    const cell = document.createElement("div");
+    cell.className = "panel-cell";
+    cell.innerHTML = `<div class="panel-cell-title">${exposureLabel(metric)}</div><div class="chart" data-metric="${metric}" style="height: ${chartHeight}px;"></div>`;
+    rowGrid.appendChild(cell);
+    (cell.querySelector(".chart") as HTMLDivElement).innerHTML = result.content;
   }
 
   // The exposure-by-dose distribution (Boxplot / Distribution / Lineranges - the same toggle used
   // in the regular view) doesn't depend on which endpoint's curve it's being compared against, so
-  // it's shown once, shared beneath every endpoint panel above, rather than duplicated
-  // (identically - it's the exact same dose exposure data) under each one. Split into one
-  // sub-row per endpoint (colored by endpoint, clustered by dose) so the per-endpoint coloring
-  // and responder-count breakdown this view is built around isn't lost just because the panel
-  // itself is now shared/unduplicated.
-  const distCell = document.createElement("div");
-  distCell.className = "panel-cell dist-shared";
-  rowEl.appendChild(distCell);
-  appendDistributionMini(distCell, metric, endpoints[0], active, panelWidth(), endpoints);
+  // it's shown once per exposure metric, shared beneath the overlay panel above (not duplicated
+  // per endpoint). Split into one sub-row per endpoint (colored by endpoint, clustered by dose)
+  // so the per-endpoint coloring this view is built around isn't lost just because the panel
+  // itself is shared/unduplicated.
+  const distRowEl = document.createElement("div");
+  distRowEl.className = "endpoint-row";
+  const distGrid = document.createElement("div");
+  distGrid.className = "panel-grid";
+  distRowEl.appendChild(distGrid);
+  scatterPanelsEl.appendChild(distRowEl);
+  for (const metric of metrics) {
+    const distCell = document.createElement("div");
+    distCell.className = "panel-cell dist-shared";
+    distGrid.appendChild(distCell);
+    appendDistributionMini(distCell, metric, endpoints[0], active, panelWidth(), endpoints);
+  }
 }
 
 function renderEndpointLegend(endpoints: Endpoint[]): void {
@@ -1340,7 +1354,6 @@ function buildSessionState(): SessionState {
       showSplitValue: state.showSplitValue,
       showDoseObserved: state.showDoseObserved,
       compareEndpoints: state.compareEndpoints,
-      onlyShowCombined: state.onlyShowCombined,
       showPoints: state.showPoints
     }
   );
@@ -1441,7 +1454,6 @@ function loadSessionFromFile(file: File): void {
       // show the dose-observed marker rather than silently hiding it
       state.showDoseObserved = session.settings["showDoseObserved"] !== false;
       state.compareEndpoints = session.settings["compareEndpoints"] === true;
-      state.onlyShowCombined = session.settings["onlyShowCombined"] === true;
       state.showPoints = session.settings["showPoints"] !== false;
       const brushed = session.filters["brushedIds"];
       state.brushedIds = Array.isArray(brushed) ? new Set(brushed as number[]) : null;
@@ -1459,7 +1471,6 @@ function loadSessionFromFile(file: File): void {
       showSplitValueEl.checked = state.showSplitValue;
       showDoseObservedEl.checked = state.showDoseObserved;
       compareEndpointsEl.checked = state.compareEndpoints;
-      onlyShowCombinedEl.checked = state.onlyShowCombined;
       showPointsEl.checked = state.showPoints;
       render();
       sessionStatus.textContent = `Loaded session from ${session.metadata.createdAt}.`;
@@ -1519,10 +1530,6 @@ showDoseObservedEl.addEventListener("change", () => {
 });
 compareEndpointsEl.addEventListener("change", () => {
   state.compareEndpoints = compareEndpointsEl.checked;
-  render();
-});
-onlyShowCombinedEl.addEventListener("change", () => {
-  state.onlyShowCombined = onlyShowCombinedEl.checked;
   render();
 });
 

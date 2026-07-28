@@ -35,52 +35,60 @@ product.
   uniformly to the regular grid (points colored by dose, as always) and to
   Compare Endpoints (points colored by endpoint instead, including in the
   combined "(all)" panel where every endpoint's points appear together).
-- The top "Responders by endpoint" card lists every currently-selected
+- The top "Response summary by endpoint" card lists every currently-selected
   endpoint (not just one), each split into Placebo vs Dosed (all
-  non-placebo patients pooled) responder rate + count — a single pooled
-  rate would blend Placebo's very different baseline into the treated
-  population's rate, so the two are always reported separately.
+  non-placebo patients pooled): responder rate + count for a binary
+  endpoint (ICGI/ICGI2/ICGI3), or mean response + 95% CI + n for a
+  continuous one (BRLS/PRLS, via `@er-explorer/model-linear`'s
+  `meanConfidenceInterval`) — a single pooled rate/mean would blend
+  Placebo's very different baseline into the treated population's, so the
+  two are always reported separately.
 - The descriptive text under each panel title is collapsed by default (a
   "Show details" link expands it) so it doesn't eat vertical space before
   you've asked for it; the controls for that panel sit below the text,
   not beside it, so they don't shift around as the text collapses/expands.
-- **Compare endpoints** (optional toggle, only available with exactly one
-  exposure metric and 2+ endpoints selected) — switches to a different
-  layout, mirroring ggquickeda's endpoint-comparison facet: one panel per
-  endpoint plus a final "(all)" panel overlaying every endpoint's fitted
-  curve, CI band, and observed-response markers together. In this view
-  coloring and line style (solid / dotted / dashed) switch from per-dose to
-  per-endpoint, so the same curve stays identifiable once several are
-  layered on top of each other in the "(all)" panel; a small legend shows
-  each endpoint's color/dash swatch. The "Fitted + CI" toggle (and "Split
-  value") works in every panel here too, including "(all)" - each overlaid curve
-  gets its own fit+CI marker in its own curve color at each active split
-  line, rather than one shared grey marker, so it's still clear which curve
-  each fit value belongs to. Raw scatter points follow the same "Show
-  points" toggle as the regular grid, colored by endpoint instead of dose
-  (in "(all)", every endpoint's points appear together, each in that
-  endpoint's color). When several endpoints' observed-rate markers land at
-  the same exposure position (common, since they're often binned on the
-  same split points), the label layout falls back to spacing them evenly
-  across the plot's full height rather than letting any run off the top or
-  bottom edge. An **Only show (all)** toggle hides the individual
-  per-endpoint panels entirely, leaving just the wide combined overlay - a
-  bigger single view whose width the distribution panel below it can match
-  exactly, rather than sitting under a whole row of narrower panels. The
-  dose legend (top) is hidden while this view is active, since coloring has
-  switched to per-endpoint; dose names elsewhere in the UI (the selection
-  status line, the projected-fit readout under the distribution panel) also
-  drop their usual per-dose color for the same reason - a dose no longer
-  maps to one color once endpoint coloring is active. The exposure
-  distribution-by-dose panel isn't hidden, but it also isn't duplicated
-  identically under every endpoint panel: it's shown once, shared beneath
-  all the endpoint panels (and the "(all)" panel), using the same Boxplot /
-  Distribution / Lineranges toggle and Group N control as the regular view
-  (see below) - but with each dose split into one sub-row per endpoint,
-  colored by that endpoint and clustered together. The dose name itself is
-  labeled once per cluster (it's identical across endpoints), but the Group
-  N count is shown on every sub-row, since it's an exposure-split count and
-  isn't clustered away like the dose label is. This mirrors the reference R package's
+- **Compare endpoints** (optional toggle, available with 2+ endpoints
+  selected, any number of exposure metrics) — switches to a different
+  layout, mirroring ggquickeda's endpoint-comparison facet: a single "(all)"
+  panel per exposure metric, overlaying every selected endpoint's fitted
+  curve, CI band, and observed-response markers together in that metric's
+  own column - exactly one column per exposure metric, just like the
+  regular grid, rather than a separate panel per endpoint (which would
+  otherwise multiply into a full endpoints x metrics grid once more than
+  one exposure was selected - the point of this view is a compact
+  side-by-side comparison, not that). Coloring and line style (solid /
+  dotted / dashed) switch from per-dose to per-endpoint, so the same curve
+  stays identifiable once several are layered on top of each other; a small
+  legend shows each endpoint's color/dash swatch. The "Fitted + CI" toggle
+  (and "Split value") works here too - each overlaid curve gets its own
+  fit+CI marker in its own curve color at each active split line, rather
+  than one shared grey marker, so it's still clear which curve each fit
+  value belongs to. Raw scatter points follow the same "Show points" toggle
+  as the regular grid, colored by endpoint instead of dose - every
+  endpoint's points appear together, each in that endpoint's color. Clicking
+  a dose row still projects Q1/median/Q3 (and that dose's own observed
+  rate) onto the curve, same as the regular grid - drawn against the first
+  selected endpoint's curve specifically, since a projection segment needs
+  one curve to sit on and that's the curve every other endpoint's is
+  overlaid onto. When several endpoints' observed-rate markers land at the
+  same exposure position (common, since they're often binned on the same
+  split points), the label layout falls back to spacing them evenly across
+  the plot's full height rather than letting any run off the top or bottom
+  edge. The dose legend (top) is hidden while this view is active, since
+  coloring has switched to per-endpoint; dose names elsewhere in the UI
+  (the selection status line, the projected-fit readout under the
+  distribution panel) also drop their usual per-dose color for the same
+  reason - a dose no longer maps to one color once endpoint coloring is
+  active. The exposure distribution-by-dose panel isn't hidden, but it also
+  isn't duplicated identically under every endpoint panel: it's shown once
+  per exposure metric, shared beneath that metric's overlay panel, using
+  the same Boxplot / Distribution / Lineranges toggle and Group N control
+  as the regular view (see below) - but with each dose split into one
+  sub-row per endpoint, colored by that endpoint and clustered together.
+  The dose name itself is labeled once per cluster (it's identical across
+  endpoints), but the Group N count is shown on every sub-row, since it's
+  an exposure-split count and isn't clustered away like the dose label is.
+  This mirrors the reference R package's
   "lineranges colored by endpoint, split by dose" annotation, just built on
   the same shared Boxplot/Distribution/Lineranges machinery as the regular
   view rather than a separate, more limited mechanism (an earlier version
@@ -126,9 +134,9 @@ product.
   since it's shared across every selected endpoint and a single count could
   only ever reflect one of them - that per-dose observed rate is still
   available, unambiguously, by clicking the row. In "Compare endpoints" mode it's likewise shown
-  once, shared beneath all of that metric's endpoint panels (and the
-  "(all)" panel) - but there each dose is split into one colored sub-row
-  per endpoint instead of a single dose-colored row (see above). Either way, its controls (Group N, distribution
+  once per exposure metric, shared beneath that metric's "(all)" overlay
+  panel - but there each dose is split into one colored sub-row per
+  endpoint instead of a single dose-colored row (see above). Either way, its controls (Group N, distribution
   mode toggle) live in the "Exposure vs response" panel's own control row
   above. Toggle it between three display modes:
   - **Boxplot** — box at Q1-Q3, thin whisker line to the 1.5*IQR bound,

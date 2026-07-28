@@ -375,6 +375,13 @@ export interface ExtraCurve {
   band?: PredictionResult;
   color: string;
   dash?: string;
+  /** This curve's own dose-click projection (Q1/median/Q3 emphasis, min/max markers, and observed
+   * marker), drawn exactly like the primary curve's `projected` - just relative to this curve/band
+   * instead of the primary one. Lets every overlaid curve (e.g. one per endpoint in "Compare
+   * endpoints") get its own projection when a dose is clicked, not just the primary curve's.
+   * Omit to draw no projection for this curve (e.g. if the caller only has projection data for
+   * the primary endpoint). */
+  projected?: ProjectedGroup[];
 }
 
 export interface LogisticScatterInput {
@@ -420,6 +427,78 @@ export interface LogisticScatterInput {
 // lines up - otherwise the scatter chart's narrower "0"/"1" y-axis labels would let its plot
 // start further left than the distribution panel below it, visibly misaligning the shared x-axis.
 const DEFAULT_MARGIN = { top: 22, right: 20, bottom: 56, left: 96 };
+
+/**
+ * Draws one set of dose-click projections (Q1-Q3 emphasized curve segment, min/max-span thin
+ * segment, and Q1/median/Q3 + min/max markers, plus an observed-rate marker if the group has one)
+ * against a specific curve/band pair - appending SVG pieces to `parts` and any observed-marker
+ * data to `observedMarkers` (which the caller lays out and renders afterward, alongside every
+ * other marker source). Factored out so `renderLogisticScatterChart` can call it once for the
+ * primary curve and again for each extra curve that supplies its own `projected` groups (e.g. one
+ * per endpoint in "Compare endpoints" - see `ExtraCurve.projected`), rather than only ever
+ * projecting onto the primary curve.
+ */
+function drawBinaryProjectedGroups(
+  groups: ProjectedGroup[],
+  curve: PredictionResult,
+  band: PredictionResult,
+  x: Scale,
+  y: Scale,
+  plot: { top: number; height: number },
+  parts: string[],
+  observedMarkers: PositionedMarker[]
+): void {
+  for (const p of groups) {
+    const rangeLow = p.min ?? p.whiskerLow;
+    const rangeHigh = p.max ?? p.whiskerHigh;
+    const segRange = curve.estimates.filter((e) => e.exposure >= rangeLow && e.exposure <= rangeHigh);
+    const segCore = curve.estimates.filter((e) => e.exposure >= p.q1 && e.exposure <= p.q3);
+    const bandRange = band.estimates.filter((e) => e.exposure >= rangeLow && e.exposure <= rangeHigh);
+    const segBand = bandPathFromEstimates(bandRange, x, y);
+    if (segBand) parts.push(selfClosing("path", { d: segBand, fill: p.color, opacity: 0.1, stroke: "none" }));
+    const segThin = curvePathFromEstimates(segRange, x, y);
+    if (segThin) parts.push(selfClosing("path", { d: segThin, fill: "none", stroke: p.color, "stroke-width": 1.8, opacity: 0.48, "stroke-linecap": "round" }));
+    const segThick = curvePathFromEstimates(segCore, x, y);
+    if (segThick) parts.push(selfClosing("path", { d: segThick, fill: "none", stroke: p.color, "stroke-width": 3.8, opacity: 0.98, "stroke-linecap": "round" }));
+
+    const at = (xv: number) => interpolateEstimate(curve.estimates, xv);
+    const pQ1 = at(p.q1);
+    const pQ3 = at(p.q3);
+    const pMed = at(p.median);
+    parts.push(selfClosing("rect", { x: x(p.q1), y: plot.top + 2, width: Math.max(1, x(p.q3) - x(p.q1)), height: plot.height - 4, fill: p.color, opacity: 0.06, rx: 8 }));
+    parts.push(selfClosing("line", { x1: x(p.q1), y1: y(pQ1), x2: x(p.q1), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1.4, "stroke-dasharray": "4 4", opacity: 0.75 }));
+    parts.push(selfClosing("line", { x1: x(p.q3), y1: y(pQ3), x2: x(p.q3), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1.4, "stroke-dasharray": "4 4", opacity: 0.75 }));
+    parts.push(selfClosing("circle", { cx: x(p.q1), cy: y(pQ1), r: 4.6, fill: p.color, stroke: "#fff", "stroke-width": 1.2 }));
+    parts.push(selfClosing("circle", { cx: x(p.q3), cy: y(pQ3), r: 4.6, fill: p.color, stroke: "#fff", "stroke-width": 1.2 }));
+    parts.push(selfClosing("circle", { cx: x(p.median), cy: y(pMed), r: 4, fill: "#111827", stroke: "#fff", "stroke-width": 1.1 }));
+
+    // min/max: small hollow markers (filled white, colored outline) so they read as "the observed
+    // extremes" at a glance, distinct from the filled Q1/Q3 dots and the dark median dot.
+    if (p.min !== undefined) {
+      const pMin = at(p.min);
+      parts.push(selfClosing("line", { x1: x(p.min), y1: y(pMin), x2: x(p.min), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1, "stroke-dasharray": "1.5 3", opacity: 0.55 }));
+      parts.push(selfClosing("circle", { cx: x(p.min), cy: y(pMin), r: 3.4, fill: "#ffffff", stroke: p.color, "stroke-width": 1.6 }));
+    }
+    if (p.max !== undefined) {
+      const pMax = at(p.max);
+      parts.push(selfClosing("line", { x1: x(p.max), y1: y(pMax), x2: x(p.max), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1, "stroke-dasharray": "1.5 3", opacity: 0.55 }));
+      parts.push(selfClosing("circle", { cx: x(p.max), cy: y(pMax), r: 3.4, fill: "#ffffff", stroke: p.color, "stroke-width": 1.6 }));
+    }
+
+    if (p.observed) {
+      const pct = Math.round(p.observed.proportion * 100);
+      observedMarkers.push({
+        xx: x(p.median),
+        color: p.color,
+        yValue: p.observed.proportion,
+        yLowValue: p.observed.ciLower,
+        yHighValue: p.observed.ciUpper,
+        line1: `${pct}%`,
+        line2: `${p.observed.responders}/${p.observed.n}`
+      });
+    }
+  }
+}
 
 export function renderLogisticScatterChart(input: LogisticScatterInput): RenderResult {
   const width = input.width ?? 1200;
@@ -495,58 +574,14 @@ export function renderLogisticScatterChart(input: LogisticScatterInput): RenderR
   // so the layout pass can avoid overlap between them, not just within each source
   const observedMarkers: PositionedMarker[] = [];
 
-  // projected group overlays (Q1-Q3 emphasized segment, min/max-span thin segment, markers)
-  for (const p of input.projected ?? []) {
-    const rangeLow = p.min ?? p.whiskerLow;
-    const rangeHigh = p.max ?? p.whiskerHigh;
-    const segRange = input.curve.estimates.filter((e) => e.exposure >= rangeLow && e.exposure <= rangeHigh);
-    const segCore = input.curve.estimates.filter((e) => e.exposure >= p.q1 && e.exposure <= p.q3);
-    const bandRange = (input.band ?? input.curve).estimates.filter((e) => e.exposure >= rangeLow && e.exposure <= rangeHigh);
-    const segBand = bandPathFromEstimates(bandRange, x, y);
-    if (segBand) parts.push(selfClosing("path", { d: segBand, fill: p.color, opacity: 0.1, stroke: "none" }));
-    const segThin = curvePathFromEstimates(segRange, x, y);
-    if (segThin) parts.push(selfClosing("path", { d: segThin, fill: "none", stroke: p.color, "stroke-width": 1.8, opacity: 0.48, "stroke-linecap": "round" }));
-    const segThick = curvePathFromEstimates(segCore, x, y);
-    if (segThick) parts.push(selfClosing("path", { d: segThick, fill: "none", stroke: p.color, "stroke-width": 3.8, opacity: 0.98, "stroke-linecap": "round" }));
-
-    const at = (xv: number) => {
-      const est = interpolateEstimate(input.curve.estimates, xv);
-      return est;
-    };
-    const pQ1 = at(p.q1);
-    const pQ3 = at(p.q3);
-    const pMed = at(p.median);
-    parts.push(selfClosing("rect", { x: x(p.q1), y: plot.top + 2, width: Math.max(1, x(p.q3) - x(p.q1)), height: plot.height - 4, fill: p.color, opacity: 0.06, rx: 8 }));
-    parts.push(selfClosing("line", { x1: x(p.q1), y1: y(pQ1), x2: x(p.q1), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1.4, "stroke-dasharray": "4 4", opacity: 0.75 }));
-    parts.push(selfClosing("line", { x1: x(p.q3), y1: y(pQ3), x2: x(p.q3), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1.4, "stroke-dasharray": "4 4", opacity: 0.75 }));
-    parts.push(selfClosing("circle", { cx: x(p.q1), cy: y(pQ1), r: 4.6, fill: p.color, stroke: "#fff", "stroke-width": 1.2 }));
-    parts.push(selfClosing("circle", { cx: x(p.q3), cy: y(pQ3), r: 4.6, fill: p.color, stroke: "#fff", "stroke-width": 1.2 }));
-    parts.push(selfClosing("circle", { cx: x(p.median), cy: y(pMed), r: 4, fill: "#111827", stroke: "#fff", "stroke-width": 1.1 }));
-
-    // min/max: small hollow markers (filled white, colored outline) so they read as "the observed
-    // extremes" at a glance, distinct from the filled Q1/Q3 dots and the dark median dot.
-    if (p.min !== undefined) {
-      const pMin = at(p.min);
-      parts.push(selfClosing("line", { x1: x(p.min), y1: y(pMin), x2: x(p.min), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1, "stroke-dasharray": "1.5 3", opacity: 0.55 }));
-      parts.push(selfClosing("circle", { cx: x(p.min), cy: y(pMin), r: 3.4, fill: "#ffffff", stroke: p.color, "stroke-width": 1.6 }));
-    }
-    if (p.max !== undefined) {
-      const pMax = at(p.max);
-      parts.push(selfClosing("line", { x1: x(p.max), y1: y(pMax), x2: x(p.max), y2: plot.top + plot.height, stroke: p.color, "stroke-width": 1, "stroke-dasharray": "1.5 3", opacity: 0.55 }));
-      parts.push(selfClosing("circle", { cx: x(p.max), cy: y(pMax), r: 3.4, fill: "#ffffff", stroke: p.color, "stroke-width": 1.6 }));
-    }
-
-    if (p.observed) {
-      const pct = Math.round(p.observed.proportion * 100);
-      observedMarkers.push({
-        xx: x(p.median),
-        color: p.color,
-        yValue: p.observed.proportion,
-        yLowValue: p.observed.ciLower,
-        yHighValue: p.observed.ciUpper,
-        line1: `${pct}%`,
-        line2: `${p.observed.responders}/${p.observed.n}`
-      });
+  // projected group overlays (Q1-Q3 emphasized segment, min/max-span thin segment, markers) onto
+  // the primary curve - and, when a caller supplies its own `projected` per extra curve (e.g. one
+  // per endpoint in "Compare endpoints"), the same overlay repeated onto each of those curves too,
+  // so a dose click projects onto every overlaid curve rather than just the primary one.
+  drawBinaryProjectedGroups(input.projected ?? [], input.curve, input.band ?? input.curve, x, y, plot, parts, observedMarkers);
+  for (const extra of input.extraCurves ?? []) {
+    if (extra.projected?.length) {
+      drawBinaryProjectedGroups(extra.projected, extra.curve, extra.band ?? extra.curve, x, y, plot, parts, observedMarkers);
     }
   }
   for (const b of input.observedBins ?? []) {
