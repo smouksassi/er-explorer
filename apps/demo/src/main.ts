@@ -546,7 +546,7 @@ function render(): void {
       const cell = document.createElement("div");
       cell.className = "panel-cell dist-shared";
       sharedGrid.appendChild(cell);
-      appendDistributionMini(cell, metric, primaryEndpoint, active, panelWidth());
+      appendDistributionMini(cell, metric, primaryEndpoint, active, panelWidth(), undefined, endpoints);
     }
   }
 
@@ -761,7 +761,14 @@ function appendDistributionMini(
   endpoint: Endpoint,
   active: Set<number>,
   width: number,
-  splitByEndpoints?: Endpoint[]
+  splitByEndpoints?: Endpoint[],
+  // Which endpoints' fit values to show in the dose-click readout below the chart - independent
+  // of `splitByEndpoints` (which controls whether the boxplot/lineranges rows themselves are
+  // split per endpoint). The regular per-endpoint-row view never splits the shared distribution
+  // rows (exposure doesn't depend on endpoint), but with 2+ endpoints selected its readout is
+  // just as ambiguous as Compare endpoints' was - so this lets the caller pass every selected
+  // endpoint here even when `splitByEndpoints` is omitted.
+  readoutEndpoints?: Endpoint[]
 ): void {
   const xs = RECORDS.map((r) => exposureValue(r, metric));
   const xMax = Math.max(...xs);
@@ -821,11 +828,13 @@ function appendDistributionMini(
       .filter((g) => g.n > 0);
   }
 
-  // Taller when split into per-endpoint sub-rows (more, denser rows than the plain 5-dose view) -
-  // a wider per-row band keeps the Group N annotation text and box/whisker shape from crowding
-  // each other once there are 8-10+ rows instead of the usual 5.
-  const rowHeight = splitByEndpoints && splitByEndpoints.length > 1 ? 34 : 26;
-  const height = Math.max(200, distGroups.length * rowHeight + 60);
+  // Panel height is always based on the plain 5-dose count, regardless of whether this is the
+  // regular view or the "Compare endpoints" split-by-endpoint view - so the panel is visually the
+  // same size in both places. When split into per-endpoint sub-rows there are more (denser) rows
+  // to fit in that same height; renderDistributionChart's own band = plot.height / groups.length
+  // shrinks each row proportionally to fit, rather than growing the panel taller.
+  const doseCount = DOSE_ORDER.filter((dose) => RECORDS.some((r) => r.dose === dose)).length;
+  const height = Math.max(200, doseCount * 26 + 60);
 
   const distResult = renderDistributionChart({
     groups: distGroups,
@@ -844,7 +853,8 @@ function appendDistributionMini(
   const chartWrap = wrap.querySelector(".chart") as HTMLDivElement;
   const readoutEl = wrap.querySelector(".readout") as HTMLDivElement;
   chartWrap.innerHTML = distResult.content;
-  attachDistributionInteractivity(chartWrap, metric, endpoint, active, readoutEl, distResult.metadata as unknown as DistributionMeta);
+  const finalReadoutEndpoints = readoutEndpoints ?? (splitByEndpoints && splitByEndpoints.length > 1 ? splitByEndpoints : [endpoint]);
+  attachDistributionInteractivity(chartWrap, metric, finalReadoutEndpoints, active, readoutEl, distResult.metadata as unknown as DistributionMeta);
 }
 
 interface DistributionMeta {
@@ -1004,7 +1014,11 @@ function renderLegend(): void {
  * renderEndpointComparisonRow. Used to avoid coloring dose names by DOSE_COLORS in text that sits
  * near that view, since a dose no longer maps to a single color there (it's split by endpoint). */
 function isEndpointComparisonActive(): boolean {
-  return state.compareEndpoints && selectedExposureMetrics().length === 1 && selectedEndpoints().length > 1;
+  const endpoints = selectedEndpoints();
+  // Mirrors comparisonEligible in render() - Compare endpoints now works with any number of
+  // exposure metrics (each gets its own overlaid "(all)" column), so this must not require
+  // exactly one metric to be selected the way it used to before that redesign.
+  return state.compareEndpoints && endpoints.length > 1 && endpoints.every((e) => !isContinuousEndpoint(e));
 }
 
 function doseColorFor(dose: string): string {
@@ -1066,7 +1080,16 @@ function updateKpis(activeCount: number, endpoints: Endpoint[]): void {
     .join("");
 }
 
-function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoint: Endpoint, active: Set<number>): void {
+/** `endpoints` is normally a single-item array (the regular per-endpoint-row view, where the fit
+ * is unambiguous); with 2+ endpoints it carries every one of them and renders one line per
+ * endpoint (each labeled "<dose> · <ENDPOINT>" so its fit values are never ambiguous). Only in
+ * actual "Compare endpoints" mode - where several endpoints' curves are overlaid together on one
+ * axis and therefore colored by endpoint to tell them apart - are these lines colored by
+ * ENDPOINT_COLORS to match. In the regular per-endpoint-row view each endpoint already has its
+ * own panel/axis above, so there's nothing to disambiguate by color there; every line for a given
+ * dose instead stays in that dose's own color (or neutral, in Compare endpoints - see
+ * doseColorFor), matching the dose swatches/boxplot rows elsewhere in the UI. */
+function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoints: Endpoint[], active: Set<number>): void {
   const groupStats: Record<string, { min: number; q1: number; median: number; q3: number; max: number }> = {};
   for (const dose of state.selectedDoses) {
     const vals = RECORDS.filter((r) => active.has(r.id) && r.dose === dose)
@@ -1080,15 +1103,24 @@ function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoi
     readoutEl.innerHTML = '<span class="muted">Click a box above to show projected fit values at Min, Q1, Median, Q3, and Max.</span>';
     return;
   }
-  const { fit } = fitFor(metric, endpoint);
-  const continuous = isContinuousEndpoint(endpoint);
-  const decimals = continuous ? 1 : 3;
-  const fitAt = (x: number) =>
-    fit.kind === "linear" ? fit.model.intercept + fit.model.slope * x : 1 / (1 + Math.exp(-(fit.model.intercept + fit.model.slope * x)));
-  const lines = doses.map((dose) => {
+  const multiEndpoint = endpoints.length > 1;
+  const colorByEndpoint = isEndpointComparisonActive();
+  const lines: string[] = [];
+  for (const dose of doses) {
     const g = groupStats[dose];
-    return `<div><strong style="color:${doseColorFor(dose)}">${dose}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} (fit ${fitAt(g.min).toFixed(decimals)}) &nbsp; Q1 = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(decimals)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(decimals)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(decimals)}) &nbsp; Max = ${g.max.toFixed(1)} (fit ${fitAt(g.max).toFixed(decimals)})</div>`;
-  });
+    for (const endpoint of endpoints) {
+      const { fit } = fitFor(metric, endpoint);
+      const continuous = isContinuousEndpoint(endpoint);
+      const decimals = continuous ? 1 : 3;
+      const fitAt = (x: number) =>
+        fit.kind === "linear" ? fit.model.intercept + fit.model.slope * x : 1 / (1 + Math.exp(-(fit.model.intercept + fit.model.slope * x)));
+      const color = colorByEndpoint ? ENDPOINT_COLORS[endpoint] : doseColorFor(dose);
+      const label = multiEndpoint ? `${dose} · ${endpoint.toUpperCase()}` : dose;
+      lines.push(
+        `<div><strong style="color:${color}">${label}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} (fit ${fitAt(g.min).toFixed(decimals)}) &nbsp; Q1 = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(decimals)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(decimals)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(decimals)}) &nbsp; Max = ${g.max.toFixed(1)} (fit ${fitAt(g.max).toFixed(decimals)})</div>`
+      );
+    }
+  }
   readoutEl.innerHTML = lines.join("");
 }
 
@@ -1190,13 +1222,13 @@ function attachScatterInteractivity(chartWrap: HTMLDivElement, tip: HTMLDivEleme
 function attachDistributionInteractivity(
   chartWrap: HTMLDivElement,
   metric: ExposureMetric,
-  endpoint: Endpoint,
+  endpoints: Endpoint[],
   active: Set<number>,
   readoutEl: HTMLDivElement,
   meta: DistributionMeta
 ): void {
   const svg = chartWrap.querySelector("svg");
-  updateReadout(readoutEl, metric, endpoint, active);
+  updateReadout(readoutEl, metric, endpoints, active);
   if (!svg) return;
 
   const rows = svg.querySelectorAll<SVGGElement>("g.er-ridge");
@@ -1243,11 +1275,10 @@ function transitionDistributionMode(targetMode: DistributionMode): void {
   const fromMode = state.distributionMode;
 
   // Lineranges isn't a ridge-path shape (it's a plain line + tick marks), so there's no path to
-  // morph to/from - just swap modes directly and re-render, rather than animating garbage.
+  // continuously morph to/from the way boxplot and violin can. Cross-fade instead, so the switch
+  // still feels animated rather than an abrupt snap.
   if (fromMode === "lineranges" || targetMode === "lineranges") {
-    state.distributionMode = targetMode;
-    setDistModeButtonsActive(targetMode);
-    render();
+    crossFadeDistributionTransition(targetMode);
     return;
   }
 
@@ -1285,6 +1316,56 @@ function transitionDistributionMode(targetMode: DistributionMode): void {
       distributionAnimating = false;
       setDistModeButtonsDisabled(false);
       render();
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+/** Any transition into/out of Lineranges can't reuse the boxplot<->violin path morph above (there
+ * is no shared ridge-path shape to interpolate), so it cross-fades instead: snapshot every
+ * currently-rendered distribution chart's SVG, re-render immediately in the target mode, then lay
+ * the snapshots on top (fixed-position, sized to match) and fade them out to reveal the new
+ * charts underneath. `distributionAnimating` still gates dose-row clicks for the duration, exactly
+ * like the path-morph transition does, even though the new (already-interactive) DOM is live
+ * underneath the fading snapshot the whole time. */
+function crossFadeDistributionTransition(targetMode: DistributionMode): void {
+  distributionAnimating = true;
+  setDistModeButtonsDisabled(true);
+  setDistModeButtonsActive(targetMode);
+
+  const snapshots = Array.from(document.querySelectorAll<HTMLDivElement>(".dist-inline-chart"))
+    .map((wrap) => {
+      const svg = wrap.querySelector("svg");
+      return svg ? { svg: svg.cloneNode(true) as SVGElement, rect: wrap.getBoundingClientRect() } : null;
+    })
+    .filter((s): s is { svg: SVGElement; rect: DOMRect } => s !== null);
+
+  state.distributionMode = targetMode;
+  render();
+
+  const overlayHost = document.createElement("div");
+  overlayHost.style.cssText = "position:fixed; inset:0; pointer-events:none; z-index:9999;";
+  document.body.appendChild(overlayHost);
+  const overlays = snapshots.map(({ svg, rect }) => {
+    const div = document.createElement("div");
+    div.style.cssText = `position:absolute; left:${rect.left}px; top:${rect.top}px; width:${rect.width}px; height:${rect.height}px;`;
+    div.appendChild(svg);
+    overlayHost.appendChild(div);
+    return div;
+  });
+
+  const duration = 420;
+  const start = performance.now();
+  function frame(now: number): void {
+    const t = Math.min(1, (now - start) / duration);
+    const opacity = String(1 - easeInOutCubic(t));
+    overlays.forEach((o) => (o.style.opacity = opacity));
+    if (t < 1) {
+      requestAnimationFrame(frame);
+    } else {
+      overlayHost.remove();
+      distributionAnimating = false;
+      setDistModeButtonsDisabled(false);
     }
   }
   requestAnimationFrame(frame);
