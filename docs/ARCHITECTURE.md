@@ -7,6 +7,7 @@ Separate:
 - Domain (scientific domain model: interfaces and types only)
 - Data (dataset loading, type inference, lazy analysis views)
 - Analysis (model plugin architecture: registry, prediction, diagnostics, CI)
+- Model plugins (one package per model family, e.g. `packages/model-linear`)
 - Visualization Engine
 - Session Engine
 
@@ -39,6 +40,16 @@ model. Its `legacyStatistics.ts` preserves the original logistic
 implementation unchanged, purely for backward compatibility with
 `apps/demo`, `packages/visualization-engine`, and `packages/session-engine`
 until they migrate to the plugin architecture.
+
+`packages/model-linear` is the first concrete `AnalysisModel` plugin:
+single-predictor ordinary least squares for continuous endpoints (e.g. a
+rating-scale score, as opposed to the legacy logistic model's binary
+responder endpoints). It implements `fit`/`predict`/`diagnose` and both
+`"wald"` (analytic, Student's-t based) and `"bootstrap"` (seeded
+case-resampling) confidence intervals, entirely independent of
+`packages/analysis`'s deprecated legacy code. For a continuous endpoint
+there is no responder/non-responder rate; `meanConfidenceInterval` is the
+corresponding "observed mean, CI, n contributing" summary.
 
 Everything revolves around:
 StudyDataset → Question → AnalysisSpec → Prediction → Visualization → Decision

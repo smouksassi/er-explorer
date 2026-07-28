@@ -99,5 +99,12 @@ export interface AnalysisModel<TParams = unknown> {
   fit(request: FitRequest): FitOutcome<TParams>;
   predict(params: TParams, context?: PredictionContext): PredictionSurface;
   diagnose(params: TParams, request: FitRequest): Diagnostic[];
-  confidenceInterval(params: TParams, request: ConfidenceIntervalRequest): ConfidenceInterval[];
+  /**
+   * Compute confidence intervals for a fitted model. Takes the original
+   * `FitRequest` alongside `params` - not just `params` - because a
+   * resampling method (`"bootstrap"`) needs the raw (exposure, response)
+   * pairs to resample from; an analytic method (`"wald"`) can ignore it and
+   * use `params`'s own covariance/standard-error information instead.
+   */
+  confidenceInterval(params: TParams, fitRequest: FitRequest, request: ConfidenceIntervalRequest): ConfidenceInterval[];
 }

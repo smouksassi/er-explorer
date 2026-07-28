@@ -51,7 +51,7 @@ const fakeModel: AnalysisModel<FakeParams> = {
   diagnose(): Diagnostic[] {
     return [{ id: "converged", label: "Converged", severity: "info", value: 1 }];
   },
-  confidenceInterval(_params, request): ConfidenceInterval[] {
+  confidenceInterval(_params, _fitRequest, request): ConfidenceInterval[] {
     return request.exposures.map((exposure) => ({ exposure, method: request.method, level: request.level ?? 0.95, lower: 0, upper: 1 }));
   }
 };
@@ -88,7 +88,7 @@ describe("AnalysisModel", () => {
     const diagnostics = fakeModel.diagnose(outcome.params, { exposures: [0, 10, 20], responses: [0, 1, 1] });
     expect(diagnostics[0].id).toBe("converged");
 
-    const ci = fakeModel.confidenceInterval(outcome.params, { exposures: [0, 10], method: "wald" });
+    const ci = fakeModel.confidenceInterval(outcome.params, { exposures: [0, 10, 20], responses: [0, 1, 1] }, { exposures: [0, 10], method: "wald" });
     expect(ci).toHaveLength(2);
     expect(ci[0].method).toBe("wald");
   });

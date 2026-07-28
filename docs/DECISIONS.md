@@ -22,3 +22,10 @@ utility) implements; `ModelRegistry` discovers plugins; `PredictionSurface`,
 `Diagnostic`, and `ConfidenceInterval` describe how a fitted model is
 queried. Statistics become an implementation detail of a plugin, not of
 this package - no concrete model ships in `packages/analysis` itself.
+
+ADR-0008 Each model family plugin is its own package (e.g.
+`packages/model-linear`), depending on `packages/analysis` for the
+interfaces and `packages/domain` for shared vocabulary, but never on
+another plugin or on `packages/analysis`'s deprecated legacy code.
+`packages/model-linear` is the first: single-predictor OLS for continuous
+endpoints, proving `AnalysisModel`/`ModelRegistry` end to end.
