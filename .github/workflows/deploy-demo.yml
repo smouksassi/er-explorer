@@ -27,10 +27,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # No `version` input here - pnpm/action-setup reads the pinned version straight from
+      # package.json's "packageManager" field, and specifying both causes ERR_PNPM_BAD_PM_VERSION.
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 11
 
       - name: Setup Node
         uses: actions/setup-node@v4
