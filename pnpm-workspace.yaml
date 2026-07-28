@@ -2,5 +2,11 @@ packages:
   - "packages/*"
   - "apps/*"
 
+# Explicitly approves esbuild's postinstall script (it just builds/downloads its native binary).
+# `onlyBuiltDependencies` alone isn't enough under `pnpm install --frozen-lockfile` (the mode CI
+# uses) - pnpm still reports it "ignored" and exits non-zero unless it's also allowed here.
+allowBuilds:
+  esbuild: true
+
 onlyBuiltDependencies:
   - esbuild
