@@ -1,0 +1,87 @@
+name: Deploy demo to GitHub Pages
+
+# Builds apps/demo into a single self-contained dist/index.html (no external
+# assets - bundle.js is inlined by scripts/build.mjs) and publishes it via
+# GitHub Pages. Runs on every push to main; can also be triggered manually
+# from the Actions tab.
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one Pages deployment at a time; let an in-flight one finish rather
+# than cancel it mid-publish.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Built directly via tsc rather than `pnpm run build`/turbo - this repo's pnpm version
+      # treats any nested `pnpm run` as a fresh dependency-verification pass, which fails hard
+      # ([ERR_PNPM_IGNORED_BUILDS]) even when the top-level install only warns. Invoking tsc
+      # per package, in dependency order, sidesteps that entirely.
+      - name: Build packages/domain
+        run: node_modules/.bin/tsc -p packages/domain/tsconfig.build.json
+      - name: Build packages/analysis
+        run: node_modules/.bin/tsc -p packages/analysis/tsconfig.build.json
+      - name: Build packages/model-linear
+        run: node_modules/.bin/tsc -p packages/model-linear/tsconfig.build.json
+      - name: Build packages/data
+        run: node_modules/.bin/tsc -p packages/data/tsconfig.build.json
+      - name: Build packages/visualization-engine
+        run: node_modules/.bin/tsc -p packages/visualization-engine/tsconfig.json
+      - name: Build packages/session-engine
+        run: node_modules/.bin/tsc -p packages/session-engine/tsconfig.build.json
+
+      - name: Typecheck apps/demo
+        run: node_modules/.bin/tsc -p apps/demo/tsconfig.json
+
+      - name: Regenerate demo data
+        run: node apps/demo/scripts/build-data.mjs
+
+      - name: Bundle demo
+        run: node apps/demo/scripts/build.mjs
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/demo/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
