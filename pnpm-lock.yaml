@@ -49,6 +49,16 @@ importers:
         specifier: ^0.24.0
         version: 0.24.2
 
+  packages/data:
+    dependencies:
+      '@er-explorer/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@20.19.43)
+
   packages/domain:
     devDependencies:
       vitest:
