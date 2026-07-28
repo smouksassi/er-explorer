@@ -61,11 +61,15 @@ jobs:
       - name: Build packages/session-engine
         run: node_modules/.bin/tsc -p packages/session-engine/tsconfig.build.json
 
-      - name: Typecheck apps/demo
-        run: node_modules/.bin/tsc -p apps/demo/tsconfig.json
-
+      # Must run before typechecking/bundling apps/demo: src/data.generated.ts is gitignored (not
+      # committed) and only exists locally because it was generated in a past session - a fresh
+      # CI checkout has no such file, so `import ... from "./data.generated"` fails to resolve
+      # (and every RECORDS-derived value collapses to implicit `any`) unless this runs first.
       - name: Regenerate demo data
         run: node apps/demo/scripts/build-data.mjs
+
+      - name: Typecheck apps/demo
+        run: node_modules/.bin/tsc -p apps/demo/tsconfig.json
 
       - name: Bundle demo
         run: node apps/demo/scripts/build.mjs
