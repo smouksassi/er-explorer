@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@er-explorer/session-engine": "workspace:*",
-    "@er-explorer/statistical-engine": "workspace:*",
+    "@er-explorer/analysis": "workspace:*",
     "@er-explorer/visualization-engine": "workspace:*"
   },
   "devDependencies": {

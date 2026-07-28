@@ -35,12 +35,12 @@ importers:
 
   apps/demo:
     dependencies:
+      '@er-explorer/analysis':
+        specifier: workspace:*
+        version: link:../../packages/analysis
       '@er-explorer/session-engine':
         specifier: workspace:*
         version: link:../../packages/session-engine
-      '@er-explorer/statistical-engine':
-        specifier: workspace:*
-        version: link:../../packages/statistical-engine
       '@er-explorer/visualization-engine':
         specifier: workspace:*
         version: link:../../packages/visualization-engine
@@ -48,6 +48,16 @@ importers:
       esbuild:
         specifier: ^0.24.0
         version: 0.24.2
+
+  packages/analysis:
+    dependencies:
+      '@er-explorer/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@20.19.43)
 
   packages/data:
     dependencies:
@@ -67,12 +77,12 @@ importers:
 
   packages/session-engine:
     dependencies:
+      '@er-explorer/analysis':
+        specifier: workspace:*
+        version: link:../analysis
       '@er-explorer/domain':
         specifier: workspace:*
         version: link:../domain
-      '@er-explorer/statistical-engine':
-        specifier: workspace:*
-        version: link:../statistical-engine
       '@er-explorer/visualization-engine':
         specifier: workspace:*
         version: link:../visualization-engine
@@ -81,13 +91,11 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@20.19.43)
 
-  packages/statistical-engine: {}
-
   packages/visualization-engine:
     dependencies:
-      '@er-explorer/statistical-engine':
+      '@er-explorer/analysis':
         specifier: workspace:*
-        version: link:../statistical-engine
+        version: link:../analysis
 
 packages:
 

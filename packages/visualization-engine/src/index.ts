@@ -1,5 +1,5 @@
-import type { ModelDefinition, PredictionResult, DistributionSummary } from "@er-explorer/statistical-engine";
-import { summarizeDistribution, kernelDensityEstimate, silvermanBandwidth } from "@er-explorer/statistical-engine";
+import type { ModelDefinition, PredictionResult, DistributionSummary } from "@er-explorer/analysis";
+import { summarizeDistribution, kernelDensityEstimate, silvermanBandwidth } from "@er-explorer/analysis";
 
 export type RenderTarget = "svg" | "canvas";
 

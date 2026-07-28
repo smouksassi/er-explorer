@@ -8,7 +8,7 @@ import {
   createModelDefinition,
   type LogisticModel,
   type PredictionResult
-} from "@er-explorer/statistical-engine";
+} from "@er-explorer/analysis";
 import {
   renderLogisticScatterChart,
   renderDistributionChart,

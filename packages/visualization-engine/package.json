@@ -15,7 +15,7 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "@er-explorer/statistical-engine": "workspace:*"
+    "@er-explorer/analysis": "workspace:*"
   },
   "files": ["dist"],
   "keywords": ["er-explorer", "visualization", "svg"],

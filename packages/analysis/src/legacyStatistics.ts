@@ -1,3 +1,22 @@
+/**
+ * @deprecated Pre-plugin-architecture statistical implementation, kept
+ * verbatim (relocated from the old `packages/statistical-engine`) purely
+ * for backward compatibility with `apps/demo`, `packages/visualization-engine`,
+ * and `packages/session-engine`'s legacy session shape, none of which have
+ * been migrated to the new `AnalysisModel`/`ModelRegistry` plugin
+ * architecture yet.
+ *
+ * This is exactly the "logistic implementation" the new architecture
+ * deliberately excludes: `packages/analysis`'s new surface
+ * (`analysisModel.ts`, `predictionSurface.ts`, `diagnostic.ts`,
+ * `confidenceInterval.ts`, `modelRegistry.ts`) is interfaces only, with no
+ * concrete model registered against it. Nothing in this file is exported
+ * as, or wired into, that plugin registry - it is quarantined legacy code,
+ * not a plugin. New code should target the new interfaces; this file
+ * should shrink and eventually disappear as consumers migrate to a real
+ * logistic plugin built against `AnalysisModel`.
+ */
+
 export type ModelKind = "logistic" | "linear" | "ordinal" | "time-to-event";
 
 export interface ModelDefinition {

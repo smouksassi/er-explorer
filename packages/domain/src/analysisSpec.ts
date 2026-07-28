@@ -3,10 +3,13 @@
  *
  * Which values are scientifically valid depends on the selected
  * {@link Endpoint}(s)' {@link EndpointKind} (e.g. `"logistic"` for binary
- * endpoints, `"cox"` for time-to-event endpoints). `packages/domain` does
- * not enforce this pairing itself - it contains no business logic - but
- * records enough information that a validating layer elsewhere in the
- * system can.
+ * endpoints, `"cox"` or `"kaplan-meier"` for time-to-event endpoints).
+ * `"clinical-utility"` covers a Clinical Utility Index-style composite
+ * decision score rather than a single-endpoint regression model.
+ * `packages/domain` does not enforce this pairing itself - it contains no
+ * business logic - but records enough information that a validating layer
+ * elsewhere in the system can. This is also the shared vocabulary
+ * `packages/analysis`'s plugin `ModelRegistry` is keyed against.
  */
 export type ModelFamily =
   | "logistic"
@@ -14,7 +17,9 @@ export type ModelFamily =
   | "ordinal-logistic"
   | "poisson"
   | "cox"
+  | "kaplan-meier"
   | "emax"
+  | "clinical-utility"
   | "custom";
 
 /**

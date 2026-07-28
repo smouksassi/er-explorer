@@ -1,4 +1,4 @@
-import type { ModelDefinition } from "@er-explorer/statistical-engine";
+import type { ModelDefinition } from "@er-explorer/analysis";
 import type { VisualizationSpec } from "@er-explorer/visualization-engine";
 
 /**

@@ -1,8 +1,8 @@
 {
-  "name": "@er-explorer/session-engine",
+  "name": "@er-explorer/analysis",
   "version": "0.0.1",
   "private": false,
-  "description": "Session engine (reproducibility engine) for ER Explorer: the versioned, checksummed .erx session file format.",
+  "description": "Analysis engine for ER Explorer: the AnalysisModel/PredictionSurface/Diagnostic/ConfidenceInterval/ModelRegistry plugin architecture. Statistics are an implementation detail of future model plugins (Logistic, Linear, Emax, Ordinal, Kaplan-Meier, Cox, Clinical Utility), not of this package.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -17,14 +17,12 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "@er-explorer/domain": "workspace:*",
-    "@er-explorer/analysis": "workspace:*",
-    "@er-explorer/visualization-engine": "workspace:*"
+    "@er-explorer/domain": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^2.1.8"
   },
   "files": ["dist"],
-  "keywords": ["er-explorer", "session", "reproducibility", "erx"],
+  "keywords": ["er-explorer", "analysis", "statistical", "exposure-response", "plugins"],
   "license": "MIT"
 }

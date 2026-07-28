@@ -6,7 +6,7 @@ Long analysis views are generated lazily.
 Separate:
 - Domain (scientific domain model: interfaces and types only)
 - Data (dataset loading, type inference, lazy analysis views)
-- Statistical Engine
+- Analysis (model plugin architecture: registry, prediction, diagnostics, CI)
 - Visualization Engine
 - Session Engine
 
@@ -25,6 +25,20 @@ exposes queries (`queryLongView`, `queryWideView`) that return a lazy
 `AnalysisView`: long/derived rows for any number of exposure metrics,
 endpoints, and covariates at once are generated on iteration, not
 precomputed or copied from the canonical wide dataset.
+
+`packages/analysis` (formerly `packages/statistical-engine`) defines the
+model plugin architecture: `AnalysisModel` is the contract every
+exposure-response model implements (fit / predict / diagnose /
+confidenceInterval), `PredictionSurface` and `ConfidenceInterval` are how a
+fitted model is queried, `Diagnostic` is how it reports its health, and
+`ModelRegistry` is how plugins are discovered by `@er-explorer/domain`
+`ModelFamily` (logistic, linear, emax, ordinal-logistic, cox,
+kaplan-meier, clinical-utility, ...). Statistics are an implementation
+detail of a future plugin per family - this package ships no concrete
+model. Its `legacyStatistics.ts` preserves the original logistic
+implementation unchanged, purely for backward compatibility with
+`apps/demo`, `packages/visualization-engine`, and `packages/session-engine`
+until they migrate to the plugin architecture.
 
 Everything revolves around:
 StudyDataset → Question → AnalysisSpec → Prediction → Visualization → Decision
