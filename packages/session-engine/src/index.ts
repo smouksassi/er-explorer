@@ -1,84 +1,79 @@
-import type { ModelDefinition } from "@er-explorer/statistical-engine";
-import type { VisualizationSpec } from "@er-explorer/visualization-engine";
-
-export interface SessionMetadata {
-  createdAt: string;
-  createdBy: string;
-  version: string;
-}
-
-export interface SessionState {
-  datasetId: string;
-  model: ModelDefinition;
-  visualization: VisualizationSpec;
-  filters: Record<string, unknown>;
-  settings: Record<string, unknown>;
-  metadata: SessionMetadata;
-}
-
-export const createSessionMetadata = (createdBy: string, version: string): SessionMetadata => ({
-  createdAt: new Date().toISOString(),
-  createdBy,
-  version
-});
-
-export const createSessionState = (
-  datasetId: string,
-  model: ModelDefinition,
-  visualization: VisualizationSpec,
-  filters: Record<string, unknown> = {},
-  settings: Record<string, unknown> = {},
-  metadata?: SessionMetadata
-): SessionState => ({
-  datasetId,
-  model,
-  visualization,
-  filters,
-  settings,
-  metadata: metadata ?? createSessionMetadata("unknown", "0.0.1")
-});
-
-/* ---------------------------------------------------------------------- *
- * Session file (de)serialization
+/**
+ * `@er-explorer/session-engine` - the reproducibility engine for ER
+ * Explorer.
  *
- * ADR-0004: every analysis is reproduced via session files. A session file
- * is just the JSON serialization of a SessionState - the dataset id, model
- * definition, active filters, CI/bootstrap settings (including the
- * bootstrap seed, so a bootstrap CI can be regenerated identically), the
- * visualization spec, and metadata about when/by whom it was created.
- * ---------------------------------------------------------------------- */
+ * Implements ADR-0004 ("every analysis is reproduced via session files")
+ * and `docs/REPRODUCIBILITY.md`: everything in ER Explorer must be
+ * serializable, and a saved `.erx` session file must be enough, on its
+ * own, to reopen the exact analysis it was saved from.
+ *
+ * The core artifact is {@link SessionFile} (see `sessionFile.ts`) - a
+ * versioned, checksummed, UUID-identified document embedding a full
+ * `@er-explorer/domain` `Workspace` plus session-only concerns (active
+ * `Selection`s, `Theme`, `PanelLayout`, `History`). Around it:
+ *
+ * - `serialize.ts` / `deserialize.ts` - the Serializer and Deserializer,
+ *   turning a SessionFile to and from `.erx` (JSON) text.
+ * - `version.ts` / `migrations.ts` - the Version and Migration machinery
+ *   that lets old `.erx` files stay loadable across future format changes.
+ * - `checksum.ts` - deterministic, dependency-free integrity checksums.
+ * - `uuid.ts` - dependency-free UUID v4 generation.
+ * - `operations.ts` - small, pure, immutable helpers for updating a
+ *   SessionFile (append history, change selection/active analysis) while
+ *   keeping its checksum in sync.
+ *
+ * This package contains no statistical computation and no rendering/UI
+ * code (no React, no D3) - only the reproducibility engine itself.
+ *
+ * `legacySession.ts` preserves the original, pre-domain-model session
+ * shape (`SessionState`) unchanged, since `apps/demo` already depends on
+ * it; new code should use `SessionFile` instead.
+ */
 
-export class InvalidSessionFileError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "InvalidSessionFileError";
-  }
-}
+export {
+  type SessionMetadata,
+  type SessionState,
+  createSessionMetadata,
+  createSessionState,
+  InvalidSessionFileError,
+  serializeSession,
+  parseSession
+} from "./legacySession";
 
-export function serializeSession(state: SessionState, pretty = true): string {
-  return JSON.stringify(state, null, pretty ? 2 : undefined);
-}
+export { createUuidV4, isUuid } from "./uuid";
 
-/** Parse and lightly validate a session file. Throws InvalidSessionFileError on malformed input. */
-export function parseSession(json: string): SessionState {
-  let data: unknown;
-  try {
-    data = JSON.parse(json);
-  } catch (err) {
-    throw new InvalidSessionFileError(`Session file is not valid JSON: ${(err as Error).message}`);
-  }
-  if (!data || typeof data !== "object") {
-    throw new InvalidSessionFileError("Session file must contain a JSON object");
-  }
-  const record = data as Record<string, unknown>;
-  const requiredKeys: Array<keyof SessionState> = ["datasetId", "model", "visualization", "filters", "settings", "metadata"];
-  for (const key of requiredKeys) {
-    if (!(key in record)) {
-      throw new InvalidSessionFileError(`Session file is missing required field "${key}"`);
-    }
-  }
-  if (typeof record.datasetId !== "string") {
-    throw new InvalidSessionFileError('Session file field "datasetId" must be a string');
-  }
-  return record as unknown as SessionState;
-}
+export { type ChecksumAlgorithm, CHECKSUM_ALGORITHM, fnv1a64, canonicalize, computeChecksum, checksumMatches } from "./checksum";
+
+export { type SessionFormatVersion, SESSION_FORMAT_VERSION, MINIMUM_SUPPORTED_SESSION_FORMAT_VERSION } from "./version";
+
+export {
+  type SessionMigration,
+  UnsupportedSessionVersionError,
+  registerSessionMigration,
+  clearSessionMigrations,
+  migrateSessionData
+} from "./migrations";
+
+export { type ThemeMode, type Theme, DEFAULT_THEME } from "./theme";
+
+export { type PanelState, type PanelLayout, DEFAULT_PANEL_LAYOUT } from "./panels";
+
+export { type HistoryActionKind, type HistoryEntry } from "./history";
+
+export { type SessionSelections } from "./selections";
+
+export {
+  SESSION_FILE_KIND,
+  SESSION_FILE_EXTENSION,
+  type SessionFile,
+  type CreateSessionFileInput,
+  type ChecksummedSessionFile,
+  withoutChecksum,
+  createSessionFile
+} from "./sessionFile";
+
+export { serializeSessionFile } from "./serialize";
+
+export { type DeserializeSessionResult, SessionFileParseError, deserializeSessionFile } from "./deserialize";
+
+export { type HistoryEntryInput, appendHistoryEntry, setSelection, setActiveAnalysis } from "./operations";

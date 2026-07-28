@@ -57,12 +57,19 @@ importers:
 
   packages/session-engine:
     dependencies:
+      '@er-explorer/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@er-explorer/statistical-engine':
         specifier: workspace:*
         version: link:../statistical-engine
       '@er-explorer/visualization-engine':
         specifier: workspace:*
         version: link:../visualization-engine
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@20.19.43)
 
   packages/statistical-engine: {}
 

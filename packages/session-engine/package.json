@@ -2,7 +2,7 @@
   "name": "@er-explorer/session-engine",
   "version": "0.0.1",
   "private": false,
-  "description": "Session engine for ER Explorer to capture reproducible analysis state.",
+  "description": "Session engine (reproducibility engine) for ER Explorer: the versioned, checksummed .erx session file format.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -10,15 +10,21 @@
     "require": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm typecheck && vitest run",
     "lint": "eslint . --ext .ts",
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@er-explorer/domain": "workspace:*",
     "@er-explorer/statistical-engine": "workspace:*",
     "@er-explorer/visualization-engine": "workspace:*"
   },
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  },
   "files": ["dist"],
-  "keywords": ["er-explorer", "session", "reproducibility"],
+  "keywords": ["er-explorer", "session", "reproducibility", "erx"],
   "license": "MIT"
 }
