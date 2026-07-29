@@ -91,6 +91,16 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@20.19.43)
 
+  packages/renderer:
+    dependencies:
+      '@er-explorer/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@20.19.43)
+
   packages/session-engine:
     dependencies:
       '@er-explorer/analysis':
