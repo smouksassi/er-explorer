@@ -346,12 +346,90 @@ logistic, continuous rating-scale via linear/OLS):
 None of this changes the Phase 0-3 plan (Axis/Grid/Scatter/Fit/
 ConfidenceRibbon/ObservedStat/marker-layout are needed regardless of endpoint
 type), but it's exactly the kind of thing worth sanity-checking the generic
-shapes against *before* they're load-bearing. If there are specific approved-
-drug examples (survival endpoints, ordinal scales, count/rate endpoints,
-multi-covariate displays) worth checking the proposed shapes against, that
-would directly sharpen `CurveSample`/`ObservedStatBin`/the `Distribution`
-strategy interfaces before Phase 1 locks them in - happy to work through
-specific examples if useful.
+shapes against *before* they're load-bearing.
+
+### Worked example: Kaplan-Meier survival, split by exposure tertile
+
+A real example (KM curves split by AUC/Cmax tertile, faceted by exposure
+metric, with a number-at-risk table, censoring ticks, per-group median-
+event-time boxes, and a CI band) confirms the vocabulary holds up, with one
+concrete refinement:
+
+- **Curves are step functions, not smooth lines.** This doesn't change
+  `CurveSample`'s shape at all (still `exposure`/`estimate`/`lower`/`upper` -
+  "time" instead of "exposure" is just a label, not a structural change).
+  It changes *how* `Fit`/`ConfidenceRibbon` interpolate between points.
+  Conclusion: give both a pluggable `CurveStyle` (`SmoothStyle` |
+  `StepStyle`), the same "shared data, swappable draw strategy" pattern
+  `Distribution` already uses for Boxplot/Violin/Lineranges - this should be
+  designed into `Fit`/`ConfidenceRibbon` from Phase 2, not bolted on later.
+- **Censoring ticks and per-group "Median Event Time" boxes** are both
+  already-generalized cases of the marker system (§5/§6): a censoring tick is
+  a marker with no label; a median-event-time box is the same
+  center/CI-style marker as `ObservedStat`, just anchored to a fixed
+  corner/edge instead of a specific x-position. Neither needs a new
+  mechanism - at most a placement-strategy option on an existing marker.
+- **The number-at-risk table is not a Layer, and doesn't need to be.** It's a
+  separate tabular panel stacked below the plot, sharing the same x-scale -
+  structurally identical to a pattern this codebase already has today: the
+  "exposure distribution by dose" boxplot strip stacked below the scatter
+  panel, sharing its x-axis. No new renderer concept required; it's "compose
+  two renderable things that agree on `xDomain`," same as today.
+
+Kaplan-Meier/Cox support itself (an `AnalysisModel` plugin, per ADR-0008) is
+not part of this migration's scope - no such plugin exists yet. This is
+purely a vocabulary stress-test, done now because it's cheap to fix before
+Phase 1/2 and expensive after.
+
+### Worked example: multi-panel quartile split with a reference arm
+
+A second real example (six panels - AUC/Cmin/Cmax at two dosing timepoints -
+each showing Q1-Q4 exposure-quartile survival curves plus a fixed "SoC"
+(Standard of Care/control) reference curve) validates three more points,
+each already true of the design rather than requiring a change:
+
+- **A reference/control arm (placebo, SoC) is just another `Fit` layer
+  instance, not a special renderer concept.** This codebase already treats
+  Placebo this way at the data-preparation layer today (excluded from
+  quantile-split bins, shown as its own always-present row) - SoC here is
+  the identical pattern applied to a survival curve. The renderer doesn't
+  need to know a curve is "the control arm" versus "an exposure quartile";
+  that meaning lives entirely in how the caller prepares and colors its
+  `Fit` instances.
+- **Grouping/stratification must stay fully caller-defined - confirmed by
+  "we might want to split by risk factor like age or sex."** The renderer's
+  multi-curve overlay (color+style per `Fit` instance) already makes no
+  assumption about what a "group" is (dose, exposure quartile, sex, age
+  band, SoC vs. treated) - it only knows "here are N curves, each with a
+  color." Worth stating explicitly as a constraint to preserve: nothing in
+  `Fit`/`ObservedStat` should ever special-case "this is an exposure group."
+- **Six-panel faceting is the same "one Renderer output per facet" pattern
+  as today's two-panel AUC/Cmax columns, just wider.** No new concept -
+  confirms the existing per-metric-column composition scales past 2-3
+  panels without needing anything new from the renderer itself.
+
+### Worked example: two-way facet (sex x split variable), risk table grouped to match the curves
+
+A third example (Female/Male rows x age/AUC/Cmax columns, each panel
+tertile-split on *that column's own* variable) sharpens one point left too
+loose above: the number-at-risk table isn't merely "a panel that shares the
+plot's x-scale" - its rows are grouped and color-matched **identically to
+the curves above it** (one n.event/n.risk row-pair per tertile, in that
+tertile's own color), and the example's fuller row set
+(`n.risk, pct.risk, n.event, cum.n.event, n.censor`) shows the row set
+itself needs to be an open list of named per-group, per-time-bin summaries,
+not a fixed pair. Conclusion (for whenever this is actually built, not now):
+whatever descriptor the caller uses to construct each `Fit` instance
+(group id, color, label) needs to be the *same* descriptor a future risk-
+table component keys its rows on - "shares xDomain" was necessary but not
+sufficient; "shares the group/color list" is the fuller requirement. Noted
+for later - KM/risk-table support stays out of scope for the current
+7-phase migration until there's an actual survival-model plugin to drive it.
+
+If there are further approved-drug examples (ordinal scales, count/rate
+endpoints, multi-covariate displays) worth checking the proposed shapes
+against, that would keep sharpening `CurveSample`/`ObservedStatBin`/the
+`Distribution`/`Fit` strategy interfaces - happy to work through more.
 
 ## 8. Migration plan
 
