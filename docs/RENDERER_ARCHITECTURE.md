@@ -426,6 +426,57 @@ sufficient; "shares the group/color list" is the fuller requirement. Noted
 for later - KM/risk-table support stays out of scope for the current
 7-phase migration until there's an actual survival-model plugin to drive it.
 
+### Worked example: arbitrary/multiple grouping variables - and a live bug this design must not repeat
+
+The user's own R function (`ggresponseexpdist`) already supports an
+additional risk-factor split beyond dose/exposure-metric/endpoint -
+`mean_obs_byexptile_group = "SEX"` - faceting `Endpoint x SEX x expname`. It
+has a live, acknowledged bug: the response-curve/mean-by-exposure-tile
+computation correctly splits by SEX, but the distribution (boxplot) panel
+does not - it's computed once and shared across the SEX facets instead of
+independently per facet. This isn't SEX-specific: the same gap would appear
+for STUDY, race, renal-function category, or any other covariate in the
+source data, including more than one such variable at once (e.g. SEX x
+STUDY).
+
+Root cause, and why the redesign must not reproduce it: in the current
+monolith, dose/exposure-metric/endpoint are hard-coded, named facet
+dimensions threaded positionally through the stat-computation code. Adding a
+grouping dimension means finding *every* place that iterates "by dose" and
+remembering to also iterate "by dose x sex" - miss one, and you get exactly
+this bug (curve split correctly, distribution silently pooled).
+
+Proposed fix, entirely at the computation layer (not the renderer, which
+only ever receives arrays and doesn't know what produced them):
+
+- Replace the fixed positional `(dose, exposureMetric, endpoint)` tuple
+  with a generic, open key: `type GroupKey = Record<string, string | number>`
+  - e.g. `{ dose: "2400 mg", exposureMetric: "AUC", endpoint: "ICGI", sex: "F" }`.
+  Any number of dimensions, any names, caller-defined - no dimension is
+  privileged or hard-coded.
+- One shared enumeration of `GroupKey[]` (full cartesian product, or a
+  caller-supplied subset - e.g. excluding SoC/placebo from quantile splits,
+  per the earlier reference-arm example) drives *every* per-group
+  computation that eventually feeds the renderer: `ObservedStatBin`
+  construction, Distribution's per-group bins (boxplot/violin/lineranges all
+  group identically), and curve/projection construction.
+- Concretely, this means one computation entry point takes the full
+  `GroupKey[]` and produces one bin/curve per key for each output type -
+  making it structurally impossible for the curve to be grouped one way and
+  the distribution to be grouped a coarser way by omission, because both
+  are required to draw from the same shared enumeration rather than each
+  independently deciding which dimensions to honor.
+
+This is entirely a `packages/analysis`/caller-side fix - it changes nothing
+about the renderer's Phase 0-3 plan (`ObservedStatBin[]`/Distribution bins
+are still just arrays as far as any Layer is concerned), but it does mean
+Phase 6's Distribution-layer work, and whatever eventually builds the
+stat-computation helpers feeding `ObservedStat`/`Distribution`, should be
+built against `GroupKey` from the start rather than a fixed dose/endpoint
+tuple - so a future SEX/STUDY/whatever split is "pass a richer `GroupKey[]`"
+rather than "hunt down every hard-coded grouping loop," which is the exact
+class of bug being fixed here.
+
 If there are further approved-drug examples (ordinal scales, count/rate
 endpoints, multi-covariate displays) worth checking the proposed shapes
 against, that would keep sharpening `CurveSample`/`ObservedStatBin`/the
@@ -523,6 +574,15 @@ already-tracked model-plugin migration (ADR-0007/8), not this one.
 - **Layer ordering grammar**: resolved by design (§6) - a fixed per-kind
   rank table owned by the `Renderer`, not the caller, with array position
   only as a same-rank tiebreak. No outstanding user input needed here.
+- **Grouping/faceting variables**: generalized as an open `GroupKey`
+  (`Record<string, string | number>`), not a hard-coded dose/exposure-
+  metric/endpoint tuple (§7, "arbitrary/multiple grouping variables").
+  Every per-group computation feeding the renderer (`ObservedStatBin`,
+  Distribution bins, curves) must be driven from one shared `GroupKey[]`
+  enumeration, so adding a new split (SEX, STUDY, or more than one at once)
+  can never silently miss a downstream computation the way the current R
+  function's distribution panel does today. **Confirmed** - directly
+  motivated by a real, currently-open bug in the user's own code.
 
 ## 11. Still open
 
