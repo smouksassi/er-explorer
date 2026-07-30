@@ -27,6 +27,11 @@ export interface FillStyle {
   stroke?: string;
   strokeWidth?: number;
   rx?: number;
+  /** Stroke dash pattern (e.g. `"7 5"`), relevant only when `stroke` is set - used by `Fit`'s
+   * dashed default curve style. Unused by Phase 1's Axis/Grid/Scatter. */
+  dash?: string;
+  lineCap?: "butt" | "round" | "square";
+  lineJoin?: "miter" | "round" | "bevel";
 }
 
 export interface TextStyle {

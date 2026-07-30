@@ -61,7 +61,10 @@ export class SvgDrawTarget implements DrawTarget {
         fill: style.fill,
         opacity: style.opacity,
         stroke: style.stroke ?? "none",
-        "stroke-width": style.strokeWidth
+        "stroke-width": style.strokeWidth,
+        "stroke-dasharray": style.dash,
+        "stroke-linecap": style.lineCap,
+        "stroke-linejoin": style.lineJoin
       })
     );
   }

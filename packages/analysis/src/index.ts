@@ -25,9 +25,14 @@
  *   "Bootstrap" responsibilities via one open-ended `method`.
  * - `modelRegistry.ts` - `ModelRegistry`, the "Model Registry"
  *   responsibility: register/look up/list plugins by id or family.
+ * - `sampleCurve.ts` - `sampleCurve()`, a small non-computational helper that merges a
+ *   `PredictionSurface`'s estimates with a `confidenceInterval()` call's output into the
+ *   `PredictionPoint[]` shape `@er-explorer/renderer`'s `CurveSample` aliases (ADR-0009). This
+ *   is alignment, not statistics - it never fits a model or derives a CI itself.
  *
  * No React, no D3, no UI, and - for this new surface - no implementation:
- * every export above is a type or interface.
+ * every export above is a type or interface (except `sampleCurve`, which is a pure
+ * data-reconciliation function, not a statistical one).
  *
  * `legacyStatistics.ts` preserves the original concrete logistic
  * implementation (Newton-Raphson IRLS fitting, Wald/bootstrap CIs,
@@ -58,6 +63,8 @@ export {
 } from "./confidenceInterval";
 
 export { type ModelRegistry } from "./modelRegistry";
+
+export { type SampleCurveOptions, sampleCurve } from "./sampleCurve";
 
 export {
   type ModelKind,
