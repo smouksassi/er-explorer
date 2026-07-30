@@ -54,7 +54,8 @@ export class ScatterLayer implements Layer {
           opacity: p.opacity ?? defaultOpacity,
           stroke: p.stroke,
           strokeWidth: p.strokeWidth,
-          attrs: p.data
+          attrs: p.data,
+          title: p.label
         });
         if (registerHitRegions) {
           interactions?.add({

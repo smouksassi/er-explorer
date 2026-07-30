@@ -9,15 +9,17 @@ export interface ReferenceLineSpec {
    * independent of `label` above and staggered into its own two rows. Omit to hide. */
   valueLabel?: string;
   /**
-   * When present, also pushes a stacked observed-style marker (dot + CI + two label lines) at
-   * this line's x position - e.g. a fitted curve's own value + CI at this cut point
-   * (`"Fit 0.74"` / `"[0.70-0.78]"`), ported from the current renderer's `showReferenceFit`.
-   * Laid out jointly with any `ObservedStat` markers competing for the same x-region, since both
-   * go through the same shared marker collector - not routed through this layer's own
-   * label-staggering (see the class doc below). The caller computes the value itself (e.g. via
-   * `interpolateCurveSample`); `AnnotationLayer` never samples a curve on its own.
+   * Zero or more stacked observed-style markers (dot + CI + two label lines) at this line's x
+   * position - e.g. each overlaid curve's own fitted value + CI at this cut point
+   * (`"Fit 0.74"` / `"[0.70-0.78]"`), ported from the current renderer's `showReferenceFit`. One
+   * entry per overlaid curve when several are compared at once ("Compare endpoints" - each in
+   * its own color), not just one. Laid out jointly with any `ObservedStat` markers competing for
+   * the same x-region, since both go through the same shared marker collector - not routed
+   * through this layer's own label-staggering (see the class doc below). The caller computes
+   * each value itself (e.g. via `interpolateCurveSample`); `AnnotationLayer` never samples a
+   * curve on its own.
    */
-  markerValue?: { estimate: number; lower: number; upper: number; lines?: [string, string]; color?: string };
+  markerValues?: Array<{ estimate: number; lower: number; upper: number; lines?: [string, string]; color?: string }>;
 }
 
 export interface AnnotationLayerOptions {
@@ -101,11 +103,10 @@ export class AnnotationLayer implements Layer {
           bottomRowRightEdge[bottomRow] = xx + halfWidth;
         }
 
-        if (ref.markerValue) {
-          const mv = ref.markerValue;
+        (ref.markerValues ?? []).forEach((mv, i) => {
           const [line1, line2] = mv.lines ?? [`Fit ${mv.estimate.toFixed(2)}`, `[${mv.lower.toFixed(2)}-${mv.upper.toFixed(2)}]`];
           ctx.markers.add({
-            id: `${this.id}:marker:${ref.value}`,
+            id: `${this.id}:marker:${ref.value}:${i}`,
             ownerLayerId: this.id,
             x: xx,
             y: yScale(mv.estimate),
@@ -115,7 +116,7 @@ export class AnnotationLayer implements Layer {
             lines: [line1, line2],
             kind: "reference-fit"
           });
-        }
+        });
       }
     });
   }

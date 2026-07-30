@@ -45,7 +45,7 @@ describe("AnnotationLayer", () => {
     expect(svg).toContain("50.0");
   });
 
-  it("does not push a marker unless markerValue is explicitly supplied", () => {
+  it("does not push a marker unless markerValues is explicitly supplied", () => {
     const renderer = new SVGRenderer();
     const result = renderer.render({
       width: 600,
@@ -67,12 +67,39 @@ describe("AnnotationLayer", () => {
       layers: [
         new AnnotationLayer({
           id: "refs",
-          lines: [{ value: 50, label: "Median", markerValue: { estimate: 0.74, lower: 0.65, upper: 0.82 } }]
+          lines: [{ value: 50, label: "Median", markerValues: [{ estimate: 0.74, lower: 0.65, upper: 0.82 }] }]
         })
       ]
     });
     expect(result.metadata.markers).toHaveLength(1);
     expect(result.metadata.markers[0].lines).toEqual(["Fit 0.74", "[0.65-0.82]"]);
+  });
+
+  it("pushes one marker per entry in markerValues, each in its own color (Compare Endpoints)", () => {
+    const renderer = new SVGRenderer();
+    const result = renderer.render({
+      width: 600,
+      height: 300,
+      xDomain: [0, 100],
+      yDomain: [0, 1],
+      layers: [
+        new AnnotationLayer({
+          id: "refs",
+          lines: [
+            {
+              value: 50,
+              label: "Median",
+              markerValues: [
+                { estimate: 0.3, lower: 0.2, upper: 0.4, color: "#4C72B0" },
+                { estimate: 0.7, lower: 0.6, upper: 0.8, color: "#DDAA33" }
+              ]
+            }
+          ]
+        })
+      ]
+    });
+    expect(result.metadata.markers).toHaveLength(2);
+    expect(new Set(result.metadata.markers.map((m) => m.color))).toEqual(new Set(["#4C72B0", "#DDAA33"]));
   });
 });
 
@@ -94,7 +121,7 @@ describe("cross-layer marker collision (ObservedStat + Annotation's markerValue)
           // Same x as the observed bin, and a similar y-value/CI, so both markers naturally
           // want to occupy the same vertical space - this is only resolvable if both Layers'
           // markers are collected into one shared pool and laid out together.
-          lines: [{ value: 50, label: "Median", markerValue: { estimate: 0.72, lower: 0.62, upper: 0.82 } }]
+          lines: [{ value: 50, label: "Median", markerValues: [{ estimate: 0.72, lower: 0.62, upper: 0.82 }] }]
         })
       ]
     });

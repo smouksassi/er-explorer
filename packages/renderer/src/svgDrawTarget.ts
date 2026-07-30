@@ -87,18 +87,17 @@ export class SvgDrawTarget implements DrawTarget {
   }
 
   drawCircle(cx: number, cy: number, r: number, style: FillStyle): void {
-    this.current().push(
-      selfClosing("circle", {
-        cx,
-        cy,
-        r,
-        fill: style.fill,
-        opacity: style.opacity,
-        stroke: style.stroke,
-        "stroke-width": style.strokeWidth,
-        ...style.attrs
-      })
-    );
+    const attrs = {
+      cx,
+      cy,
+      r,
+      fill: style.fill,
+      opacity: style.opacity,
+      stroke: style.stroke,
+      "stroke-width": style.strokeWidth,
+      ...style.attrs
+    };
+    this.current().push(style.title ? tag("circle", attrs, tag("title", {}, esc(style.title))) : selfClosing("circle", attrs));
   }
 
   drawText(x: number, y: number, text: string, style: TextStyle): void {

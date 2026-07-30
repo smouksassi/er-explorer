@@ -39,6 +39,13 @@ export interface FillStyle {
    * replaces that querying with `RenderResult.metadata.hitRegions` instead.
    */
   attrs?: Record<string, string | number>;
+  /**
+   * Optional native SVG `<title>` child - a browser-native tooltip fallback, independent of any
+   * custom JS tooltip a caller might also attach. Needed for views with no custom interactivity
+   * at all (e.g. "Compare Endpoints", which deliberately skips hover/brush wiring - see
+   * `apps/demo`), where this is the only hover feedback a scatter point gets.
+   */
+  title?: string;
 }
 
 export interface TextStyle {

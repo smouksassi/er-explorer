@@ -11,7 +11,6 @@ import {
 } from "@er-explorer/analysis";
 import { linearAnalysisModel, meanConfidenceInterval, type LinearParams } from "@er-explorer/model-linear";
 import {
-  renderLogisticScatterChart,
   renderDistributionChart,
   buildAsymRidgePath,
   scaleLinear,
@@ -27,7 +26,6 @@ import {
   type DistributionMode,
   type DistributionSplitAnnotation,
   type ObservedResponseBin,
-  type ExtraCurve,
   type ReferenceLine
 } from "@er-explorer/visualization-engine";
 import {
@@ -425,13 +423,15 @@ function renderContinuousScatterViaRenderer(
       if (state.showSplitValue) spec.valueLabel = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
       if (state.showReferenceFit) {
         const at = interpolateCurveSample(curveSamples, ref.value);
-        spec.markerValue = {
-          estimate: at.estimate,
-          lower: at.lower,
-          upper: at.upper,
-          lines: [`Fit ${at.estimate.toFixed(1)}`, `[${at.lower.toFixed(1)}-${at.upper.toFixed(1)}]`],
-          color: "#94a3b8"
-        };
+        spec.markerValues = [
+          {
+            estimate: at.estimate,
+            lower: at.lower,
+            upper: at.upper,
+            lines: [`Fit ${at.estimate.toFixed(1)}`, `[${at.lower.toFixed(1)}-${at.upper.toFixed(1)}]`],
+            color: "#94a3b8"
+          }
+        ];
       }
       return spec;
     });
@@ -450,6 +450,168 @@ function renderContinuousScatterViaRenderer(
           n: b.n,
           primaryLabel: b.mean.toFixed(1),
           secondaryLabel: `n=${b.n}`,
+          color: b.color
+        }))
+      })
+    );
+  }
+
+  layers.push(new ScatterLayer({ id: "points", points: scatterPoints }));
+
+  const result = new SVGRenderer().render({ width, height, xDomain: [0, xMax], yDomain, layers });
+
+  return {
+    content: result.content as string,
+    metadata: {
+      plot: {
+        left: result.metadata.plotRect.x,
+        top: result.metadata.plotRect.y,
+        width: result.metadata.plotRect.width,
+        height: result.metadata.plotRect.height
+      },
+      xScale: { domain: [...result.metadata.xScale.domain], range: [...result.metadata.xScale.range] },
+      yScale: { domain: [...result.metadata.yScale.domain], range: [...result.metadata.yScale.range] }
+    }
+  };
+}
+
+interface BinaryCurveOverlay {
+  curve: PredictionResult;
+  /** Defaults to the neutral grey/dashed styling (matches the old renderer's single-endpoint
+   * default) when omitted - only "Compare endpoints" ever supplies this, one color per endpoint. */
+  color?: string;
+  dash?: string;
+  projected?: ProjectedGroup[];
+}
+
+/**
+ * Renders a binary (responder/non-responder) exposure-response scatter chart via
+ * `@er-explorer/renderer` - the Phase 5 cutover off `packages/visualization-engine`'s
+ * `renderLogisticScatterChart`. Reproduces that function's visual output using
+ * Grid/Axis/ConfidenceRibbon/Fit/ObservedStat/Annotation/Scatter layers plus
+ * `DoseProjectionLayer`, and generalizes to one or more overlaid curves via `curves` - a
+ * single-element array reproduces the old plain single-endpoint chart, a multi-element array
+ * reproduces the old `extraCurves`-based "Compare endpoints" overlay, with `curves[0]` as the
+ * primary curve. Each curve gets its own dose-click projection when it supplies `projected`, so a
+ * dose click highlights every overlaid endpoint's curve at once, not just the primary one.
+ */
+function renderBinaryScatterOverlay(
+  points: ScatterPoint[],
+  curves: BinaryCurveOverlay[],
+  groupColors: Record<string, string>,
+  xMax: number,
+  xAxisLabel: string,
+  yAxisLabel: string,
+  width: number,
+  referenceLines: ReferenceLine[],
+  observedBins: ObservedResponseBin[]
+): { content: string; metadata: ScatterMeta } {
+  const height = 360;
+  const yDomain: [number, number] = [-0.18, 1.18];
+  const hasExtras = curves.length > 1;
+  const curveSamplesFor = curves.map((c) => toCurveSamples(c.curve));
+
+  const scatterPoints: ScatterPointDatum[] = points.map((p) => ({
+    id: p.id,
+    x: p.exposure,
+    y: p.displayY ?? p.response,
+    color: groupColors[String(p.groupId)] ?? "#64748b",
+    radius: p.selected ? 4.2 : 3.1,
+    opacity: p.selected ? 0.84 : 0.14,
+    stroke: p.selected ? "#ffffff" : undefined,
+    strokeWidth: p.selected ? 1 : undefined,
+    label: p.label,
+    data: { "data-id": p.id, "data-exposure": p.exposure, "data-response": p.response, "data-group": String(p.groupId) }
+  }));
+
+  const layers: RendererLayer[] = [
+    new GridLayer({ id: "grid", yTickValues: [0, 1] }),
+    new AxisLayer({ id: "axis-x", orientation: "x", label: xAxisLabel }),
+    new AxisLayer({ id: "axis-y", orientation: "y", label: yAxisLabel, tickValues: [0, 1], format: (v) => String(v) })
+  ];
+
+  curves.forEach((c, i) => {
+    const samples = curveSamplesFor[i];
+    layers.push(new ConfidenceRibbonLayer({ id: `band-${i}`, samples, color: c.color, opacity: i === 0 ? 0.18 : 0.14 }));
+    layers.push(new FitLayer({ id: `curve-${i}`, samples, color: c.color, dash: c.dash }));
+
+    const projected = c.projected ?? [];
+    if (!projected.length) return;
+
+    const rangeSamplesFor = (p: ProjectedGroup) => {
+      const lo = p.min ?? p.whiskerLow;
+      const hi = p.max ?? p.whiskerHigh;
+      return samples.filter((s) => s.exposure >= lo && s.exposure <= hi);
+    };
+    const coreSamplesFor = (p: ProjectedGroup) => samples.filter((s) => s.exposure >= p.q1 && s.exposure <= p.q3);
+
+    projected.forEach((p, j) => {
+      layers.push(new ConfidenceRibbonLayer({ id: `proj-band-${i}-${j}`, samples: rangeSamplesFor(p), color: p.color, opacity: 0.1 }));
+      layers.push(new FitLayer({ id: `proj-range-${i}-${j}`, samples: rangeSamplesFor(p), color: p.color, dash: null, strokeWidth: 1.8, opacity: 0.48 }));
+      layers.push(new FitLayer({ id: `proj-core-${i}-${j}`, samples: coreSamplesFor(p), color: p.color, dash: null, strokeWidth: 3.8, opacity: 0.98 }));
+    });
+
+    layers.push(
+      new DoseProjectionLayer({
+        id: `projection-markers-${i}`,
+        curveSamples: samples,
+        groups: projected.map((p) => ({ color: p.color, q1: p.q1, q3: p.q3, median: p.median, min: p.min, max: p.max }))
+      })
+    );
+
+    const observedStats = projected
+      .filter((p): p is ProjectedGroup & { observed: NonNullable<ProjectedGroup["observed"]> } => Boolean(p.observed))
+      .map((p) => ({
+        x: p.median,
+        center: p.observed.proportion,
+        lower: p.observed.ciLower,
+        upper: p.observed.ciUpper,
+        n: p.observed.n,
+        primaryLabel: `${Math.round(p.observed.proportion * 100)}%`,
+        secondaryLabel: `${p.observed.responders}/${p.observed.n}`,
+        color: p.color
+      }));
+    if (observedStats.length) layers.push(new ObservedStatLayer({ id: `projection-observed-${i}`, bins: observedStats }));
+  });
+
+  if (referenceLines.length) {
+    const refSpecs: ReferenceLineSpec[] = referenceLines.map((ref) => {
+      const spec: ReferenceLineSpec = { value: ref.value, label: ref.label };
+      if (state.showSplitValue) spec.valueLabel = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
+      if (state.showReferenceFit) {
+        spec.markerValues = curves.map((c, i) => {
+          const at = interpolateCurveSample(curveSamplesFor[i], ref.value);
+          // The primary curve's fit marker is neutral grey unless other curves are overlaid
+          // (Compare Endpoints), in which case every curve - including the primary - gets its own
+          // color so it's still clear which curve each fit value belongs to. Each extra curve
+          // always uses its own color, matching the old renderer's `showReferenceFit` behavior.
+          const color = i === 0 ? (hasExtras ? c.color ?? "#94a3b8" : "#94a3b8") : c.color ?? "#94a3b8";
+          return {
+            estimate: at.estimate,
+            lower: at.lower,
+            upper: at.upper,
+            lines: [`Fit ${at.estimate.toFixed(2)}`, `[${at.lower.toFixed(2)}-${at.upper.toFixed(2)}]`],
+            color
+          };
+        });
+      }
+      return spec;
+    });
+    layers.push(new AnnotationLayer({ id: "reference-lines", lines: refSpecs }));
+  }
+
+  if (observedBins.length) {
+    layers.push(
+      new ObservedStatLayer({
+        id: "observed-response-bins",
+        bins: observedBins.map((b) => ({
+          x: b.x,
+          center: b.proportion,
+          lower: b.ciLower,
+          upper: b.ciUpper,
+          n: b.n,
+          primaryLabel: `${Math.round(b.proportion * 100)}%`,
+          secondaryLabel: `${b.responders}/${b.n}`,
           color: b.color
         }))
       })
@@ -894,20 +1056,17 @@ function renderScatterPanel(
     const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
     const projected = projectedGroupsFor(groupStats);
 
-    scatterResult = renderLogisticScatterChart({
-      points: state.showPoints ? points : [],
-      curve,
-      projected,
-      groupColors: DOSE_COLORS,
-      xDomain: [0, xMax],
-      referenceLines: computeDisplayReferenceLines(metric),
-      observedBins: computeObservedResponseBins(metric, endpoint),
-      showReferenceFit: state.showReferenceFit,
-      showSplitValue: state.showSplitValue,
+    scatterResult = renderBinaryScatterOverlay(
+      state.showPoints ? points : [],
+      [{ curve, projected }],
+      DOSE_COLORS,
+      xMax,
+      exposureLabel(metric),
+      endpoint.toUpperCase(),
       width,
-      height: 360,
-      options: { title: "Exposure vs response", xAxisLabel: exposureLabel(metric), yAxisLabel: endpoint.toUpperCase(), renderTarget: "svg" }
-    });
+      computeDisplayReferenceLines(metric),
+      computeObservedResponseBins(metric, endpoint)
+    );
   }
 
   const cell = document.createElement("div");
@@ -1103,10 +1262,9 @@ function renderEndpointComparisonRow(metrics: ExposureMetric[], endpoints: Endpo
       return { endpoint, curve, observedBins, projected };
     });
 
-    const [first, ...rest] = fits;
-    if (!first) continue;
+    if (!fits.length) continue;
 
-    const extraCurves: ExtraCurve[] = rest.map((f) => ({
+    const curves: BinaryCurveOverlay[] = fits.map((f) => ({
       curve: f.curve,
       color: ENDPOINT_COLORS[f.endpoint],
       dash: ENDPOINT_DASH[f.endpoint],
@@ -1115,24 +1273,17 @@ function renderEndpointComparisonRow(metrics: ExposureMetric[], endpoints: Endpo
     const allObservedBins = fits.flatMap((f) => f.observedBins);
     const allPoints = state.showPoints ? fits.flatMap((f) => pointsFor(f.endpoint)) : [];
     const allGroupColors = Object.fromEntries(fits.map((f) => [f.endpoint, ENDPOINT_COLORS[f.endpoint]]));
-    const result = renderLogisticScatterChart({
-      points: allPoints,
-      curve: first.curve,
-      projected: first.projected,
-      groupColors: allGroupColors,
-      xDomain: [0, xMax],
-      referenceLines,
-      observedBins: allObservedBins,
-      showReferenceFit: state.showReferenceFit,
-      showSplitValue: state.showSplitValue,
-      curveColor: ENDPOINT_COLORS[first.endpoint],
-      curveDash: ENDPOINT_DASH[first.endpoint],
-      bandColor: ENDPOINT_COLORS[first.endpoint],
-      extraCurves,
+    const result = renderBinaryScatterOverlay(
+      allPoints,
+      curves,
+      allGroupColors,
+      xMax,
+      exposureLabel(metric),
+      "Response",
       width,
-      height: chartHeight,
-      options: { title: "x", xAxisLabel: exposureLabel(metric), yAxisLabel: "Response", renderTarget: "svg" }
-    });
+      referenceLines,
+      allObservedBins
+    );
 
     // Deliberately no attachScatterInteractivity here (unlike the regular grid): its brush-select
     // math resolves a drag rectangle to patient ids via a single endpoint's response value, which
