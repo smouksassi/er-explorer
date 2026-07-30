@@ -172,8 +172,27 @@ scale metadata. Proposed model:
   layout exactly once, after every Layer has run.
 - **Reference lines / split annotations** map to `Annotation`, but currently
   have their own bespoke label-staggering logic, separate from the general
-  marker system. Routing them through the same shared marker collector is a
-  net simplification, not just parity.
+  marker system.
+  **Correction, made during the actual Phase 3 port (docs/DECISIONS.md
+  wasn't wrong about the code existing separately, but this document
+  overstated how much unifying it further):** re-reading the current
+  renderer's `renderReferenceLines` more closely shows it was *already*
+  separate from `layoutMarkers`/`observedMarkers` in the pre-redesign code,
+  not one thing being artificially split into two - a reference line's own
+  name label (top) and value label (bottom) are a two-row, x-only,
+  fixed-anchor stagger, while `ObservedStat`-style markers are an
+  x-clustered, vertically-free-floating dot+CI+label-box stack. These are
+  genuinely different layout problems, and `AnnotationLayer` keeps its own
+  algorithm for them rather than forcing a false unification. What *did*
+  already share the marker stack in the old code - and still does in
+  `AnnotationLayer` - is the opt-in "reference-line fit value" marker
+  (`showReferenceFit`, e.g. `"Fit 0.74 [0.70-0.78]"`): that one goes through
+  the exact same `ctx.markers.add()`/`resolveMarkers()` pool as
+  `ObservedStat`, since the old code already put it in the same
+  `observedMarkers` array. Net effect: one real simplification (the shared
+  marker pool, built in Phase 3) plus one thing this document earlier
+  implied would unify but structurally can't - now resolved rather than left
+  ambiguous.
 - **Multi-curve overlay ("Compare Endpoints")** isn't a gap once Fit/
   ConfidenceRibbon are independent, per-curve layers - "3 endpoints overlaid"
   becomes "3 Fit layers (+ however many ConfidenceRibbon layers) + one shared

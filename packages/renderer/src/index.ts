@@ -18,13 +18,15 @@
  * collectors, `SVGRenderer` with its fixed rank-based paint order) plus the `Axis`/`Grid`/
  * `Scatter` layers.
  *
- * Phase 2 (this file's current contents, additionally): `CurveSample`, the `Fit`/
- * `ConfidenceRibbon` layers, and the pluggable `CurveStyle` (`SmoothStyle`/`StepStyle`) they
- * share - the same "shared data, swappable draw strategy" pattern `Distribution` will use for
- * Boxplot/Violin/Lineranges in Phase 6.
+ * Phase 2: `CurveSample`, the `Fit`/`ConfidenceRibbon` layers, and the pluggable `CurveStyle`
+ * (`SmoothStyle`/`StepStyle`) they share - the same "shared data, swappable draw strategy"
+ * pattern `Distribution` will use for Boxplot/Violin/Lineranges in Phase 6.
  *
- * `ObservedStat`/`Annotation` (Phase 3) and `Distribution` (Phase 6) follow in later phases;
- * `apps/demo` does not consume this package yet (Phase 4+).
+ * Phase 3 (this file's current contents, additionally): the `ObservedStat`/`Annotation` layers,
+ * and the marker-resolution system (`resolveMarkers`/`renderLaidOutMarker`) the Renderer runs
+ * exactly once, after every Layer has rendered, so markers from different Layers never overlap
+ * each other. `Distribution` (Phase 6) follows later; `apps/demo` does not consume this package
+ * yet (Phase 4+).
  */
 
 export type {
@@ -32,6 +34,7 @@ export type {
   DrawTarget,
   FillStyle,
   HitRegion,
+  LaidOutMarker,
   Layer,
   LayerKind,
   LineStyle,
@@ -48,8 +51,10 @@ export { scaleLinear } from "./scale";
 export { tickPositions, formatTickValue } from "./ticks";
 
 export type { CurveSample } from "./curveSample";
+export { interpolateCurveSample } from "./curveSample";
 export { SmoothStyle, StepStyle, buildBandPath } from "./curveStyle";
 export type { CurveStyle } from "./curveStyle";
+export { resolveMarkers, renderLaidOutMarker } from "./markers";
 
 export { SvgDrawTarget } from "./svgDrawTarget";
 export { SVGRenderer } from "./svgRenderer";
@@ -65,6 +70,10 @@ export { FitLayer } from "./layers/fit";
 export type { FitLayerOptions } from "./layers/fit";
 export { ConfidenceRibbonLayer } from "./layers/confidenceRibbon";
 export type { ConfidenceRibbonLayerOptions } from "./layers/confidenceRibbon";
+export { ObservedStatLayer } from "./layers/observedStat";
+export type { ObservedStatBin, ObservedStatLayerOptions } from "./layers/observedStat";
+export { AnnotationLayer } from "./layers/annotation";
+export type { AnnotationLayerOptions, ReferenceLineSpec } from "./layers/annotation";
 
 /** Package identity marker (kept from Phase 0 for continuity). */
 export const RENDERER_PACKAGE_ID = "@er-explorer/renderer" as const;

@@ -1,3 +1,4 @@
+import { resolveMarkers, renderLaidOutMarker } from "./markers";
 import { scaleLinear } from "./scale";
 import { SvgDrawTarget } from "./svgDrawTarget";
 import type { DrawContext, HitRegion, LayerKind, MarkerCandidate, Renderer, RenderInput, RenderResult } from "./types";
@@ -61,12 +62,24 @@ export class SVGRenderer implements Renderer {
 
     for (const { layer } of ordered) layer.render(ctx);
 
+    // Markers are resolved and painted exactly once, after every Layer has rendered - a system
+    // pass that sits above the rank table entirely (docs/RENDERER_ARCHITECTURE.md §5/§6), not
+    // one more rank within it. This is what lets an ObservedStat marker and an Annotation
+    // reference-line's own fit-value marker (or any other Layer's marker) get de-collided
+    // jointly, without either Layer knowing the other exists.
+    const laidOutMarkers = resolveMarkers(markers, plotRect.y, plotRect.y + plotRect.height);
+    if (laidOutMarkers.length) {
+      target.group({ class: "er-observed-markers" }, () => {
+        for (const marker of laidOutMarkers) renderLaidOutMarker(target, marker);
+      });
+    }
+
     const content = `<svg viewBox="0 0 ${input.width} ${input.height}" xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">${target.serialize()}</svg>`;
 
     return {
       outputType: "svg",
       content,
-      metadata: { plotRect, xScale, yScale, markers, hitRegions }
+      metadata: { plotRect, xScale, yScale, markers: laidOutMarkers, hitRegions }
     };
   }
 }

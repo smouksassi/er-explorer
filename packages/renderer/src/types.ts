@@ -46,9 +46,14 @@ export interface TextStyle {
 /**
  * A curve-adjacent marker candidate a Layer wants drawn (an observed-rate readout, a
  * reference-line fit value, a censoring tick, ...) - pushed via `ctx.markers.add()` while a
- * Layer renders. Not yet collision-resolved: Phase 3 ports the marker-layout algorithm that
- * turns these into positioned labels; until then `RenderResult.metadata.markers` is exactly
- * what Layers pushed, in render order, with no overlap avoidance.
+ * Layer renders. All coordinates are pixel space (already run through `ctx.xScale`/`ctx.yScale`
+ * by the pushing Layer), matching `HitRegion`'s convention. `yLow`/`yHigh` are the marker's
+ * error-bar bounds (also pixel space) - omit both for a marker with no CI to show.
+ *
+ * Not yet collision-resolved at push time: the Renderer calls `resolveMarkers()` exactly once,
+ * after every Layer has rendered, turning the full set into `LaidOutMarker[]` - this is what
+ * preserves whole-chart collision avoidance without any Layer needing to know about any other
+ * Layer's markers.
  */
 export interface MarkerCandidate {
   id: string;
@@ -60,6 +65,12 @@ export interface MarkerCandidate {
   color: string;
   lines: string[];
   kind: string;
+}
+
+/** A `MarkerCandidate` after collision-avoidant layout - `labelTop` is the resolved pixel y for
+ * the top of its label box. This is the shape `RenderResult.metadata.markers` carries. */
+export interface LaidOutMarker extends MarkerCandidate {
+  labelTop: number;
 }
 
 export interface HitRegion {
@@ -132,7 +143,7 @@ export interface RenderResult {
     plotRect: PixelRect;
     xScale: Scale;
     yScale: Scale;
-    markers: MarkerCandidate[];
+    markers: LaidOutMarker[];
     hitRegions: HitRegion[];
   };
 }
