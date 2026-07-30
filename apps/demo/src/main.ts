@@ -125,7 +125,7 @@ function seededJitter(index: number, amplitude = 0.09): number {
 
 type ExposureMetric = "auc" | "cmax";
 type Endpoint = "icgi" | "icgi2" | "icgi3" | "brls" | "prls";
-type CIMethod = "wald" | "bootstrap";
+type CIMethod = "wald" | "bootstrap" | "none";
 
 const EXPOSURE_ORDER: ExposureMetric[] = ["auc", "cmax"];
 const ENDPOINT_ORDER: Endpoint[] = ["icgi", "icgi2", "icgi3", "brls", "prls"];
@@ -350,6 +350,11 @@ function curveFor(fit: EndpointFit, xs: number[], ys: number[], xMax: number): P
   if (fit.kind === "linear") {
     const surface = linearAnalysisModel.predict(fit.model);
     const points = surface.evaluate(dense);
+    if (state.ciMethod === "none") {
+      // Point estimate only - skip computing (and discarding) a CI entirely, not just hide it,
+      // since Wald/bootstrap are otherwise always computed even when nothing ends up drawing them.
+      return { estimates: dense.map((exposure, i) => ({ exposure, estimate: points[i].estimate, lower: NaN, upper: NaN })), metadata: {} };
+    }
     const ci =
       state.ciMethod === "bootstrap"
         ? linearAnalysisModel.confidenceInterval(
@@ -368,11 +373,27 @@ function curveFor(fit: EndpointFit, xs: number[], ys: number[], xMax: number): P
       metadata: {}
     };
   }
+  if (state.ciMethod === "none") {
+    // Wald is the cheap, closed-form point estimate for the logistic branch (no resampling) -
+    // reused here purely for its `estimate` values, with lower/upper discarded, same as above.
+    const wald = predictLogisticWaldResult(fit.model, dense);
+    return { ...wald, estimates: wald.estimates.map((e) => ({ ...e, lower: NaN, upper: NaN })) };
+  }
   if (state.ciMethod === "wald") return predictLogisticWaldResult(fit.model, dense);
   return bootstrapLogisticCI(xs, ys, dense, {
     resamples: state.bootstrapResamples,
     seed: state.bootstrapSeed
   });
+}
+
+/** Formats a "Fitted + CI" reference-line marker's two label lines - `["Fit 0.72", "[0.65-0.79]"]`
+ * normally, but when `state.ciMethod === "none"` the curve's `lower`/`upper` are deliberately
+ * `NaN` (see `curveFor`), so this omits the bracketed CI line entirely rather than printing
+ * "[NaN-NaN]". */
+function formatFitMarkerLines(estimate: number, lower: number, upper: number, decimals: number): [string, string] {
+  const line1 = `Fit ${estimate.toFixed(decimals)}`;
+  if (!Number.isFinite(lower) || !Number.isFinite(upper)) return [line1, ""];
+  return [line1, `[${lower.toFixed(decimals)}-${upper.toFixed(decimals)}]`];
 }
 
 /** Adapts a legacy `PredictionResult`'s loosely-typed `estimates` into `@er-explorer/renderer`'s
@@ -481,7 +502,9 @@ function renderContinuousScatterViaRenderer(
         upper: p.observedMean.ciUpper,
         n: p.observedMean.n,
         primaryLabel: p.observedMean.mean.toFixed(1),
-        secondaryLabel: `n=${p.observedMean.n}`,
+        // Capital N - this is the clicked dose's own total observed count, not a quartile-bin
+        // sub-count (see computeSplitAnnotations' "n=" for that).
+        secondaryLabel: `N=${p.observedMean.n}`,
         color: p.color
       }));
     if (observedMeanStats.length) layers.push(new ObservedStatLayer({ id: "projection-observed", bins: observedMeanStats }));
@@ -498,7 +521,7 @@ function renderContinuousScatterViaRenderer(
             estimate: at.estimate,
             lower: at.lower,
             upper: at.upper,
-            lines: [`Fit ${at.estimate.toFixed(1)}`, `[${at.lower.toFixed(1)}-${at.upper.toFixed(1)}]`],
+            lines: formatFitMarkerLines(at.estimate, at.lower, at.upper, 1),
             color: "#94a3b8"
           }
         ];
@@ -660,7 +683,7 @@ function renderBinaryScatterOverlay(
             estimate: at.estimate,
             lower: at.lower,
             upper: at.upper,
-            lines: [`Fit ${at.estimate.toFixed(2)}`, `[${at.lower.toFixed(2)}-${at.upper.toFixed(2)}]`],
+            lines: formatFitMarkerLines(at.estimate, at.lower, at.upper, 2),
             color
           };
         });
@@ -805,7 +828,10 @@ function computeSplitAnnotations(metric: ExposureMetric, dose: string, xDomain: 
     const lower = i === 0 ? xDomain[0] : cutpoints[i - 1];
     const upper = i === cutpoints.length ? xDomain[1] : cutpoints[i];
     const pct = Math.round((counts[i] / vals.length) * 100);
-    const label = mode === "n_pct" ? `${counts[i]} (${pct}%)` : `${counts[i]}`;
+    // Lowercase "n=" - this is a per-bin sub-count of this dose's own N (see the boxplot row's
+    // own "N=" total label), not a second total, so it's deliberately labeled at the other end
+    // of the N/n convention.
+    const label = mode === "n_pct" ? `n=${counts[i]} (${pct}%)` : `n=${counts[i]}`;
     out.push({ x: (lower + upper) / 2, label });
   }
   return out;
@@ -1662,10 +1688,11 @@ function updateKpis(activeCount: number, endpoints: Endpoint[]): void {
  * doseColorFor), matching the dose swatches/boxplot rows elsewhere in the UI. */
 function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoints: Endpoint[], active: Set<number>): void {
   const groupStats: Record<string, { min: number; q1: number; median: number; q3: number; max: number }> = {};
+  const doseN: Record<string, number> = {};
   for (const dose of state.selectedDoses) {
-    const vals = RECORDS.filter((r) => active.has(r.id) && r.dose === dose)
-      .map((r) => exposureValue(r, metric))
-      .sort((a, b) => a - b);
+    const rows = RECORDS.filter((r) => active.has(r.id) && r.dose === dose);
+    doseN[dose] = rows.length;
+    const vals = rows.map((r) => exposureValue(r, metric)).sort((a, b) => a - b);
     const s = summarizeDistribution(vals);
     if (s) groupStats[dose] = { min: s.min, q1: s.q1, median: s.median, q3: s.q3, max: s.max };
   }
@@ -1687,8 +1714,21 @@ function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoi
         fit.kind === "linear" ? fit.model.intercept + fit.model.slope * x : 1 / (1 + Math.exp(-(fit.model.intercept + fit.model.slope * x)));
       const color = colorByEndpoint ? ENDPOINT_COLORS[endpoint] : doseColorFor(dose);
       const label = multiEndpoint ? `${dose} · ${endpoint.toUpperCase()}` : dose;
+      // The dose's boxplot shape (and its "N=" row label) is built from every active patient in
+      // this dose, regardless of endpoint - but a given endpoint's own value can be missing for
+      // some of those patients (a continuous score not recorded, say). Rather than printing a
+      // second n=/N= pair (confusing next to the row's own N=), call out the missing count
+      // directly against the dose's N - this is what would have caught the BRLS-missing-one-
+      // patient case in the 1200mg dose immediately instead of only being noticeable by eye in
+      // the boxplot, and generalizes cleanly to endpoints with more than one missing value.
+      const endpointN = RECORDS.filter((r) => active.has(r.id) && r.dose === dose && Number.isFinite(endpointValue(r, endpoint))).length;
+      const missing = doseN[dose] - endpointN;
+      const nNote =
+        missing === 0
+          ? `N=${doseN[dose]}`
+          : `<strong>${missing} missing value${missing === 1 ? "" : "s"} removed from N=${doseN[dose]}</strong>`;
       lines.push(
-        `<div><strong style="color:${color}">${label}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} (fit ${fitAt(g.min).toFixed(decimals)}) &nbsp; Q1 = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(decimals)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(decimals)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(decimals)}) &nbsp; Max = ${g.max.toFixed(1)} (fit ${fitAt(g.max).toFixed(decimals)})</div>`
+        `<div><strong style="color:${color}">${label}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} (fit ${fitAt(g.min).toFixed(decimals)}) &nbsp; Q1 = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(decimals)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(decimals)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(decimals)}) &nbsp; Max = ${g.max.toFixed(1)} (fit ${fitAt(g.max).toFixed(decimals)}) &nbsp; ${nNote}</div>`
       );
     }
   }
@@ -2075,7 +2115,7 @@ function loadSessionFromFile(file: File): void {
       if (!endpoints.length) endpoints = ["icgi"];
       state.endpoints = new Set(endpoints);
 
-      if (ci === "wald" || ci === "bootstrap") state.ciMethod = ci;
+      if (ci === "wald" || ci === "bootstrap" || ci === "none") state.ciMethod = ci;
       if (typeof session.settings["bootstrapSeed"] === "number") state.bootstrapSeed = session.settings["bootstrapSeed"] as number;
       if (typeof session.settings["bootstrapResamples"] === "number") state.bootstrapResamples = session.settings["bootstrapResamples"] as number;
       const distMode = session.settings["distributionMode"];

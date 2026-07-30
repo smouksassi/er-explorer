@@ -244,7 +244,10 @@ export class DistributionLayer implements Layer {
       fontSize: 12,
       fontWeight: 700
     });
-    const countLabel = g.nResponders !== undefined ? `n=${g.n} (${g.nResponders} resp.)` : `n=${g.n}`;
+    // Capital N (not "n=") - this is the row's *total* sample size (the standard statistical
+    // convention: N for the full group, n for a sub-group/bin), to keep it visually distinct
+    // from any per-bin "n=" counts shown elsewhere in the same chart (e.g. split annotations).
+    const countLabel = g.nResponders !== undefined ? `N=${g.n} (${g.nResponders} resp.)` : `N=${g.n}`;
     target.drawText(ctx.width - 8, cy + 4, countLabel, {
       textAnchor: "end",
       fill: "#475569",

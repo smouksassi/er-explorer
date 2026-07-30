@@ -90,11 +90,11 @@ describe("DistributionLayer", () => {
     const svg = result.content as string;
     expect(svg).toContain('data-group="Placebo"');
     expect(svg).toContain("Placebo");
-    expect(svg).toContain("n=20");
+    expect(svg).toContain("N=20");
     expect(svg).not.toContain("er-ridge-shape");
   });
 
-  it("prints an nResponders-aware count label when supplied, otherwise a plain n= count", () => {
+  it("prints an nResponders-aware count label when supplied, otherwise a plain N= count", () => {
     const renderer = new SVGRenderer();
     const result = renderer.render({
       width: 600,
@@ -113,8 +113,8 @@ describe("DistributionLayer", () => {
       ]
     });
     const svg = result.content as string;
-    expect(svg).toContain("n=40 (12 resp.)");
-    expect(svg).toContain("n=30");
+    expect(svg).toContain("N=40 (12 resp.)");
+    expect(svg).toContain("N=30");
   });
 
   it("draws per-group split annotations as plain text above the shape", () => {

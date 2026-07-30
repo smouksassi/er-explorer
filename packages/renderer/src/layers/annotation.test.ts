@@ -75,6 +75,29 @@ describe("AnnotationLayer", () => {
     expect(result.metadata.markers[0].lines).toEqual(["Fit 0.74", "[0.65-0.82]"]);
   });
 
+  it("omits yLow/yHigh (rather than NaN) for a markerValue with non-finite lower/upper (CI method 'none')", () => {
+    const renderer = new SVGRenderer();
+    const result = renderer.render({
+      width: 600,
+      height: 300,
+      xDomain: [0, 100],
+      yDomain: [0, 1],
+      layers: [
+        new AnnotationLayer({
+          id: "refs",
+          lines: [{ value: 50, label: "Median", markerValues: [{ estimate: 0.74, lower: NaN, upper: NaN }] }]
+        })
+      ]
+    });
+    expect(result.metadata.markers).toHaveLength(1);
+    const marker = result.metadata.markers[0];
+    expect(marker.yLow).toBeUndefined();
+    expect(marker.yHigh).toBeUndefined();
+    expect(marker.lines).toEqual(["Fit 0.74", ""]);
+    const svg = result.content as string;
+    expect(svg).not.toContain("NaN");
+  });
+
   it("pushes one marker per entry in markerValues, each in its own color (Compare Endpoints)", () => {
     const renderer = new SVGRenderer();
     const result = renderer.render({

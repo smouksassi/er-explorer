@@ -121,7 +121,7 @@
         <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="compareEndpointsGroup">
           <label><input type="checkbox" id="compareEndpoints" disabled /> Compare endpoints</label>
         </div></div>
-        <div class="field"><label for="ciSelect">CI method</label><select id="ciSelect"><option value="wald">Wald</option><option value="bootstrap">Bootstrap</option></select></div>
+        <div class="field"><label for="ciSelect">CI method</label><select id="ciSelect"><option value="wald">Wald</option><option value="bootstrap">Bootstrap</option><option value="none">None</option></select></div>
         <div class="field"><label>Group Exposures By:</label><div class="checkbox-group" id="refLineGroup">
           <label><input type="radio" name="refLine" value="none" checked /> None</label>
           <label><input type="radio" name="refLine" value="median" /> Median</label>
@@ -129,7 +129,7 @@
           <label><input type="radio" name="refLine" value="quartiles" /> Quartiles</label>
         </div></div>
         <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="splitAnnotationGroup">
-          <label><input type="checkbox" id="showObservedResp" disabled /> Observed % responders</label>
+          <label><input type="checkbox" id="showObservedResp" disabled /> Observed (%/N)</label>
           <label><input type="checkbox" id="showReferenceFit" disabled /> Fitted + CI</label>
           <label><input type="checkbox" id="showSplitValue" disabled /> Split value</label>
         </div></div>

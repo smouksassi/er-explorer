@@ -104,14 +104,20 @@ export class AnnotationLayer implements Layer {
         }
 
         (ref.markerValues ?? []).forEach((mv, i) => {
-          const [line1, line2] = mv.lines ?? [`Fit ${mv.estimate.toFixed(2)}`, `[${mv.lower.toFixed(2)}-${mv.upper.toFixed(2)}]`];
+          const hasCI = Number.isFinite(mv.lower) && Number.isFinite(mv.upper);
+          const [line1, line2] = mv.lines ?? [
+            `Fit ${mv.estimate.toFixed(2)}`,
+            hasCI ? `[${mv.lower.toFixed(2)}-${mv.upper.toFixed(2)}]` : ""
+          ];
           ctx.markers.add({
             id: `${this.id}:marker:${ref.value}:${i}`,
             ownerLayerId: this.id,
             x: xx,
             y: yScale(mv.estimate),
-            yLow: yScale(mv.lower),
-            yHigh: yScale(mv.upper),
+            // Omit yLow/yHigh entirely (rather than passing NaN) when this marker has no CI to
+            // show (e.g. state.ciMethod === "none") - both fields are documented as optional in
+            // MarkerCandidate for exactly this case.
+            ...(hasCI ? { yLow: yScale(mv.lower), yHigh: yScale(mv.upper) } : {}),
             color: mv.color ?? markerColor ?? DEFAULT_VALUE_COLOR,
             lines: [line1, line2],
             kind: "reference-fit"
