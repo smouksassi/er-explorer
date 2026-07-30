@@ -13,18 +13,6 @@ import {
 } from "@er-explorer/analysis";
 import { linearAnalysisModel, meanConfidenceInterval, type LinearParams } from "@er-explorer/model-linear";
 import {
-  scaleLinear,
-  seededJitter,
-  createVisualizationSpec,
-  type Scale,
-  type ScatterPoint,
-  type ProjectedGroup,
-  type LinearProjectedGroup,
-  type ObservedMeanBin,
-  type ObservedResponseBin,
-  type ReferenceLine
-} from "@er-explorer/visualization-engine";
-import {
   SVGRenderer,
   GridLayer,
   AxisLayer,
@@ -37,7 +25,9 @@ import {
   DistributionLayer,
   interpolateCurveSample,
   buildAsymRidgePath,
+  scaleLinear,
   type Layer as RendererLayer,
+  type Scale,
   type CurveSample,
   type ScatterPointDatum,
   type ReferenceLineSpec,
@@ -51,10 +41,87 @@ import {
   createSessionState,
   serializeSession,
   parseSession,
+  createVisualizationSpec,
   InvalidSessionFileError,
   type SessionState
 } from "@er-explorer/session-engine";
 import { RECORDS, type ExposureResponseRecord } from "./data.generated";
+
+/**
+ * Chart-input data shapes formerly imported from the now-deleted
+ * `packages/visualization-engine` (Phase 7 of the renderer migration -
+ * `docs/RENDERER_ARCHITECTURE.md` §8). These are purely this app's own internal data-prep
+ * vocabulary now - no rendering package's public contract depends on them anymore, since Phases
+ * 4-6 each built their own bespoke, purpose-specific input types
+ * (`BinaryCurveOverlay`/`ReferenceLineSpec`/`ObservedStatBin`/`DistributionGroupDatum`/etc.).
+ */
+interface ScatterPoint {
+  id: string | number;
+  exposure: number;
+  response: number;
+  displayY?: number;
+  groupId: string | number;
+  label?: string;
+  selected?: boolean;
+}
+
+interface ProjectedGroup {
+  groupId: string | number;
+  color: string;
+  q1: number;
+  median: number;
+  q3: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+  min?: number;
+  max?: number;
+  observed?: { proportion: number; ciLower: number; ciUpper: number; n: number; responders: number };
+}
+
+interface LinearProjectedGroup {
+  groupId: string | number;
+  color: string;
+  q1: number;
+  median: number;
+  q3: number;
+  whiskerLow: number;
+  whiskerHigh: number;
+  min?: number;
+  max?: number;
+  observedMean?: { mean: number; ciLower: number; ciUpper: number; n: number };
+}
+
+interface ObservedResponseBin {
+  x: number;
+  proportion: number;
+  ciLower: number;
+  ciUpper: number;
+  n: number;
+  responders: number;
+  color?: string;
+}
+
+interface ObservedMeanBin {
+  x: number;
+  mean: number;
+  ciLower: number;
+  ciUpper: number;
+  n: number;
+  color?: string;
+}
+
+/** A vertical reference line drawn at a fixed exposure value (e.g. a global median/tertile/quartile). */
+interface ReferenceLine {
+  value: number;
+  label: string;
+}
+
+/** Deterministic pseudo-jitter (by index) so repeated renders of the same dataset are
+ * pixel-stable. */
+function seededJitter(index: number, amplitude = 0.09): number {
+  const s = Math.sin((index + 1) * 12.9898) * 43758.5453;
+  return (s - Math.floor(s) - 0.5) * 2 * amplitude;
+}
 
 type ExposureMetric = "auc" | "cmax";
 type Endpoint = "icgi" | "icgi2" | "icgi3" | "brls" | "prls";

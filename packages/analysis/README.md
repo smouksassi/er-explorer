@@ -34,8 +34,8 @@ interface.
 The original concrete logistic implementation (Newton-Raphson IRLS
 fitting, Wald/bootstrap confidence intervals, distribution summaries,
 kernel density estimation) is preserved here unchanged, purely for
-backward compatibility with `apps/demo`, `packages/visualization-engine`,
-and `packages/session-engine`, none of which have migrated to the plugin
+backward compatibility with `apps/demo` and `packages/session-engine`,
+neither of which have migrated to the plugin
 architecture above yet. It is not registered against, or otherwise part
 of, the new `AnalysisModel`/`ModelRegistry` contracts, and should shrink
 and eventually disappear as consumers migrate to a real plugin.

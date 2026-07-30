@@ -1,5 +1,38 @@
-import type { ModelDefinition } from "@er-explorer/analysis";
-import type { VisualizationSpec } from "@er-explorer/visualization-engine";
+import type { ModelDefinition, PredictionResult } from "@er-explorer/analysis";
+
+/**
+ * @deprecated Formerly imported from the now-deleted `packages/visualization-engine` (Phase 7 of
+ * the renderer migration - `docs/RENDERER_ARCHITECTURE.md` §8). Ported here verbatim rather than
+ * to `packages/renderer` since it's purely a serialization shape for this file's own legacy
+ * session format, with no rendering behavior of its own - `packages/renderer` never needs to know
+ * this type exists.
+ */
+export type RenderTarget = "svg" | "canvas";
+
+/** @deprecated see {@link RenderTarget}. */
+export interface ChartOptions {
+  title: string;
+  xAxisLabel: string;
+  yAxisLabel: string;
+  renderTarget: RenderTarget;
+  responsive?: boolean;
+}
+
+/** @deprecated see {@link RenderTarget}. */
+export interface VisualizationSpec {
+  id: string;
+  model: ModelDefinition;
+  data: PredictionResult;
+  options: ChartOptions;
+}
+
+/** @deprecated see {@link RenderTarget}. */
+export const createVisualizationSpec = (id: string, model: ModelDefinition, data: PredictionResult, options: ChartOptions): VisualizationSpec => ({
+  id,
+  model,
+  data,
+  options
+});
 
 /**
  * @deprecated Pre-domain-model session shape used by `apps/demo`'s ad hoc

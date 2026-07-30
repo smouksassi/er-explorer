@@ -38,8 +38,8 @@ kaplan-meier, clinical-utility, ...). Statistics are an implementation
 detail of a future plugin per family - this package ships no concrete
 model. Its `legacyStatistics.ts` preserves the original logistic
 implementation unchanged, purely for backward compatibility with
-`apps/demo`, `packages/visualization-engine`, and `packages/session-engine`
-until they migrate to the plugin architecture.
+`apps/demo` and `packages/session-engine` until they migrate to the plugin
+architecture.
 
 `packages/model-linear` is the first concrete `AnalysisModel` plugin:
 single-predictor ordinary least squares for continuous endpoints (e.g. a

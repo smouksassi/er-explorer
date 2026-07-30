@@ -18,8 +18,7 @@
   },
   "dependencies": {
     "@er-explorer/domain": "workspace:*",
-    "@er-explorer/analysis": "workspace:*",
-    "@er-explorer/visualization-engine": "workspace:*"
+    "@er-explorer/analysis": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^2.1.8"

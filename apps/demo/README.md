@@ -10,7 +10,7 @@ product.
   computed by `@er-explorer/statistical-engine`, with a 95% confidence band
   from either a Wald (delta-method) approximation or a seeded, reproducible
   bootstrap.
-- Publication-quality SVG rendering from `@er-explorer/visualization-engine`:
+- Publication-quality SVG rendering from `@er-explorer/renderer`:
   a jittered exposure-response scatter with fitted curve/band, linked to a
   per-dose-group exposure distribution panel.
 - Select more than one exposure metric (AUC, CMAX) at once — one scatter +

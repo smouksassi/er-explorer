@@ -58,8 +58,6 @@ jobs:
         run: node_modules/.bin/tsc -p packages/data/tsconfig.build.json
       - name: Build packages/renderer
         run: node_modules/.bin/tsc -p packages/renderer/tsconfig.build.json
-      - name: Build packages/visualization-engine
-        run: node_modules/.bin/tsc -p packages/visualization-engine/tsconfig.json
       - name: Build packages/session-engine
         run: node_modules/.bin/tsc -p packages/session-engine/tsconfig.build.json
 

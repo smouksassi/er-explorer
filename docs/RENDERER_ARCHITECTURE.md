@@ -1,10 +1,13 @@
 # Renderer redesign: analysis and proposal
 
-Status: **proposal, not yet implemented** - written in response to a request to
-rename `packages/visualization-engine` to `packages/renderer` and rebuild it
-around a `Renderer`/`Layer` composition model. This document analyses the
-literal request against the current codebase, flags where it has gaps, and
-proposes a concrete design. Nothing described here has been built yet.
+Status: **implemented - Phases 0-7 complete.** Originally written in response
+to a request to rename `packages/visualization-engine` to `packages/renderer`
+and rebuild it around a `Renderer`/`Layer` composition model; this document
+analyses that literal request against the (now-deleted)
+`packages/visualization-engine`, flags where it had gaps, and proposes the
+design that was ultimately built. See ADR-0009 in `docs/DECISIONS.md` for the
+short summary, and §8's migration-plan table below for what each phase
+delivered.
 
 ## 1. Why this isn't a straightforward rename
 
@@ -511,21 +514,19 @@ sites into the current renderer (2x `renderLogisticScatterChart`, 1x
 `renderLinearScatterChart`, 1x `renderDistributionChart`), so a rewrite-in-
 place risks a real window where the one consuming app doesn't build.
 
-| Phase | Scope | "Done" looks like |
+| Phase | Scope | Status |
 |---|---|---|
-| 0 | Scaffold `packages/renderer` (package.json/tsconfig/workspace wiring), depends only on `domain` | Builds, typechecks, exports placeholders only |
-| 1 | `Scale`, `DrawContext`/collectors, `SVGRenderer`, `Axis`/`Grid`/`Scatter` layers | jsdom test renders correct SVG for synthetic data; no app changes yet |
-| 2 | `Fit`/`ConfidenceRibbon` layers, `CurveSample` alias, `sampleCurve()` in `analysis` | jsdom test with 2 overlaid fit+ribbon pairs, distinct styles |
-| 3 | `ObservedStat` layer, marker-layout port, `Annotation`/reference-lines on the shared collector | Explicit test proving observed-stat bins and reference-line labels that overlap in x get de-collided *across* layer types |
-| 4 | First real cutover: the **linear** scatter chart call site (simpler - dynamic y-domain, no fixed probability range) | That one call site uses `packages/renderer` exclusively; other 3 still use the old package |
-| 5 | Logistic scatter chart (2 call sites incl. Compare Endpoints), dose-click-projection decomposition, hit-region model + `InteractionController` in `apps/demo` | Both call sites migrated; multi-curve overlay + dose-click parity verified |
-| 6 | `Distribution` layer + 3 shape strategies; fix KDE-at-render-time by moving density computation upstream | Boxplot/violin/lineranges parity, including the lineranges cross-fade transition |
-| 7 | Delete `packages/visualization-engine`; delete demo's `fitFor`/`curveFor` legacy-shape adapter | Package removed from workspace, zero references, full smoke test green |
+| 0 | Scaffold `packages/renderer` (package.json/tsconfig/workspace wiring), depends only on `domain` | **Done.** |
+| 1 | `Scale`, `DrawContext`/collectors, `SVGRenderer`, `Axis`/`Grid`/`Scatter` layers | **Done.** |
+| 2 | `Fit`/`ConfidenceRibbon` layers, `CurveSample` alias, `sampleCurve()` in `analysis` | **Done.** |
+| 3 | `ObservedStat` layer, marker-layout port, `Annotation`/reference-lines on the shared collector | **Done.** |
+| 4 | First real cutover: the **linear** scatter chart call site (simpler - dynamic y-domain, no fixed probability range) | **Done.** |
+| 5 | Logistic scatter chart (2 call sites incl. Compare Endpoints), dose-click-projection decomposition | **Done.** Interaction stayed DOM-query-based in `apps/demo` (the `FillStyle.attrs`/native `<title>` stopgap) rather than a formal `InteractionController` - no second consumer has yet shown up to justify promoting it. |
+| 6 | `Distribution` layer + 3 shape strategies; fix KDE-at-render-time by moving density computation upstream | **Done.** |
+| 7 | Delete `packages/visualization-engine` | **Done.** Demo's `fitFor`/`curveFor` legacy-shape adapter (`PredictionResult`/`toCurveSamples`) was deliberately kept - it bridges the legacy logistic fitter (`legacyStatistics.ts`, out of scope for this migration) to `CurveSample`, not a `packages/visualization-engine` leftover. |
 
-Notes: phase 5's projection decomposition is the highest-uncertainty step -
-budget for a possible fallback to a dedicated Layer type. `CanvasRenderer`
-stays a placeholder throughout; scope creep there is explicitly out of
-bounds for this migration. Phase 7 does **not** touch
+Notes: `CanvasRenderer` stays a placeholder; scope creep there was explicitly
+out of bounds for this migration. Phase 7 did **not** touch
 `legacyStatistics.ts`'s hand-rolled logistic fitter - that's the separate,
 already-tracked model-plugin migration (ADR-0007/8), not this one.
 

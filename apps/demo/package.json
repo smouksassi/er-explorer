@@ -2,7 +2,7 @@
   "name": "@er-explorer/demo",
   "private": true,
   "version": "0.0.1",
-  "description": "Minimal interactive exposure-response demo app for ER Explorer, built on the statistical, visualization, and session engines.",
+  "description": "Minimal interactive exposure-response demo app for ER Explorer, built on the analysis, renderer, and session engines.",
   "scripts": {
     "build": "node scripts/build-data.mjs && node scripts/build.mjs",
     "clean": "rimraf dist src/data.generated.ts"
@@ -11,7 +11,6 @@
     "@er-explorer/session-engine": "workspace:*",
     "@er-explorer/analysis": "workspace:*",
     "@er-explorer/model-linear": "workspace:*",
-    "@er-explorer/visualization-engine": "workspace:*",
     "@er-explorer/renderer": "workspace:*"
   },
   "devDependencies": {

@@ -47,9 +47,6 @@ importers:
       '@er-explorer/session-engine':
         specifier: workspace:*
         version: link:../../packages/session-engine
-      '@er-explorer/visualization-engine':
-        specifier: workspace:*
-        version: link:../../packages/visualization-engine
     devDependencies:
       esbuild:
         specifier: ^0.24.0
@@ -112,19 +109,10 @@ importers:
       '@er-explorer/domain':
         specifier: workspace:*
         version: link:../domain
-      '@er-explorer/visualization-engine':
-        specifier: workspace:*
-        version: link:../visualization-engine
     devDependencies:
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@20.19.43)
-
-  packages/visualization-engine:
-    dependencies:
-      '@er-explorer/analysis':
-        specifier: workspace:*
-        version: link:../analysis
 
 packages:
 

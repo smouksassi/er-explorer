@@ -33,8 +33,12 @@
 export {
   type SessionMetadata,
   type SessionState,
+  type RenderTarget,
+  type ChartOptions,
+  type VisualizationSpec,
   createSessionMetadata,
   createSessionState,
+  createVisualizationSpec,
   InvalidSessionFileError,
   serializeSession,
   parseSession
