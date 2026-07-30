@@ -41,6 +41,9 @@ importers:
       '@er-explorer/model-linear':
         specifier: workspace:*
         version: link:../../packages/model-linear
+      '@er-explorer/renderer':
+        specifier: workspace:*
+        version: link:../../packages/renderer
       '@er-explorer/session-engine':
         specifier: workspace:*
         version: link:../../packages/session-engine
