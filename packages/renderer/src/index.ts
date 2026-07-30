@@ -22,11 +22,17 @@
  * (`SmoothStyle`/`StepStyle`) they share - the same "shared data, swappable draw strategy"
  * pattern `Distribution` will use for Boxplot/Violin/Lineranges in Phase 6.
  *
- * Phase 3 (this file's current contents, additionally): the `ObservedStat`/`Annotation` layers,
- * and the marker-resolution system (`resolveMarkers`/`renderLaidOutMarker`) the Renderer runs
- * exactly once, after every Layer has rendered, so markers from different Layers never overlap
- * each other. `Distribution` (Phase 6) follows later; `apps/demo` does not consume this package
- * yet (Phase 4+).
+ * Phase 3: the `ObservedStat`/`Annotation` layers, and the marker-resolution system
+ * (`resolveMarkers`/`renderLaidOutMarker`) the Renderer runs exactly once, after every Layer has
+ * rendered, so markers from different Layers never overlap each other.
+ *
+ * Phase 4 (this file's current contents, additionally): `DoseProjectionLayer` (the geometric
+ * half of a dose-click projection - Q1-Q3 shading, guide lines, dots, read off an already-fitted
+ * curve's own samples) and a small `FillStyle.attrs`/`ScatterPointDatum.data` passthrough for
+ * `data-*` attributes, kept only until an `InteractionController` (Phase 5) replaces today's
+ * DOM-query-based interactivity with `HitRegion`s. This is the phase where `apps/demo` first
+ * consumes this package (the linear/continuous scatter chart call site); `Distribution`
+ * (Phase 6) and the logistic/binary cutover (Phase 5) follow later.
  */
 
 export type {
@@ -74,6 +80,8 @@ export { ObservedStatLayer } from "./layers/observedStat";
 export type { ObservedStatBin, ObservedStatLayerOptions } from "./layers/observedStat";
 export { AnnotationLayer } from "./layers/annotation";
 export type { AnnotationLayerOptions, ReferenceLineSpec } from "./layers/annotation";
+export { DoseProjectionLayer } from "./layers/doseProjection";
+export type { DoseProjectionGroup, DoseProjectionLayerOptions } from "./layers/doseProjection";
 
 /** Package identity marker (kept from Phase 0 for continuity). */
 export const RENDERER_PACKAGE_ID = "@er-explorer/renderer" as const;

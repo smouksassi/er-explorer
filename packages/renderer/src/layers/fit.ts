@@ -8,7 +8,10 @@ export interface FitLayerOptions {
    * renderer's `PredictionResult.estimates`. */
   samples: CurveSample[];
   color?: string;
-  dash?: string;
+  /** Stroke dash pattern. Defaults to `"7 5"` (dashed, matching the current renderer's default
+   * curve style). Pass `null` explicitly for a solid line, e.g. a dose-click projection's
+   * emphasized Q1-Q3 segment. */
+  dash?: string | null;
   strokeWidth?: number;
   opacity?: number;
   /** Defaults to `SmoothStyle`. Pass `StepStyle` for a step-function endpoint type (e.g.
@@ -36,7 +39,8 @@ export class FitLayer implements Layer {
   }
 
   render(ctx: DrawContext): void {
-    const { samples, color = DEFAULT_COLOR, dash = DEFAULT_DASH, strokeWidth = 2, opacity = 0.85, style = SmoothStyle } = this.options;
+    const { samples, color = DEFAULT_COLOR, strokeWidth = 2, opacity = 0.85, style = SmoothStyle } = this.options;
+    const dash = this.options.dash === null ? undefined : (this.options.dash ?? DEFAULT_DASH);
     if (samples.length < 2) return;
 
     const points = samples.map((s) => ({ x: ctx.xScale(s.exposure), y: ctx.yScale(s.estimate) }));

@@ -10,6 +10,10 @@ export interface ScatterPointDatum {
   stroke?: string;
   strokeWidth?: number;
   label?: string;
+  /** Arbitrary extra attributes merged onto this point's `<circle>` (e.g. `data-exposure`,
+   * `data-group`) - a stopgap for existing DOM-query-based hover/brush interactivity, kept only
+   * until `InteractionController` (Phase 5) replaces it with `HitRegion`-based hit-testing. */
+  data?: Record<string, string | number>;
 }
 
 export interface ScatterLayerOptions {
@@ -49,7 +53,8 @@ export class ScatterLayer implements Layer {
           fill: p.color ?? defaultColor,
           opacity: p.opacity ?? defaultOpacity,
           stroke: p.stroke,
-          strokeWidth: p.strokeWidth
+          strokeWidth: p.strokeWidth,
+          attrs: p.data
         });
         if (registerHitRegions) {
           interactions?.add({

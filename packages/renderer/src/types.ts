@@ -32,6 +32,13 @@ export interface FillStyle {
   dash?: string;
   lineCap?: "butt" | "round" | "square";
   lineJoin?: "miter" | "round" | "bevel";
+  /**
+   * Arbitrary extra SVG attributes to merge onto the drawn element (e.g. `data-id`/
+   * `data-exposure` for a scatter point) - a stopgap for DOM-query-based interactivity that
+   * predates the `HitRegion` system, kept only until an `InteractionController` (Phase 5)
+   * replaces that querying with `RenderResult.metadata.hitRegions` instead.
+   */
+  attrs?: Record<string, string | number>;
 }
 
 export interface TextStyle {

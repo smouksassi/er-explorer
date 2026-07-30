@@ -12,7 +12,6 @@ import {
 import { linearAnalysisModel, meanConfidenceInterval, type LinearParams } from "@er-explorer/model-linear";
 import {
   renderLogisticScatterChart,
-  renderLinearScatterChart,
   renderDistributionChart,
   buildAsymRidgePath,
   scaleLinear,
@@ -31,6 +30,22 @@ import {
   type ExtraCurve,
   type ReferenceLine
 } from "@er-explorer/visualization-engine";
+import {
+  SVGRenderer,
+  GridLayer,
+  AxisLayer,
+  ScatterLayer,
+  FitLayer,
+  ConfidenceRibbonLayer,
+  ObservedStatLayer,
+  AnnotationLayer,
+  DoseProjectionLayer,
+  interpolateCurveSample,
+  type Layer as RendererLayer,
+  type CurveSample,
+  type ScatterPointDatum,
+  type ReferenceLineSpec
+} from "@er-explorer/renderer";
 import {
   createSessionState,
   serializeSession,
@@ -290,6 +305,174 @@ function curveFor(fit: EndpointFit, xs: number[], ys: number[], xMax: number): P
     resamples: state.bootstrapResamples,
     seed: state.bootstrapSeed
   });
+}
+
+/** Adapts a legacy `PredictionResult`'s loosely-typed `estimates` into `@er-explorer/renderer`'s
+ * `CurveSample[]` - a plain field-by-field copy (not a cast), since `PredictionResult.estimates`
+ * is typed as `Array<Record<string, number>>` and isn't directly assignable to `CurveSample`'s
+ * named fields. Used by both scatter chart cutovers (Phase 4 continuous, Phase 5 binary). */
+function toCurveSamples(curve: PredictionResult): CurveSample[] {
+  return curve.estimates.map((e) => ({ exposure: e.exposure, estimate: e.estimate, lower: e.lower, upper: e.upper }));
+}
+
+/** The continuous scatter chart's dynamic response-axis domain - ported verbatim from the
+ * now-retired `renderLinearScatterChart`'s fallback (that function's own `yDomain` was never
+ * actually supplied by this app, so this computation simply moves to the caller, which is now
+ * responsible for supplying `RenderInput.yDomain` explicitly). */
+function computeContinuousYDomain(points: Array<{ displayY?: number; response: number }>, curveSamples: CurveSample[]): [number, number] {
+  const values: number[] = [...points.map((p) => p.displayY ?? p.response), ...curveSamples.flatMap((e) => [e.lower, e.upper]).filter((v) => isFinite(v))];
+  if (!values.length) return [0, 1];
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const pad = Math.max((hi - lo) * 0.08, 0.5);
+  return [lo - pad, hi + pad];
+}
+
+/**
+ * Renders the continuous (BRLS/PRLS) exposure-response scatter chart via `@er-explorer/renderer`
+ * - the first real cutover off `packages/visualization-engine` (Phase 4 of the renderer
+ * redesign, docs/RENDERER_ARCHITECTURE.md §8). Reproduces `renderLinearScatterChart`'s visual
+ * output using Grid/Axis/ConfidenceRibbon/Fit/ObservedStat/Annotation/Scatter layers plus
+ * `DoseProjectionLayer` for the dose-click projection geometry.
+ *
+ * One intentional visual difference from the old output, already flagged and accepted during
+ * Phase 1 (see the rank table's comment in `svgRenderer.ts`): the x-axis now paints right after
+ * the grid (rank 5) instead of after the curve/points (the old code's implicit order) - so axis
+ * ticks no longer risk being partly covered by a dense point cloud. Everything else keeps the
+ * old paint order because it falls directly out of the fixed rank table plus this function's own
+ * construction order (see docs/RENDERER_ARCHITECTURE.md §6).
+ */
+function renderContinuousScatterViaRenderer(
+  points: ScatterPoint[],
+  curve: PredictionResult,
+  projected: LinearProjectedGroup[],
+  xMax: number,
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  width: number,
+  referenceLines: ReferenceLine[],
+  observedMeanBins: ObservedMeanBin[]
+): { content: string; metadata: ScatterMeta } {
+  const curveSamples = toCurveSamples(curve);
+  const yDomain = computeContinuousYDomain(points, curveSamples);
+  const height = 360;
+
+  const scatterPoints: ScatterPointDatum[] = (state.showPoints ? points : []).map((p) => ({
+    id: p.id,
+    x: p.exposure,
+    y: p.displayY ?? p.response,
+    color: DOSE_COLORS[p.groupId as string] ?? "#64748b",
+    radius: p.selected ? 4.2 : 3.1,
+    opacity: p.selected ? 0.84 : 0.14,
+    stroke: p.selected ? "#ffffff" : undefined,
+    strokeWidth: p.selected ? 1 : undefined,
+    data: { "data-id": p.id, "data-exposure": p.exposure, "data-response": p.response, "data-group": String(p.groupId) }
+  }));
+
+  const layers: RendererLayer[] = [
+    new GridLayer({ id: "grid" }),
+    new AxisLayer({ id: "axis-x", orientation: "x", label: exposureLabel(metric) }),
+    new AxisLayer({
+      id: "axis-y",
+      orientation: "y",
+      label: endpoint.toUpperCase(),
+      format: (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1))
+    }),
+    new ConfidenceRibbonLayer({ id: "band", samples: curveSamples, color: "#94a3b8", opacity: 0.18 }),
+    new FitLayer({ id: "curve", samples: curveSamples, color: "#64748b" })
+  ];
+
+  if (projected.length) {
+    const rangeSamplesFor = (p: LinearProjectedGroup) => {
+      const lo = p.min ?? p.whiskerLow;
+      const hi = p.max ?? p.whiskerHigh;
+      return curveSamples.filter((s) => s.exposure >= lo && s.exposure <= hi);
+    };
+    const coreSamplesFor = (p: LinearProjectedGroup) => curveSamples.filter((s) => s.exposure >= p.q1 && s.exposure <= p.q3);
+
+    projected.forEach((p, i) => {
+      layers.push(new ConfidenceRibbonLayer({ id: `proj-band-${i}`, samples: rangeSamplesFor(p), color: p.color, opacity: 0.1 }));
+      layers.push(new FitLayer({ id: `proj-range-${i}`, samples: rangeSamplesFor(p), color: p.color, dash: null, strokeWidth: 1.8, opacity: 0.48 }));
+      layers.push(new FitLayer({ id: `proj-core-${i}`, samples: coreSamplesFor(p), color: p.color, dash: null, strokeWidth: 3.8, opacity: 0.98 }));
+    });
+
+    layers.push(
+      new DoseProjectionLayer({
+        id: "projection-markers",
+        curveSamples,
+        groups: projected.map((p) => ({ color: p.color, q1: p.q1, q3: p.q3, median: p.median, min: p.min, max: p.max }))
+      })
+    );
+
+    const observedMeanStats = projected
+      .filter((p): p is LinearProjectedGroup & { observedMean: NonNullable<LinearProjectedGroup["observedMean"]> } => Boolean(p.observedMean))
+      .map((p) => ({
+        x: p.median,
+        center: p.observedMean.mean,
+        lower: p.observedMean.ciLower,
+        upper: p.observedMean.ciUpper,
+        n: p.observedMean.n,
+        primaryLabel: p.observedMean.mean.toFixed(1),
+        secondaryLabel: `n=${p.observedMean.n}`,
+        color: p.color
+      }));
+    if (observedMeanStats.length) layers.push(new ObservedStatLayer({ id: "projection-observed", bins: observedMeanStats }));
+  }
+
+  if (referenceLines.length) {
+    const refSpecs: ReferenceLineSpec[] = referenceLines.map((ref) => {
+      const spec: ReferenceLineSpec = { value: ref.value, label: ref.label };
+      if (state.showSplitValue) spec.valueLabel = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
+      if (state.showReferenceFit) {
+        const at = interpolateCurveSample(curveSamples, ref.value);
+        spec.markerValue = {
+          estimate: at.estimate,
+          lower: at.lower,
+          upper: at.upper,
+          lines: [`Fit ${at.estimate.toFixed(1)}`, `[${at.lower.toFixed(1)}-${at.upper.toFixed(1)}]`],
+          color: "#94a3b8"
+        };
+      }
+      return spec;
+    });
+    layers.push(new AnnotationLayer({ id: "reference-lines", lines: refSpecs }));
+  }
+
+  if (observedMeanBins.length) {
+    layers.push(
+      new ObservedStatLayer({
+        id: "observed-mean-bins",
+        bins: observedMeanBins.map((b) => ({
+          x: b.x,
+          center: b.mean,
+          lower: b.ciLower,
+          upper: b.ciUpper,
+          n: b.n,
+          primaryLabel: b.mean.toFixed(1),
+          secondaryLabel: `n=${b.n}`,
+          color: b.color
+        }))
+      })
+    );
+  }
+
+  layers.push(new ScatterLayer({ id: "points", points: scatterPoints }));
+
+  const result = new SVGRenderer().render({ width, height, xDomain: [0, xMax], yDomain, layers });
+
+  return {
+    content: result.content as string,
+    metadata: {
+      plot: {
+        left: result.metadata.plotRect.x,
+        top: result.metadata.plotRect.y,
+        width: result.metadata.plotRect.width,
+        height: result.metadata.plotRect.height
+      },
+      xScale: { domain: [...result.metadata.xScale.domain], range: [...result.metadata.xScale.range] },
+      yScale: { domain: [...result.metadata.yScale.domain], range: [...result.metadata.yScale.range] }
+    }
+  };
 }
 
 /**
@@ -647,7 +830,7 @@ function renderScatterPanel(
   }));
 
   const width = panelWidth();
-  let scatterResult: { content: string; metadata: Record<string, unknown> };
+  let scatterResult: { content: string; metadata: unknown };
 
   if (continuous) {
     const groupStats: Record<
@@ -696,20 +879,17 @@ function renderScatterPanel(
         };
       });
 
-    scatterResult = renderLinearScatterChart({
-      points: state.showPoints ? points : [],
+    scatterResult = renderContinuousScatterViaRenderer(
+      points,
       curve,
       projected,
-      groupColors: DOSE_COLORS,
-      xDomain: [0, xMax],
-      referenceLines: computeDisplayReferenceLines(metric),
-      observedMeanBins: computeObservedMeanBins(metric, endpoint),
-      showReferenceFit: state.showReferenceFit,
-      showSplitValue: state.showSplitValue,
+      xMax,
+      metric,
+      endpoint,
       width,
-      height: 360,
-      options: { title: "Exposure vs response", xAxisLabel: exposureLabel(metric), yAxisLabel: endpoint.toUpperCase(), renderTarget: "svg" }
-    });
+      computeDisplayReferenceLines(metric),
+      computeObservedMeanBins(metric, endpoint)
+    );
   } else {
     const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
     const projected = projectedGroupsFor(groupStats);

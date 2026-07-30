@@ -11,7 +11,8 @@
     "@er-explorer/session-engine": "workspace:*",
     "@er-explorer/analysis": "workspace:*",
     "@er-explorer/model-linear": "workspace:*",
-    "@er-explorer/visualization-engine": "workspace:*"
+    "@er-explorer/visualization-engine": "workspace:*",
+    "@er-explorer/renderer": "workspace:*"
   },
   "devDependencies": {
     "esbuild": "^0.24.0"

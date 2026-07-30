@@ -80,7 +80,8 @@ export class SvgDrawTarget implements DrawTarget {
         opacity: style.opacity,
         stroke: style.stroke,
         "stroke-width": style.strokeWidth,
-        rx: style.rx
+        rx: style.rx,
+        ...style.attrs
       })
     );
   }
@@ -94,7 +95,8 @@ export class SvgDrawTarget implements DrawTarget {
         fill: style.fill,
         opacity: style.opacity,
         stroke: style.stroke,
-        "stroke-width": style.strokeWidth
+        "stroke-width": style.strokeWidth,
+        ...style.attrs
       })
     );
   }

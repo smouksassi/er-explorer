@@ -40,6 +40,19 @@ describe("FitLayer", () => {
     expect(result.content as string).not.toContain("<path");
   });
 
+  it("draws a solid (non-dashed) line when dash is explicitly null", () => {
+    const renderer = new SVGRenderer();
+    const result = renderer.render({
+      width: 600,
+      height: 300,
+      xDomain: [0, 100],
+      yDomain: [0, 1],
+      layers: [new FitLayer({ id: "curve", samples, dash: null })]
+    });
+    const svg = result.content as string;
+    expect(svg).not.toContain("stroke-dasharray");
+  });
+
   it("accepts a StepStyle for step-function endpoint types (e.g. Kaplan-Meier)", () => {
     const renderer = new SVGRenderer();
     const smooth = renderer.render({
