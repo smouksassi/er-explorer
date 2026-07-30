@@ -39,6 +39,7 @@ export class SVGRenderer implements Renderer {
     const target = new SvgDrawTarget();
     const markers: MarkerCandidate[] = [];
     const hitRegions: HitRegion[] = [];
+    const layerData: Record<string, unknown> = {};
 
     const ctx: DrawContext = {
       width: input.width,
@@ -49,6 +50,7 @@ export class SVGRenderer implements Renderer {
       yScale,
       markers: { add: (m) => markers.push(m) },
       interactions: { add: (h) => hitRegions.push(h) },
+      layerData: { set: (id, data) => { layerData[id] = data; } },
       target
     };
 
@@ -79,7 +81,7 @@ export class SVGRenderer implements Renderer {
     return {
       outputType: "svg",
       content,
-      metadata: { plotRect, xScale, yScale, markers: laidOutMarkers, hitRegions }
+      metadata: { plotRect, xScale, yScale, markers: laidOutMarkers, hitRegions, layerData }
     };
   }
 }

@@ -3,6 +3,8 @@ import {
   predictLogisticWaldResult,
   bootstrapLogisticCI,
   summarizeDistribution,
+  kernelDensityEstimate,
+  silvermanBandwidth,
   quantile,
   wilsonScoreInterval,
   createModelDefinition,
@@ -11,8 +13,6 @@ import {
 } from "@er-explorer/analysis";
 import { linearAnalysisModel, meanConfidenceInterval, type LinearParams } from "@er-explorer/model-linear";
 import {
-  renderDistributionChart,
-  buildAsymRidgePath,
   scaleLinear,
   seededJitter,
   createVisualizationSpec,
@@ -21,10 +21,6 @@ import {
   type ProjectedGroup,
   type LinearProjectedGroup,
   type ObservedMeanBin,
-  type DistributionGroupInput,
-  type DistributionGroupMeta,
-  type DistributionMode,
-  type DistributionSplitAnnotation,
   type ObservedResponseBin,
   type ReferenceLine
 } from "@er-explorer/visualization-engine";
@@ -38,11 +34,18 @@ import {
   ObservedStatLayer,
   AnnotationLayer,
   DoseProjectionLayer,
+  DistributionLayer,
   interpolateCurveSample,
+  buildAsymRidgePath,
   type Layer as RendererLayer,
   type CurveSample,
   type ScatterPointDatum,
-  type ReferenceLineSpec
+  type ReferenceLineSpec,
+  type DistributionGroupDatum,
+  type DistributionGroupMeta,
+  type DistributionMode,
+  type DistributionSplitAnnotation,
+  type DistributionLayerData
 } from "@er-explorer/renderer";
 import {
   createSessionState,
@@ -96,7 +99,7 @@ const DATASET_ID = "effICGI-demo-v1";
 /** Placebo is excluded from box/violin *shapes* in the exposure distribution panel: by design
  * every placebo patient has zero exposure, so a box/violin of a constant isn't informative (it
  * would just be a degenerate spike). Its row still renders (label + N), it just skips the shape
- * - see the `skipShape` flag passed into `DistributionGroupInput` below. Placebo also appears
+ * - see the `skipShape` flag passed into `DistributionRawGroup` below. Placebo also appears
  * normally in the scatter, legend, and KPIs. */
 
 type ReferenceLineKind = "median" | "tertiles" | "quartiles";
@@ -1094,6 +1097,176 @@ function renderScatterPanel(
  * responder count even though the exposure values are identical across endpoints for a given
  * dose. All of a dose's sub-rows share the same groupId, so clicking any of them toggles that
  * whole dose cluster together, same as the plain single-row view. */
+/** Raw per-row input for the exposure-by-dose distribution strip, before this file computes its
+ * KDE/box-height shape geometry - one entry per dose (or, in "Compare endpoints"'s split view,
+ * one entry per dose x endpoint sub-row). Mirrors the now-retired `renderDistributionChart`'s own
+ * `DistributionGroupInput`. */
+interface DistributionRawGroup {
+  groupId: string | number;
+  label: string;
+  color: string;
+  values: number[];
+  n: number;
+  nResponders?: number;
+  selected?: boolean;
+  skipShape?: boolean;
+  splitAnnotations?: DistributionSplitAnnotation[];
+}
+
+/** Distribution chart's default margin - deliberately different from the scatter charts' own
+ * default (`top: 30` vs `22`) since this chart has no y-axis eating into the top margin the way a
+ * "0"/"1" (or numeric) y-axis label does. Must stay in sync with the `margin` actually passed to
+ * `SVGRenderer.render()` below, since `computeDistributionGroupData` needs the same
+ * `boxHalfHeightPx` the `DistributionLayer` will independently (re-)compute from `plotRect.height`
+ * - both sides derive it from the same `band = plotHeight / groups.length` formula. */
+const DISTRIBUTION_MARGIN = { top: 30, right: 20, bottom: 56, left: 96 };
+
+/** The x-sample grid a group's KDE/box shape is traced over: an even base grid across the whole
+ * domain, plus the group's own distribution breakpoints so box edges land exactly on
+ * q1/q3/whiskers instead of being snapped to the nearest grid point. Ported verbatim from the
+ * now-retired `renderDistributionChart`'s private `buildSampleGrid`. */
+function buildDistributionSampleGrid(xDomain: [number, number], stepBreakpoints: number[], baseCount: number): number[] {
+  const [lo, hi] = xDomain;
+  const span = hi - lo || 1;
+  const eps = span * 1e-4;
+  const base = Array.from({ length: baseCount + 1 }, (_, i) => lo + (span * i) / baseCount);
+  // each step breakpoint gets a "just before" and "just after" point (rather than one point
+  // exactly on the boundary) so the box profile can jump vertically there instead of sloping
+  const stepPairs = stepBreakpoints.filter((v) => isFinite(v)).flatMap((v) => [v - eps, v + eps]);
+  const clamp = (v: number) => Math.min(hi, Math.max(lo, v));
+  const rounded = [...base, ...stepPairs.map(clamp)].map((v) => Math.round(v * 1e6) / 1e6);
+  return [...new Set(rounded)].sort((a, b) => a - b);
+}
+
+/** Stepped box-profile half-heights (pixels) over `xSamples`: full box height within [q1,q3], a
+ * thin 1px whisker sliver within [whiskerLow,whiskerHigh], zero elsewhere - the traditional
+ * boxplot convention (the box spans exactly Q1-Q3, and a hairline connects it to the 1.5*IQR
+ * whisker bound). Ported verbatim from the now-retired `renderDistributionChart`'s exported
+ * `boxHalfHeightsPx`. */
+function distributionBoxHalfHeights(
+  summary: { q1: number; q3: number; whiskerLow: number; whiskerHigh: number },
+  xSamples: number[],
+  boxHalfHeightPx: number
+): number[] {
+  const whiskerHalfHeightPx = 1;
+  return xSamples.map((x) => {
+    if (x >= summary.q1 && x <= summary.q3) return boxHalfHeightPx;
+    if (x >= summary.whiskerLow && x <= summary.whiskerHigh) return whiskerHalfHeightPx;
+    return 0;
+  });
+}
+
+/**
+ * Computes one group's `DistributionLayer` shape geometry from its raw exposure values - the KDE
+ * bandwidth/quantile computation `@er-explorer/renderer` deliberately never does itself (its
+ * dependency rule: that package imports from `@er-explorer/domain` only, never
+ * `@er-explorer/analysis`). Returns `null` for a group with no values (mirrors the old
+ * `renderDistributionChart`'s handling of an empty/absent `DistributionSummary`).
+ *
+ * The KDE's own sample grid only spans this group's own data range (+ a small bandwidth-based
+ * pad for a natural taper), not the shared chart-wide `xDomain` - otherwise the shape (and its
+ * flat "violin mode" baseline) would stretch as a stray flat line across x-values the group has
+ * no data anywhere near, instead of tapering down to nothing right around its own min/max.
+ */
+function computeDistributionGroupData(
+  values: number[],
+  xDomain: [number, number],
+  boxHalfHeightPx: number,
+  baseCount = 60
+): { xSamples: number[]; boxHalfHeights: number[]; densityHalfHeights: number[]; summary: NonNullable<ReturnType<typeof summarizeDistribution>> } | null {
+  const summary = summarizeDistribution(values);
+  if (!summary) return null;
+  const bandwidth = silvermanBandwidth(values);
+  const pad = Math.max(bandwidth * 2.5, (summary.max - summary.min) * 0.02);
+  const localDomain: [number, number] = [Math.max(xDomain[0], summary.min - pad), Math.min(xDomain[1], summary.max + pad)];
+  const xSamples = buildDistributionSampleGrid(
+    localDomain,
+    [summary.whiskerLow, summary.q1, summary.q3, summary.whiskerHigh, summary.min, summary.max],
+    baseCount
+  );
+  const rawDensity = kernelDensityEstimate(values, xSamples, bandwidth);
+  const boxHalfHeights = distributionBoxHalfHeights(summary, xSamples, boxHalfHeightPx);
+  // normalized per-group (classic violin convention): each violin's own peak maps to the same
+  // max width, so shape is comparable across groups regardless of absolute density scale
+  const groupMaxDensity = Math.max(1e-9, ...rawDensity);
+  const densityHalfHeights = rawDensity.map((d) => (d / groupMaxDensity) * boxHalfHeightPx);
+  return { xSamples, boxHalfHeights, densityHalfHeights, summary };
+}
+
+/**
+ * Renders the exposure-by-dose distribution strip (Boxplot/Violin/Lineranges, per `mode`) via
+ * `@er-explorer/renderer` - the Phase 6 cutover off `packages/visualization-engine`'s
+ * `renderDistributionChart`. Composes the already-generic `Grid`/`Axis`/`Annotation` layers with
+ * the new `DistributionLayer`, which draws the actual per-row shapes.
+ *
+ * One intentional visual difference from the old output (same kind already accepted in Phase 1's
+ * axis-paint-order note): the x-axis label sits ~4px higher than the old renderer's hardcoded
+ * `height - 12`, since it now reuses `AxisLayer`'s own default label offset rather than
+ * duplicating a bespoke position just for this one caller.
+ */
+function renderDistributionViaRenderer(
+  rawGroups: DistributionRawGroup[],
+  xDomain: [number, number],
+  mode: DistributionMode,
+  referenceLines: ReferenceLine[],
+  xAxisLabel: string,
+  width: number,
+  height: number
+): { content: string; metadata: DistributionMeta } {
+  const margin = DISTRIBUTION_MARGIN;
+  const plotHeight = height - margin.top - margin.bottom;
+  const band = plotHeight / Math.max(1, rawGroups.length);
+  const boxHalfHeightPx = Math.min(22, band * 0.24);
+
+  const groups: DistributionGroupDatum[] = rawGroups.map((g) => {
+    const computed = g.skipShape ? null : computeDistributionGroupData(g.values, xDomain, boxHalfHeightPx);
+    return {
+      groupId: g.groupId,
+      label: g.label,
+      color: g.color,
+      n: g.n,
+      nResponders: g.nResponders,
+      selected: g.selected,
+      skipShape: g.skipShape,
+      splitAnnotations: g.splitAnnotations,
+      xSamples: computed?.xSamples,
+      boxHalfHeights: computed?.boxHalfHeights,
+      densityHalfHeights: computed?.densityHalfHeights,
+      summary: computed?.summary
+    };
+  });
+
+  const layers: RendererLayer[] = [
+    new GridLayer({ id: "grid", yTickValues: [] }),
+    new AxisLayer({ id: "axis-x", orientation: "x", label: xAxisLabel }),
+    new DistributionLayer({ id: "distribution", mode, groups })
+  ];
+
+  if (referenceLines.length) {
+    // The distribution chart always prints the split value beneath the line (unlike the scatter
+    // charts' optional `showSplitValue` toggle) - matches the old renderDistributionChart's
+    // hardcoded `showValueAtBottom = true`.
+    const refSpecs: ReferenceLineSpec[] = referenceLines.map((ref) => ({
+      value: ref.value,
+      label: ref.label,
+      valueLabel: ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1)
+    }));
+    layers.push(new AnnotationLayer({ id: "reference-lines", lines: refSpecs }));
+  }
+
+  const result = new SVGRenderer().render({ width, height, xDomain, yDomain: [0, 1], margin, layers });
+  const layerData = result.metadata.layerData["distribution"] as DistributionLayerData;
+
+  return {
+    content: result.content as string,
+    metadata: {
+      xScale: { domain: [...result.metadata.xScale.domain], range: [...result.metadata.xScale.range] },
+      groups: layerData.groups,
+      boxHalfHeightPx: layerData.boxHalfHeightPx
+    }
+  };
+}
+
 function appendDistributionMini(
   cell: HTMLElement,
   metric: ExposureMetric,
@@ -1113,7 +1286,7 @@ function appendDistributionMini(
   const xMax = Math.max(...xs);
   const xDomain: [number, number] = [0, xMax];
 
-  let distGroups: DistributionGroupInput[];
+  let distGroups: DistributionRawGroup[];
 
   if (splitByEndpoints && splitByEndpoints.length > 1) {
     distGroups = DOSE_ORDER.slice()
@@ -1175,15 +1348,15 @@ function appendDistributionMini(
   const doseCount = DOSE_ORDER.filter((dose) => RECORDS.some((r) => r.dose === dose)).length;
   const height = Math.max(200, doseCount * 26 + 60);
 
-  const distResult = renderDistributionChart({
-    groups: distGroups,
-    xDomain: [0, xMax],
-    mode: state.distributionMode,
-    referenceLines: computeDisplayReferenceLines(metric),
+  const distResult = renderDistributionViaRenderer(
+    distGroups,
+    [0, xMax],
+    state.distributionMode,
+    computeDisplayReferenceLines(metric),
+    exposureLabel(metric),
     width,
-    height,
-    options: { title: "Exposure by dose", xAxisLabel: exposureLabel(metric), yAxisLabel: "", renderTarget: "svg" }
-  });
+    height
+  );
 
   const wrap = document.createElement("div");
   wrap.className = "dist-inline";
@@ -1193,7 +1366,7 @@ function appendDistributionMini(
   const readoutEl = wrap.querySelector(".readout") as HTMLDivElement;
   chartWrap.innerHTML = distResult.content;
   const finalReadoutEndpoints = readoutEndpoints ?? (splitByEndpoints && splitByEndpoints.length > 1 ? splitByEndpoints : [endpoint]);
-  attachDistributionInteractivity(chartWrap, metric, finalReadoutEndpoints, active, readoutEl, distResult.metadata as unknown as DistributionMeta);
+  attachDistributionInteractivity(chartWrap, metric, finalReadoutEndpoints, active, readoutEl, distResult.metadata);
 }
 
 interface DistributionMeta {

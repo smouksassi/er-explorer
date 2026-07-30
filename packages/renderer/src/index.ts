@@ -82,6 +82,17 @@ export { AnnotationLayer } from "./layers/annotation";
 export type { AnnotationLayerOptions, ReferenceLineSpec } from "./layers/annotation";
 export { DoseProjectionLayer } from "./layers/doseProjection";
 export type { DoseProjectionGroup, DoseProjectionLayerOptions } from "./layers/doseProjection";
+export { DistributionLayer } from "./layers/distribution";
+export type {
+  DistributionGroupDatum,
+  DistributionGroupMeta,
+  DistributionGroupSummary,
+  DistributionLayerData,
+  DistributionLayerOptions,
+  DistributionMode,
+  DistributionSplitAnnotation
+} from "./layers/distribution";
+export { buildAsymRidgePath, buildRidgePath } from "./distributionShape";
 
 /** Package identity marker (kept from Phase 0 for continuity). */
 export const RENDERER_PACKAGE_ID = "@er-explorer/renderer" as const;

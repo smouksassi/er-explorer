@@ -116,6 +116,17 @@ export interface DrawContext {
   readonly yScale: Scale;
   readonly markers: { add(candidate: MarkerCandidate): void };
   readonly interactions?: { add(region: HitRegion): void };
+  /**
+   * A generic, per-layer-id escape hatch for caller-consumable data that is neither a
+   * `MarkerCandidate` nor a `HitRegion` - e.g. `DistributionLayer`'s resolved per-group shape
+   * geometry (pixel `cy`, `xSamples`, box/density half-heights), which `apps/demo`'s own
+   * boxplot<->violin morph animation reads back out of `RenderResult.metadata.layerData` and
+   * re-interpolates frame by frame, entirely outside any Layer's `render()`. Keyed by the
+   * pushing Layer's own `id` (a Layer only ever sets its own key, once, at the end of its
+   * `render()`) - unlike markers/hit-regions, this data is never resolved or transformed by the
+   * Renderer, just handed back as-is.
+   */
+  readonly layerData: { set(layerId: string, data: unknown): void };
   readonly target: DrawTarget;
 }
 
@@ -159,6 +170,8 @@ export interface RenderResult {
     yScale: Scale;
     markers: LaidOutMarker[];
     hitRegions: HitRegion[];
+    /** Every Layer's `ctx.layerData` contribution, keyed by that Layer's own `id`. */
+    layerData: Record<string, unknown>;
   };
 }
 
