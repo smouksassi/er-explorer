@@ -417,6 +417,20 @@ function computeContinuousYDomain(points: Array<{ displayY?: number; response: n
   return [lo - pad, hi + pad];
 }
 
+/** Scatter charts' fixed SVG height, shared by `renderContinuousScatterViaRenderer` and
+ * `renderBinaryScatterOverlay` below, and also applied as the chart `<div>`'s own inline height
+ * in `renderScatterPanel` (see `SCATTER_CHART_HEIGHT` usage there). The SVG element itself is
+ * emitted with `width="100%" height="100%"` and no `preserveAspectRatio="none"` override, so a
+ * container whose own aspect ratio doesn't match this intrinsic width/height gets letterboxed by
+ * the browser's default `xMidYMid meet` behavior - which silently rescales the chart's *effective*
+ * horizontal content width relative to its container. The exposure-distribution strip below each
+ * scatter row already pins its own container's height to its own intrinsic SVG height for exactly
+ * this reason (see `appendDistributionMini`'s `style="height: ${height}px"`) - if this scatter
+ * height and that div's inline height ever drift out of sync with each other, the two rows stop
+ * sharing the same effective horizontal scale and their vertical reference lines (Min/Median/Max)
+ * visibly stop lining up between the scatter chart and the distribution strip beneath it. */
+const SCATTER_CHART_HEIGHT = 360;
+
 /**
  * Renders the continuous (BRLS/PRLS) exposure-response scatter chart via `@er-explorer/renderer`
  * - the first real cutover off `packages/visualization-engine` (Phase 4 of the renderer
@@ -444,7 +458,7 @@ function renderContinuousScatterViaRenderer(
 ): { content: string; metadata: ScatterMeta } {
   const curveSamples = toCurveSamples(curve);
   const yDomain = computeContinuousYDomain(points, curveSamples);
-  const height = 360;
+  const height = SCATTER_CHART_HEIGHT;
 
   const scatterPoints: ScatterPointDatum[] = (state.showPoints ? points : []).map((p) => ({
     id: p.id,
@@ -599,7 +613,7 @@ function renderBinaryScatterOverlay(
   referenceLines: ReferenceLine[],
   observedBins: ObservedResponseBin[]
 ): { content: string; metadata: ScatterMeta } {
-  const height = 360;
+  const height = SCATTER_CHART_HEIGHT;
   const yDomain: [number, number] = [-0.18, 1.18];
   const hasExtras = curves.length > 1;
   const curveSamplesFor = curves.map((c) => toCurveSamples(c.curve));
@@ -1169,7 +1183,7 @@ function renderScatterPanel(
   cell.className = "panel-cell";
   // No panel-cell-title here - the chart's own x/y axis labels (exposure metric, endpoint) already
   // carry this information, so a repeated text title above it would just add whitespace.
-  cell.innerHTML = `<div class="chart" data-metric="${metric}"></div>`;
+  cell.innerHTML = `<div class="chart" data-metric="${metric}" style="height: ${SCATTER_CHART_HEIGHT}px;"></div>`;
   container.appendChild(cell);
   const chartWrap = cell.querySelector(".chart") as HTMLDivElement;
   chartWrap.innerHTML = scatterResult.content;
@@ -1479,7 +1493,7 @@ interface DistributionMeta {
 function renderEndpointComparisonRow(metrics: ExposureMetric[], endpoints: Endpoint[], active: Set<number>): void {
   renderEndpointLegend(endpoints);
 
-  const chartHeight = 360;
+  const chartHeight = SCATTER_CHART_HEIGHT;
   const width = panelWidth();
 
   const rowEl = document.createElement("div");
