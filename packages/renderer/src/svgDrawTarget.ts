@@ -81,6 +81,7 @@ export class SvgDrawTarget implements DrawTarget {
         opacity: style.opacity,
         stroke: style.stroke,
         "stroke-width": style.strokeWidth,
+        "stroke-dasharray": style.dash,
         rx: style.rx,
         ...style.attrs
       })

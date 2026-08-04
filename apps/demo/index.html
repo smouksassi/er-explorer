@@ -1,172 +1,496 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ER Explorer — Minimal Demo</title>
+<title>ER Explorer</title>
 <style>
-  :root {
-    --bg: #f6f7fb;
-    --panel: #ffffff;
+  :root, [data-theme="light"] {
+    --bg: #f0f2f6;
+    --chrome: #ffffff;
+    --elevated: #ffffff;
     --text: #182033;
     --muted: #667085;
-    --border: #d8dfea;
+    --faint: #94a3b8;
+    --stroke: #d8dfea;
     --accent: #2563eb;
-    --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    --accent-soft: rgba(37, 99, 235, 0.12);
+    --chip: #f1f5f9;
+    --shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    --plot-bg: #fbfcfe;
+  }
+  [data-theme="dark"] {
+    --bg: #0f1419;
+    --chrome: #151b22;
+    --elevated: #1a222c;
+    --text: #e7ecf1;
+    --muted: #9aa7b5;
+    --faint: #6b7785;
+    --stroke: #2a3441;
+    --accent: #3d9b8f;
+    --accent-soft: rgba(61, 155, 143, 0.18);
+    --chip: #24303b;
+    --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    --plot-bg: #121820;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
-  .wrap { max-width: 1400px; margin: 0 auto; padding: 22px; }
-  .eyebrow { color: var(--accent); font-weight: 800; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
-  h1 { margin: 0 0 8px 0; font-size: 28px; letter-spacing: -0.03em; }
-  .sub { margin: 0 0 18px 0; color: var(--muted); line-height: 1.5; max-width: 980px; font-size: 14px; }
-  .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
-  .card, .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); }
-  .card { padding: 16px 18px; }
-  .kpi { font-size: 26px; font-weight: 800; line-height: 1; }
-  .kpi-label { margin-top: 8px; color: var(--muted); font-size: 12.5px; }
-  .responder-card { margin-bottom: 18px; }
-  .responder-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 5px 0; font-size: 13.5px; }
-  .responder-row + .responder-row { border-top: 1px dashed var(--border); margin-top: 3px; padding-top: 8px; }
-  .responder-endpoint { min-width: 58px; font-weight: 800; }
-  .responder-group .muted { color: var(--muted); font-weight: 600; }
-  .panel { padding: 12px 12px 8px 12px; margin-bottom: 18px; }
-  .panel-head { display: flex; flex-direction: column; gap: 8px; padding: 6px 8px 10px 8px; }
-  .panel-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .panel-title { font-weight: 800; font-size: 15px; }
-  .note-toggle { background: none; border: none; color: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer; padding: 2px 6px; white-space: nowrap; }
-  .note-toggle:hover { text-decoration: underline; }
-  .panel-note { color: var(--muted); font-size: 12.5px; max-width: 760px; }
-  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .field { display: flex; flex-direction: column; gap: 3px; }
-  .field label { font-size: 11px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
-  select, button { border: 1px solid var(--border); background: #fff; color: var(--text); border-radius: 10px; padding: 7px 10px; cursor: pointer; font-weight: 600; font-size: 13px; font-family: inherit; }
-  button:hover, select:hover { border-color: var(--accent); }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.toggle { padding: 6px 9px; border: none; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+    font-size: 14px; line-height: 1.45;
+  }
+  button, input, select { font: inherit; }
+  .app { display: flex; height: 100vh; height: 100dvh; overflow: hidden; }
+  .rail {
+    width: 72px; flex-shrink: 0; background: var(--chrome); border-right: 1px solid var(--stroke);
+    display: flex; flex-direction: column; align-items: stretch; padding: 10px 6px; gap: 4px;
+  }
+  .rail-spacer { flex: 1; }
+  .nav-btn {
+    border: 1px solid transparent; background: transparent; color: var(--muted); border-radius: 10px;
+    padding: 8px 4px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  .nav-btn .ico { font-size: 18px; line-height: 1; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; }
+  .nav-btn .ico svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
+  .nav-btn .lbl { font-size: 9px; font-weight: 700; letter-spacing: 0.02em; text-align: center; line-height: 1.15; }
+  .nav-btn:hover { background: var(--chip); color: var(--text); }
+  .nav-btn.active { background: var(--accent-soft); border-color: var(--stroke); color: var(--accent); }
+  .drawer {
+    width: min(320px, 88vw); flex-shrink: 0; background: var(--chrome); border-right: 1px solid var(--stroke);
+    overflow: auto; padding: 16px 14px 24px; -webkit-overflow-scrolling: touch;
+  }
+  .drawer.hidden { display: none; }
+  .drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+  .drawer-head h2 { margin: 0; font-size: 15px; font-weight: 800; }
+  .drawer-panel[hidden] { display: none !important; }
+  .drawer-section { margin-bottom: 16px; }
+  .drawer-section .hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 10px 0; }
+  .main {
+    flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+    padding: 10px 12px 12px;
+  }
+  .main-header {
+    flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    flex-wrap: wrap; margin-bottom: 8px;
+  }
+  .main-header h1 { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -0.02em; }
+  .main-header .subline { color: var(--muted); font-size: 12px; margin: 2px 0 0 0; }
+  .header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .btn {
+    border: 1px solid var(--stroke); background: var(--elevated); color: var(--text);
+    border-radius: 10px; padding: 7px 12px; cursor: pointer; font-weight: 600; font-size: 13px;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.ghost { background: transparent; }
+  .btn-sm { padding: 5px 9px; font-size: 12px; }
+  .plot-stage {
+    flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column;
+    border: 1px solid var(--stroke); border-radius: 12px; background: var(--plot-bg);
+    box-shadow: var(--shadow);
+  }
+  #plotWorkspace { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  #plotContent { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  #plotContent[hidden] { display: none !important; }
+  .plot-empty-hint {
+    flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+    color: var(--muted); font-size: 13px; text-align: center; line-height: 1.5;
+  }
+  .plot-empty-hint[hidden] { display: none !important; }
+  .plot-empty-hint button.linkish {
+    border: none; background: none; color: var(--accent); font-weight: 700; cursor: pointer; padding: 0 2px;
+    text-decoration: underline; font-size: inherit;
+  }
+  body:not(.has-dataset) .meta-bar { display: none; }
+  .meta-bar {
+    flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline;
+    padding: 8px 12px; border-top: 1px solid var(--stroke); background: var(--elevated);
+    font-size: 12px; color: var(--muted); border-radius: 0 0 12px 12px;
+  }
+  .meta-bar b { color: var(--text); font-weight: 700; }
+  .meta-kpi { display: inline-flex; gap: 6px; align-items: baseline; }
+  .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+  .field label, .field-label {
+    font-size: 10px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  select {
+    border: 1px solid var(--stroke); background: var(--elevated); color: var(--text);
+    border-radius: 10px; padding: 7px 10px; cursor: pointer; font-weight: 600; font-size: 13px; width: 100%;
+  }
+  .checkbox-group {
+    display: flex; gap: 4px; flex-wrap: wrap; border: 1px solid var(--stroke); border-radius: 10px;
+    padding: 4px; background: var(--elevated);
+  }
+  .checkbox-group label {
+    display: flex; align-items: center; gap: 5px; padding: 5px 9px; border-radius: 8px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .checkbox-group label:has(input:checked) { background: var(--accent-soft); color: var(--accent); }
+  .checkbox-group input { accent-color: var(--accent); }
+  button.toggle { padding: 6px 9px; border: none; border-radius: 8px; background: transparent; cursor: pointer; font-weight: 600; font-size: 12px; }
   button.toggle.active { background: var(--accent); color: #fff; }
   button.toggle:disabled { cursor: wait; opacity: 0.7; }
-  .checkbox-group { display: flex; gap: 4px; border: 1px solid var(--border); border-radius: 10px; padding: 3px; background: #fff; }
-  .checkbox-group label { display: flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
-  .checkbox-group label:has(input:checked) { background: #eef2ff; color: var(--accent); }
-  .checkbox-group input { accent-color: var(--accent); }
-  #status { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
-  .readout { margin: 8px 0 0 0; padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc; color: #0f172a; font-size: 12px; line-height: 1.5; min-height: 20px; }
-  .readout .muted { color: var(--muted); }
-  .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 10px; padding: 0 6px 6px 6px; }
-  .endpoint-rows { display: flex; flex-direction: column; gap: 2px; }
-  .endpoint-row + .endpoint-row { border-top: 1px dashed var(--border); padding-top: 4px; margin-top: 2px; }
-  .panel-cell { border: 1px solid var(--border); border-radius: 14px; padding: 6px 8px 4px 8px; background: #fbfcfe; }
-  .panel-cell-title { font-weight: 800; font-size: 13px; color: #334155; margin-bottom: 4px; }
-  .chart { width: 100%; height: 380px; position: relative; touch-action: none; }
-  .chart.box { height: 300px; }
-  .dist-inline { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e2e8f0; }
-  .dist-inline-label { font-weight: 700; font-size: 10.5px; color: #334155; opacity: 0.75; margin-bottom: 2px; }
-  .chart.dist-inline-chart { height: 190px; }
-  .dist-shared { margin-top: 12px; }
-  .dist-shared .dist-inline { margin-top: 0; padding-top: 0; border-top: none; }
-  .footer-note { color: var(--muted); font-size: 12px; margin: 8px 0 0 0; padding: 0 8px 8px 8px; line-height: 1.5; }
-  svg { width: 100%; height: 100%; overflow: visible; display: block; }
-  .legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 0 8px 10px 8px; }
+  .mapping-table-wrap { overflow-x: auto; margin: 10px 0; border: 1px solid var(--stroke); border-radius: 10px; }
+  .mapping-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .mapping-table th, .mapping-table td { padding: 6px 8px; border-bottom: 1px solid var(--stroke); text-align: left; }
+  .mapping-table th { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+  .endpoint-model-list, .compare-norm-list { display: flex; flex-direction: column; gap: 8px; }
+  .endpoint-model-row, .compare-norm-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(88px, 110px); gap: 8px; align-items: center;
+    font-size: 12px; font-weight: 600;
+  }
+  .compare-norm-row { grid-template-columns: minmax(0, 1fr) 1fr 1fr auto; }
+  .compare-norm-row input[type="number"] {
+    width: 100%; border: 1px solid var(--stroke); border-radius: 8px; padding: 5px 6px;
+    background: var(--elevated); color: var(--text); font-size: 12px;
+  }
+  .compare-norm-row .btn-reset-norm {
+    border: none; background: transparent; color: var(--accent); font-size: 11px; font-weight: 700;
+    cursor: pointer; padding: 4px 0; white-space: nowrap;
+  }
+  .compare-scale-note { font-size: 11px; color: var(--muted); margin: 0 0 8px 0; line-height: 1.45; }
+  #compareNormSection[hidden] { display: none !important; }
+  #mappingErrors { color: #b91c1c; font-size: 12px; margin: 6px 0; }
+  [data-theme="dark"] #mappingErrors { color: #fca5a5; }
+  .panel-inner { padding: 6px 8px 8px; flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+  .endpoint-rows { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+  .compare-endpoint-row { min-height: 0; }
+  .facet-layout {
+    display: flex; flex-direction: column; flex: 1 1 0; min-height: 280px; min-width: 0; width: 100%;
+  }
+  .facet-scatter-block {
+    flex: var(--scatter-fr) 1 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .facet-dist-block {
+    flex: var(--dist-fr) 1 0; min-height: 88px; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .facet-block-splitter {
+    flex: 0 0 6px; cursor: row-resize; background: var(--stroke); border-radius: 4px; margin: 0 8px;
+    touch-action: none;
+  }
+  .facet-block-splitter:hover { background: var(--accent); opacity: 0.45; }
+  .facet-scatter-block .endpoint-row { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  .facet-row-label {
+    flex-shrink: 0; font-size: 11px; font-weight: 800; color: var(--muted); padding: 2px 10px 2px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .panel-cell-scatter, .panel-cell-dist { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+  .metric-stack-scatter-only, .metric-stack-dist-only {
+    flex: 1; display: flex; flex-direction: column; min-height: 0; height: 100%; width: 100%;
+  }
+  .metric-stack-dist-only .metric-stack-dist { flex: 1; min-height: 0; }
+  .legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 6px 10px 4px; }
   .dotKey { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
   .swatch { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
-  .tooltip { position: absolute; pointer-events: none; background: rgba(17, 24, 39, 0.95); color: #fff; border-radius: 10px; padding: 8px 10px; font-size: 12px; line-height: 1.35; box-shadow: 0 8px 20px rgba(0,0,0,.18); opacity: 0; transform: translate(-50%, -110%); white-space: nowrap; z-index: 5; transition: opacity .08s ease; }
-  #fileInput { display: none; }
-  @media (max-width: 1000px) { .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 700px) { .summary-grid { grid-template-columns: 1fr; } .chart { height: 340px; } }
+  .endpoint-rows { display: flex; flex-direction: column; gap: 2px; }
+  .endpoint-row + .endpoint-row { border-top: 1px dashed var(--stroke); padding-top: 4px; margin-top: 2px; }
+  .panel-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 10px; padding: 0 8px 8px;
+    flex: 1 1 0; min-height: 0; align-content: stretch; height: 100%; grid-auto-rows: 1fr;
+  }
+  .panel-cell {
+    border: 1px solid var(--stroke); border-radius: 12px; padding: 6px 8px 4px; background: var(--elevated);
+    display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  }
+  .panel-cell-title { font-weight: 800; font-size: 13px; color: var(--text); margin-bottom: 4px; opacity: 0.85; }
+  .chart { width: 100%; height: min(380px, 50vh); position: relative; touch-action: none; }
+  .chart.dist-inline-chart { height: min(190px, 28vh); }
+  .dist-inline { margin-top: 0; padding-top: 0; border-top: none; }
+  .metric-stack {
+    display: flex; flex-direction: column; flex: 1 1 0; min-height: 280px;
+    --scatter-fr: 74; --dist-fr: 26;
+    width: 100%;
+  }
+  .compare-stack-cell { display: flex; flex-direction: column; min-height: 0; }
+  .plot-stack-height-handle {
+    flex: 0 0 10px; cursor: row-resize; touch-action: none;
+    margin: 4px 10px 6px; border-radius: 6px; background: var(--stroke);
+  }
+  .plot-stack-height-handle:hover { background: var(--accent); opacity: 0.5; }
+  .plot-stack-height-handle[hidden] { display: none !important; }
+  .metric-stack-scatter { flex: var(--scatter-fr) 1 0; min-height: 140px; overflow: hidden; display: flex; flex-direction: column; width: 100%; }
+  .metric-stack-scatter .chart { flex: 1; min-height: 120px; height: auto !important; width: 100% !important; }
+  .metric-stack-dist { flex: var(--dist-fr) 1 0; min-height: 88px; overflow: hidden; width: 100%; display: flex; flex-direction: column; }
+  .metric-stack-dist .dist-inline { flex: 1; display: flex; flex-direction: column; min-height: 0; width: 100%; }
+  .metric-stack-dist .dist-inline-chart {
+    flex: 1; width: 100% !important; height: 100% !important; min-height: 0 !important; max-height: none !important;
+  }
+  .metric-stack .chart svg { display: block; width: 100%; height: 100%; }
+  .metric-stack-dist .dist-inline-label { font-size: 11px; font-weight: 700; color: var(--muted); margin: 2px 0 4px; flex-shrink: 0; }
+  .metric-stack-splitter {
+    flex: 0 0 6px; cursor: row-resize; background: var(--stroke); border-radius: 4px; margin: 2px 0;
+    touch-action: none;
+  }
+  .metric-stack-splitter:hover { background: var(--accent); opacity: 0.45; }
+  .compare-shared-readout { margin: 8px 10px 4px; }
+  .readout { font-size: 11px; line-height: 1.45; margin-top: 4px; flex-shrink: 0; }
+  .readout.readout-off { display: none !important; }
+  .readout.readout-collapsed { max-height: 3.25rem; overflow: auto; }
+  .readout-line-exposure { margin-bottom: 2px; }
+  .readout-line-fit { margin-bottom: 4px; }
+  .filter-rules { display: flex; flex-direction: column; gap: 10px; }
+  .filter-rule {
+    border: 1px solid var(--stroke); border-radius: 10px; padding: 10px; background: var(--elevated);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .filter-rule-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--muted); font-weight: 700; }
+  .filter-rule-row { display: grid; grid-template-columns: 1fr; gap: 6px; }
+  .filter-rule-actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .filter-values-input { width: 100%; border: 1px solid var(--stroke); border-radius: 8px; padding: 6px 8px; font-size: 12px; background: var(--elevated); color: var(--text); }
+  .filter-cat-values {
+    max-height: 120px; overflow: auto; border: 1px solid var(--stroke); border-radius: 8px;
+    padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; font-size: 12px;
+  }
+  .filter-cat-values label { display: flex; gap: 6px; align-items: center; cursor: pointer; font-weight: 600; }
+  .filter-mode-row { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--muted); }
+  .dist-shared { margin-top: 8px; }
+  .footer-note { color: var(--muted); font-size: 11px; padding: 4px 10px 8px; line-height: 1.45; }
+  .note-toggle { background: none; border: none; color: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer; padding: 2px 6px; }
+  .panel-note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 8px 0; display: none; }
+  .readout { margin: 8px 0 0 0; padding: 10px 12px; border: 1px solid var(--stroke); border-radius: 10px; background: var(--chip); font-size: 12px; line-height: 1.5; min-height: 20px; }
+  .responder-compact { font-size: 11px; line-height: 1.4; max-width: 100%; }
+  .responder-compact .row-mini { padding: 3px 0; border-top: 1px dashed var(--stroke); }
+  .responder-compact .row-mini:first-child { border-top: none; }
+  svg { width: 100%; height: 100%; overflow: visible; display: block; }
+  .tooltip {
+    position: absolute; pointer-events: none; background: rgba(17, 24, 39, 0.95); color: #fff;
+    border-radius: 10px; padding: 8px 10px; font-size: 12px; z-index: 5; opacity: 0; transition: opacity 0.08s;
+  }
+  #fileInput, #csvFileInput { display: none; }
+  #status { padding: 4px 10px 6px; color: var(--muted); font-size: 12px; }
+  .session-status { font-size: 12px; color: var(--muted); margin-top: 8px; display: block; }
+  body:not(.has-dataset) .nav-btn[data-rail="filters"],
+  body:not(.has-dataset) .nav-btn[data-rail="analysis"],
+  body:not(.has-dataset) .nav-btn[data-rail="overlays"],
+  body:not(.has-dataset) .nav-btn[data-rail="style"],
+  body:not(.has-dataset) .nav-btn[data-rail="plot"] { opacity: 0.45; pointer-events: none; }
+  @media (max-width: 768px) {
+    .rail { width: 56px; padding: 8px 4px; }
+    .nav-btn .lbl { font-size: 8px; }
+    .drawer {
+      position: fixed; left: 56px; top: 0; bottom: 0; z-index: 40;
+      box-shadow: var(--shadow); max-width: calc(100vw - 56px);
+    }
+    .drawer:not(.drawer-overlay-open):not(.hidden) { display: block; }
+    .main { padding: 8px; }
+    .chart { height: min(320px, 45vh); }
+  }
+  @media (max-width: 480px) {
+    .main-header h1 { font-size: 15px; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="eyebrow">ER Explorer — minimal demo</div>
-  <h1>Interactive exposure-response explorer</h1>
-  <p class="sub">
-    Real logistic exposure-response fit (Newton–Raphson IRLS) on an example clinical trial dataset, with a
-    95% confidence band computed either analytically (Wald) or by seeded case-resampling bootstrap. Select more
-    than one exposure metric to compare panels side by side. Drag a box in a scatter panel to select a subset of
-    patients (selection is linked across panels); click a dose group's box to project the fit across its full
-    observed exposure range (min through max), with its interquartile range emphasized. Save the current view as
-    a reproducible session file and reload it later.
-  </p>
+<div class="app">
+  <nav class="rail" aria-label="Primary">
+    <button type="button" class="nav-btn active" data-rail="data" aria-current="page">
+      <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h16v12H4z"/><path d="M4 7V5h16v2"/><path d="M9 11h6"/></svg></span>
+      <span class="lbl">Data</span>
+    </button>
+    <button type="button" class="nav-btn" data-rail="filters">
+      <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16l-6 7v5l-4 2v-7z"/></svg></span>
+      <span class="lbl">Filters</span>
+    </button>
+    <button type="button" class="nav-btn" data-rail="analysis">
+      <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 19V9"/><path d="M12 19V5"/><path d="M19 19v-7"/></svg></span>
+      <span class="lbl">Analysis</span>
+    </button>
+    <button type="button" class="nav-btn" data-rail="overlays">
+      <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg></span>
+      <span class="lbl">Overlays</span>
+    </button>
+    <button type="button" class="nav-btn" data-rail="style">
+      <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3c-1.5 2.5-4 4-4 7a4 4 0 0 0 8 0c0-3-2.5-4.5-4-7z"/><path d="M8 21h8"/></svg></span>
+      <span class="lbl">Style</span>
+    </button>
+    <button type="button" class="nav-btn" data-rail="plot">
+      <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/><path d="M9 9h6v6H9z"/></svg></span>
+      <span class="lbl">Plot</span>
+    </button>
+    <div class="rail-spacer"></div>
+    <button type="button" class="nav-btn" data-rail="session">
+      <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4h12v16H6z"/><path d="M9 8h6"/><path d="M9 12h4"/></svg></span>
+      <span class="lbl">Session</span>
+    </button>
+  </nav>
 
-  <div class="summary-grid">
-    <div class="card"><div class="kpi" id="kpiN">—</div><div class="kpi-label">Patients in dataset</div></div>
-    <div class="card"><div class="kpi" id="kpiDoses">5</div><div class="kpi-label">Dose groups</div></div>
-    <div class="card"><div class="kpi" id="kpiShowing">—</div><div class="kpi-label">Rows in current selection</div></div>
-  </div>
-  <div class="card responder-card">
-    <div class="kpi-label" style="margin-top: 0;">Response summary by endpoint — Placebo vs Dosed</div>
-    <div id="kpiRespondersBody" style="margin-top: 8px;"></div>
-  </div>
+  <aside class="drawer" id="appDrawer" aria-label="Settings">
+    <div class="drawer-head">
+      <h2 id="drawerTitle">Data</h2>
+      <button type="button" class="btn btn-sm ghost" id="drawerCloseBtn" title="Focus on plot">Close</button>
+    </div>
 
-  <div class="panel">
-    <div class="panel-head">
-      <div class="panel-title-row">
-        <div class="panel-title">Exposure vs response</div>
-        <button class="note-toggle" type="button" data-target="scatterNote" aria-expanded="false">Show details ▾</button>
+    <div class="drawer-panel" id="drawer-data">
+      <p class="hint">Start by loading the bundled effICGI example or uploading your own wide CSV. Map columns, then explore exposure–response in the plot view.</p>
+      <div class="drawer-section">
+        <button type="button" class="btn primary" id="reloadBundledBtn" style="width:100%; margin-bottom:8px;">Use example effICGI data</button>
+        <button type="button" class="btn" id="loadCsvBtn" style="width:100%;">Upload CSV…</button>
+        <input type="file" id="csvFileInput" accept=".csv,text/csv" />
+        <span id="dataStatus" class="session-status"></span>
       </div>
-      <div class="panel-note" id="scatterNote" style="display: none;">Points are jittered vertically for readability and colored by dose group ("Show points" toggle below shows/hides them, in both this view and Compare Endpoints; a continuous endpoint like BRLS/PRLS plots its own value with no jitter). Dashed grey line is the overall fit; shaded band is the 95% CI. Selecting multiple exposures adds a column per exposure; selecting multiple endpoints adds a row per endpoint, so you can compare how response varies with a given exposure across endpoints - all panels share the same selection. Once a "Group Exposures By" split is chosen, its cut-point lines (plus Min and Max of the same population) are always drawn; two independent toggles add detail to them: "Split value" prints that line's own exposure value beneath it (e.g. "83.8"), and "Fitted + CI" marks the model's own predicted value + CI right on the curve there (e.g. "Fit 0.74 [0.70-0.78]"; for a continuous endpoint this is a fitted response, not a probability) - separate from "Observed % responders", which instead shows the raw (non-model) observed rate (or, for a continuous endpoint, observed mean) per split bin in dark markers, for comparing fitted vs. observed side by side. Clicking a dose row below adds that dose's own observed %/N (or mean + CI + n, for a continuous endpoint) marker in its own color too ("On dose click" toggle). If markers land close together they automatically stack into a small column with a thin leader line back to each one's true position, so labels never overlap. Directly beneath every selected endpoint's own plot, a compact "Exposure distribution by dose" strip (Boxplot, Distribution/half-violin, or Lineranges, toggle above) shows the same dose groups on the identical x-axis - click a row to toggle that dose's projection onto the fit above (multiple groups can be active at once). "Lineranges" is a flattened boxplot: just a min-max bar with Q1/Q3 tick marks and a filled median dot, no filled shape - with full parity to Boxplot/Distribution (Group N, click-to-project, split-line values), since all three are just different renderings of the same underlying per-dose summary. Placebo's exposure is fixed at zero by design, so its row shows only its patient count (N), with no shape in any mode. The Q1/Q3 markers always reflect the same interquartile bounds used for that dose's projection, in every display mode. "Group N" (Off / N / N (%)) shows how many of each dose's own patients fall in each bin of the "Group Exposures By" split, once one is selected - this strip intentionally never shows a responder count next to N (click the row instead for that dose's own observed rate), since it's shared across every selected endpoint and a single count could only ever reflect one of them. This strip is shown once per exposure metric regardless of how many endpoints are selected - dose exposure itself is endpoint-independent, so repeating it identically under every endpoint row would just be noise; in the regular (non-comparison) view it sits once, right after the last endpoint row. With 2+ endpoints selected (excluding continuous ones - BRLS/PRLS aren't on the same scale as a probability, so they're never offered here), "Compare endpoints" switches to a different view: a single "(all)" panel per exposure metric, overlaying every selected endpoint's curve together in that metric's own column, colored and line-styled by endpoint instead of dose - "Split value", "Fitted + CI", and "Show points" all still work here, per-endpoint colored. Clicking a dose row still projects onto the curve here too, drawn against the first selected endpoint's curve specifically (the same one every other endpoint's curve is overlaid onto). Selecting more than one exposure metric adds more overlay columns side by side, exactly like the regular grid's one-column-per-metric layout - there's no separate per-endpoint panel to multiply against it. Beneath the overlay row, the distribution strip is shown once per exposure metric (not duplicated per endpoint), with each dose split into one colored sub-row per endpoint - clustered together, with the dose name labeled once per cluster (it's identical across endpoints). Dose names elsewhere in the UI (the selection status line, the projected-fit readout below this strip) drop their usual dose-swatch coloring while Compare Endpoints is active, since a dose no longer maps to one color there.</div>
-      <div class="controls">
-        <div class="field"><label>Exposure</label><div class="checkbox-group" id="exposureGroup">
-          <label><input type="checkbox" value="auc" checked /> AUC</label>
-          <label><input type="checkbox" value="cmax" /> CMAX</label>
-        </div></div>
-        <div class="field"><label>Endpoint</label><div class="checkbox-group" id="endpointGroup">
-          <label><input type="checkbox" value="icgi" checked /> ICGI</label>
-          <label><input type="checkbox" value="icgi2" /> ICGI2</label>
-          <label><input type="checkbox" value="icgi3" /> ICGI3</label>
-          <label><input type="checkbox" value="brls" /> BRLS (linear)</label>
-          <label><input type="checkbox" value="prls" /> PRLS (linear)</label>
-        </div></div>
-        <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="compareEndpointsGroup">
-          <label><input type="checkbox" id="compareEndpoints" disabled /> Compare endpoints</label>
-        </div></div>
-        <div class="field"><label for="ciSelect">CI method</label><select id="ciSelect"><option value="wald">Wald</option><option value="bootstrap">Bootstrap</option><option value="none">None</option></select></div>
-        <div class="field"><label>Group Exposures By:</label><div class="checkbox-group" id="refLineGroup">
+      <div id="mappingPanel" style="display: none;">
+        <div class="mapping-table-wrap">
+          <table class="mapping-table">
+            <thead>
+              <tr>
+                <th>Column</th><th>Type</th><th>Missing</th><th>Role</th>
+              </tr>
+            </thead>
+            <tbody id="mappingTableBody"></tbody>
+          </table>
+        </div>
+        <div id="mappingErrors"></div>
+        <button type="button" class="btn primary" id="applyMappingBtn">Apply mapping &amp; load</button>
+      </div>
+    </div>
+
+    <div class="drawer-panel" id="drawer-filters" hidden>
+      <p class="hint">Show me data where… Rows must match every rule (AND). Filters apply before brushing and dose focus.</p>
+      <div id="filterRulesList" class="filter-rules"></div>
+      <button type="button" class="btn" id="addFilterRuleBtn" style="width:100%; margin-top:8px;">Add filter</button>
+      <span id="filterStatus" class="session-status"></span>
+    </div>
+
+    <div class="drawer-panel" id="drawer-analysis" hidden>
+      <p class="hint">Choose exposure metrics and endpoints. Set each endpoint’s analysis model; compare view can mix binary and linear (linear scores use the scale below).</p>
+      <div class="field"><span class="field-label">Exposure</span><div class="checkbox-group" id="exposureGroup"></div></div>
+      <div class="field"><span class="field-label">Endpoint</span><div class="checkbox-group" id="endpointGroup"></div></div>
+      <div class="field">
+        <span class="field-label">Endpoint models</span>
+        <div id="endpointModelsList" class="endpoint-model-list"></div>
+      </div>
+      <div class="field" id="compareNormSection" hidden>
+        <span class="field-label">Compare scale (linear)</span>
+        <p class="compare-scale-note">Normalize linear endpoints to [0, 1] for overlay. Set clinically relevant bounds when observed data do not span the full score range.</p>
+        <div id="compareNormList" class="compare-norm-list"></div>
+      </div>
+      <div class="field"><div class="checkbox-group" id="compareEndpointsGroup">
+        <label><input type="checkbox" id="compareEndpoints" disabled /> Compare endpoints</label>
+        <label><input type="checkbox" id="compareDistByEndpoint" checked /> Split distribution by endpoint</label>
+      </div></div>
+      <div class="field"><label for="ciSelect">CI method</label>
+        <select id="ciSelect"><option value="wald">Wald</option><option value="bootstrap">Bootstrap</option><option value="none">None</option></select>
+      </div>
+      <button type="button" class="btn" id="resetBtn">Reset selection</button>
+    </div>
+
+    <div class="drawer-panel" id="drawer-overlays" hidden>
+      <p class="hint">Reference splits, observed vs fitted markers, and dose-click readouts.</p>
+      <div class="field"><span class="field-label">Group exposures by</span>
+        <div class="checkbox-group" id="refLineGroup">
           <label><input type="radio" name="refLine" value="none" checked /> None</label>
           <label><input type="radio" name="refLine" value="median" /> Median</label>
           <label><input type="radio" name="refLine" value="tertiles" /> Tertiles</label>
           <label><input type="radio" name="refLine" value="quartiles" /> Quartiles</label>
-        </div></div>
-        <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="splitAnnotationGroup">
-          <label><input type="checkbox" id="showObservedResp" disabled /> Observed (%/N)</label>
-          <label><input type="checkbox" id="showReferenceFit" disabled /> Fitted + CI</label>
-          <label><input type="checkbox" id="showSplitValue" disabled /> Split value</label>
-        </div></div>
-        <div class="field"><label>On dose click</label><div class="checkbox-group" id="doseObservedGroup">
-          <label><input type="checkbox" id="showDoseObserved" checked /> Observed %/N</label>
-        </div></div>
-        <div class="field"><label>&nbsp;</label><div class="checkbox-group" id="showPointsGroup">
-          <label><input type="checkbox" id="showPoints" checked /> Show points</label>
-        </div></div>
-        <div class="field"><label for="splitAnnotationMode">Group N</label><select id="splitAnnotationMode" disabled><option value="off">Off</option><option value="n">N</option><option value="n_pct">N (%)</option></select></div>
-        <div class="field"><label>Distribution</label><div class="checkbox-group" id="distModeGroup">
+        </div>
+      </div>
+      <div class="field"><div class="checkbox-group" id="splitAnnotationGroup">
+        <label><input type="checkbox" id="showObservedResp" disabled /> Observed (%/N)</label>
+        <label><input type="checkbox" id="showReferenceFit" disabled /> Fitted + CI</label>
+        <label><input type="checkbox" id="showSplitValue" disabled /> Split value</label>
+      </div></div>
+      <div class="field"><span class="field-label">On dose click</span>
+        <div class="checkbox-group"><label><input type="checkbox" id="showDoseObserved" checked /> Observed %/N</label></div>
+      </div>
+      <div class="field"><span class="field-label">Distribution readout</span>
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="showDistReadout" checked /> Show readout</label>
+          <label><input type="checkbox" id="expandDistReadout" /> Expand readout</label>
+        </div>
+      </div>
+      <p class="hint" id="refLineNote" style="display:none;">Reference lines exclude placebo from cut points; placebo still appears at zero exposure when observed markers are on.</p>
+      <div class="field"><span class="field-label">Exposure distribution</span>
+        <div class="checkbox-group" id="distModeGroup">
           <button type="button" class="toggle" data-mode="lineranges">Lineranges</button>
           <button type="button" class="toggle active" data-mode="boxplot">Boxplot</button>
           <button type="button" class="toggle" data-mode="violin">Distribution</button>
-        </div></div>
-        <div class="field"><label>&nbsp;</label><button id="resetBtn" type="button">Reset selection</button></div>
+        </div>
+      </div>
+      <div class="field"><label for="splitAnnotationMode">Group N on distribution</label>
+        <select id="splitAnnotationMode" disabled><option value="off">Off</option><option value="n">N</option><option value="n_pct">N (%)</option></select>
       </div>
     </div>
-    <div class="legend" id="legend"></div>
-    <div class="legend" id="endpointLegend" style="display:none; padding-top: 0;"></div>
-    <div id="scatterPanels" class="endpoint-rows"></div>
-    <div id="status" style="padding: 4px 8px 10px 8px;">Showing all rows</div>
-    <div class="footer-note" id="refLineNote" style="display:none; padding: 0 8px 8px 8px;">Reference line, group N, and observed-responder split bins are all computed on dosed patients only, excluding placebo (which is fixed at zero exposure by design). Placebo itself still gets its own observed-responder marker at zero exposure when that option is on.</div>
-  </div>
 
-  <div class="panel" style="padding: 14px 18px;">
-    <div class="panel-title" style="margin-bottom: 8px;">Session</div>
-    <div class="panel-note" style="margin-bottom: 10px;">Every setting above (exposure metric, endpoint, CI method, bootstrap seed, and current selection) is captured in a session file per <code>docs/REPRODUCIBILITY.md</code> — save it, hand it to a colleague, and reloading it reproduces this exact view.</div>
-    <div class="controls">
-      <button id="saveSessionBtn" class="primary" type="button">Save session</button>
-      <button id="loadSessionBtn" type="button">Load session…</button>
-      <input type="file" id="fileInput" accept="application/json" />
-      <span id="sessionStatus" style="color: var(--muted); font-size: 12.5px;"></span>
+    <div class="drawer-panel" id="drawer-style" hidden>
+      <p class="hint">Points, facet layout, and color palettes for dose vs endpoint comparison views.</p>
+      <div class="field"><div class="checkbox-group"><label><input type="checkbox" id="showPoints" checked /> Show points</label></div></div>
+      <div class="field">
+        <label for="metricStackHeightRange">Chart area height</label>
+        <input type="range" id="metricStackHeightRange" min="320" max="1200" step="20" />
+        <span class="hint" id="metricStackHeightLabel" style="margin:4px 0 0;"></span>
+      </div>
+      <div class="field"><label for="gridLayoutSelect">Plot grid</label>
+        <select id="gridLayoutSelect">
+          <option value="endpoint-rows">Endpoints as rows · exposures as columns</option>
+          <option value="exposure-rows">Exposures as rows · endpoints as columns</option>
+        </select>
+      </div>
+      <div class="field"><label for="doseColorScheme">Dose colors</label>
+        <select id="doseColorScheme">
+          <option value="default">Default (dataset)</option>
+          <option value="tableau">Tableau</option>
+          <option value="set2">Set2 (ColorBrewer)</option>
+          <option value="dark">High contrast</option>
+        </select>
+      </div>
+      <div class="field"><label for="endpointColorScheme">Endpoint colors (compare mode)</label>
+        <select id="endpointColorScheme">
+          <option value="default">Default</option>
+          <option value="tableau">Tableau</option>
+          <option value="set2">Set2</option>
+          <option value="dark">High contrast</option>
+        </select>
+      </div>
     </div>
-  </div>
 
-  <p class="footer-note">Data: example exposure-response dataset (AUC/CMAX vs ICGI clinical response) bundled for demo purposes. Built directly on <code>@er-explorer/analysis</code>, <code>@er-explorer/renderer</code>, and <code>@er-explorer/session-engine</code> — see <code>docs/ARCHITECTURE.md</code>.</p>
+    <div class="drawer-panel" id="drawer-session" hidden>
+      <p class="hint">Save or restore the full view including dataset snapshot and analysis settings.</p>
+      <button type="button" class="btn primary" id="saveSessionBtn" disabled>Save session</button>
+      <button type="button" class="btn" id="loadSessionBtn" style="margin-top:8px; width:100%;">Load session…</button>
+      <input type="file" id="fileInput" accept="application/json" />
+      <span id="sessionStatus" class="session-status"></span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="main-header">
+      <div>
+        <h1>ER Explorer</h1>
+        <p class="subline">Exposure–response analysis</p>
+      </div>
+      <div class="header-actions">
+        <button type="button" class="btn btn-sm" id="themeToggle" aria-pressed="false">Dark theme</button>
+        <button type="button" class="note-toggle" data-target="scatterNote" aria-expanded="false">Chart help ▾</button>
+      </div>
+    </header>
+    <p class="panel-note" id="scatterNote" style="display:none; padding:0 4px 8px; max-width:900px;">
+      Drag a box on a scatter panel to brush patients (linked across panels). Click a dose row in the distribution strip to project fits. Upload data from the Data menu when starting fresh.
+    </p>
+
+    <div class="plot-stage">
+      <div id="plotWorkspace">
+        <div class="plot-empty-hint" id="plotEmptyHint">
+          Load a dataset from the <button type="button" class="linkish" id="openDataDrawerBtn">Data</button> menu (example effICGI or CSV upload).
+        </div>
+        <div id="plotContent" hidden>
+          <div class="panel-inner">
+            <div class="legend" id="legend"></div>
+            <div class="legend" id="endpointLegend" style="display:none;"></div>
+            <div id="scatterPanels" class="endpoint-rows"></div>
+            <div id="plotStackHeightHandle" class="plot-stack-height-handle" hidden title="Drag to resize chart area height"></div>
+            <div id="status">Showing all rows</div>
+          </div>
+        </div>
+        <div class="meta-bar" id="metaBar">
+          <span class="meta-kpi"><b id="kpiN">—</b> patients</span>
+          <span class="meta-kpi"><b id="kpiDoses">—</b> dose groups</span>
+          <span class="meta-kpi"><b id="kpiShowing">—</b> in selection</span>
+          <span class="meta-kpi" id="kpiRespondersWrap"><span id="kpiRespondersBody" class="responder-compact"></span></span>
+        </div>
+      </div>
+    </div>
+  </main>
 </div>
 <script src="./bundle.js"></script>
 </body>

@@ -31,6 +31,8 @@ export interface DistributionGroupDatum {
   n: number;
   nResponders?: number;
   selected?: boolean;
+  /** Row highlight when selected (defaults to `color`). Use when shape color is endpoint-specific but selection should stay neutral. */
+  selectionColor?: string;
   /** Skip rendering a box/violin/lineranges shape for this group (e.g. Placebo, whose exposure
    * is a constant zero by design) - the row still renders its label, N count, and click target,
    * just no shape. */
@@ -130,6 +132,8 @@ export class DistributionLayer implements Layer {
         target.group({ class: "er-ridge", "data-group": String(g.groupId), style: "cursor:pointer" }, () => {
           target.drawRect({ x: plotRect.x, y: rowTop, width: plotRect.width, height: rowHeight }, { fill: "transparent" });
 
+          const highlight = g.selectionColor ?? g.color;
+
           if (mode === "lineranges") {
             if (summary) {
               target.drawLine(
@@ -158,9 +162,9 @@ export class DistributionLayer implements Layer {
             const path = buildAsymRidgePath(xSamples, activeTop, activeBottom, xScale, cy);
             if (path) {
               target.drawArea(path, {
-                fill: g.selected ? g.color : "#ffffff",
+                fill: g.selected ? highlight : "#ffffff",
                 opacity: g.selected ? 0.32 : mode === "boxplot" ? 1 : 0.85,
-                stroke: g.color,
+                stroke: g.selected ? highlight : g.color,
                 strokeWidth: g.selected ? 2.4 : 1.6,
                 attrs: { class: "er-ridge-shape" }
               });

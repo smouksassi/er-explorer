@@ -45,7 +45,46 @@ import {
   InvalidSessionFileError,
   type SessionState
 } from "@er-explorer/session-engine";
-import { RECORDS, type ExposureResponseRecord } from "./data.generated";
+import { RECORDS } from "./data.generated";
+import { parseCsv } from "./csvParse";
+import {
+  type DemoColumnRole,
+  DEMO_COLUMN_ROLES,
+  EFFICGI_DEFAULT_ROLES
+} from "./columnMapping";
+import {
+  DatasetContext,
+  type EndpointId,
+  type MetricId,
+  inferRolesForColumns,
+  buildPendingContext
+} from "./datasetContext";
+import { loadDataset } from "@er-explorer/data";
+import {
+  type ByodSessionPayload,
+  buildByodPayload,
+  verifySnapshotChecksum
+} from "./datasetSnapshot";
+import { initAppShell, setPlotWorkspaceVisible, setShellRail } from "./appShell";
+import {
+  type EndpointAnalysisModel,
+  type EndpointNormScale,
+  dataRangeForEndpoint,
+  inferDefaultEndpointModel,
+  mapCurveToCompareScale,
+  normToCompareScale,
+  resolveNormBounds
+} from "./endpointAnalysis";
+import {
+  type DataFilterRule,
+  type FilterOperator,
+  distinctColumnValues,
+  filterOperatorsForColumn,
+  listFilterColumns,
+  rowMatchesFilter,
+  describeActiveFilters
+} from "./dataFilters";
+import { applyMetricStackHeight, applyScatterPaneRatio, attachFacetBlockSplitter, attachMetricStackSplitter, attachPlotStackHeightResizer, loadMetricStackHeight, loadScatterPaneRatio, saveMetricStackHeight, saveScatterPaneRatio } from "./paneSplit";
 
 /**
  * Chart-input data shapes formerly imported from the now-deleted
@@ -76,6 +115,14 @@ interface ProjectedGroup {
   min?: number;
   max?: number;
   observed?: { proportion: number; ciLower: number; ciUpper: number; n: number; responders: number };
+  observedMean?: {
+    mean: number;
+    ciLower: number;
+    ciUpper: number;
+    n: number;
+    primaryLabel?: string;
+    secondaryLabel?: string;
+  };
 }
 
 interface LinearProjectedGroup {
@@ -99,6 +146,9 @@ interface ObservedResponseBin {
   n: number;
   responders: number;
   color?: string;
+  strokeDash?: string;
+  primaryLabel?: string;
+  secondaryLabel?: string;
 }
 
 interface ObservedMeanBin {
@@ -123,46 +173,165 @@ function seededJitter(index: number, amplitude = 0.09): number {
   return (s - Math.floor(s) - 0.5) * 2 * amplitude;
 }
 
-type ExposureMetric = "auc" | "cmax";
-type Endpoint = "icgi" | "icgi2" | "icgi3" | "brls" | "prls";
+type ExposureMetric = MetricId;
+type Endpoint = EndpointId;
 type CIMethod = "wald" | "bootstrap" | "none";
 
-const EXPOSURE_ORDER: ExposureMetric[] = ["auc", "cmax"];
-const ENDPOINT_ORDER: Endpoint[] = ["icgi", "icgi2", "icgi3", "brls", "prls"];
-/** BRLS/PRLS are continuous rating-scale endpoints (mean response +- CI, no responder concept) -
- * fit with the @er-explorer/model-linear plugin instead of the legacy logistic implementation.
- * Every other endpoint here is a binary responder/non-responder outcome. */
-const CONTINUOUS_ENDPOINTS: ReadonlySet<Endpoint> = new Set(["brls", "prls"]);
-function isContinuousEndpoint(endpoint: Endpoint): boolean {
-  return CONTINUOUS_ENDPOINTS.has(endpoint);
+let dataset: DatasetContext | null = null;
+
+function requireDataset(): DatasetContext {
+  if (!dataset) throw new Error("No dataset loaded");
+  return dataset;
 }
-const DOSE_ORDER = ["Placebo", "600 mg", "1200 mg", "1800 mg", "2400 mg"];
-const DOSE_COLORS: Record<string, string> = {
-  Placebo: "#1f77b4",
-  "600 mg": "#ff7f0e",
-  "1200 mg": "#2ca02c",
-  "1800 mg": "#d62728",
-  "2400 mg": "#9467bd"
+
+const ENDPOINT_COLOR_PALETTE = ["#4C72B0", "#DDAA33", "#C44E52", "#55A868", "#8172B2", "#CCB974", "#64B5CD"];
+const ENDPOINT_DASH_PATTERNS = ["", "8 5", "10 4", "6 4", "4 6", "6 3 2 3", "3 5"];
+
+type ColorSchemeId = "default" | "tableau" | "set2" | "dark";
+type GridLayout = "endpoint-rows" | "exposure-rows";
+
+const COLOR_SCHEME_PALETTES: Record<Exclude<ColorSchemeId, "default">, string[]> = {
+  tableau: ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948", "#b07aa1", "#ff9da7"],
+  set2: ["#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f", "#e5c494", "#b3b3b3"],
+  dark: ["#2563eb", "#dc2626", "#16a34a", "#ca8a04", "#9333ea", "#0891b2", "#ea580c", "#4b5563"]
 };
-/** Used only by the "compare endpoints" overlay view - deliberately distinct from DOSE_COLORS
- * since that view recolors by endpoint instead of by dose. */
-const ENDPOINT_COLORS: Record<Endpoint, string> = {
+
+function paletteColor(scheme: Exclude<ColorSchemeId, "default">, order: string[], key: string): string {
+  const palette = COLOR_SCHEME_PALETTES[scheme];
+  const idx = order.indexOf(key);
+  return palette[(idx >= 0 ? idx : 0) % palette.length];
+}
+
+/** Legacy effICGI endpoint styling when column ids match. */
+const ENDPOINT_COLORS: Record<string, string> = {
   icgi: "#4C72B0",
   icgi2: "#DDAA33",
   icgi3: "#C44E52",
   brls: "#55A868",
   prls: "#8172B2"
 };
-/** SVG stroke-dasharray per endpoint (solid / dotted / dashed) so overlaid curves stay
- * distinguishable even without color (e.g. print, colorblind-safe redundancy). */
-const ENDPOINT_DASH: Record<Endpoint, string> = {
+const ENDPOINT_DASH: Record<string, string> = {
   icgi: "",
   icgi2: "2 4",
   icgi3: "9 4",
   brls: "4 3",
-  prls: "1 3"
+  prls: "8 5"
 };
-const DATASET_ID = "effICGI-demo-v1";
+
+/** Stronger dash on observed-stat label boxes (compare mode, neutral fills). */
+function endpointMarkerDash(endpoint: EndpointId): string | undefined {
+  const d = endpointDash(endpoint);
+  return d.length ? d : undefined;
+}
+
+function endpointColor(endpoint: EndpointId): string {
+  const ds = requireDataset();
+  if (state.endpointColorScheme === "default") {
+    if (ENDPOINT_COLORS[endpoint]) return ENDPOINT_COLORS[endpoint];
+    const order = ds.endpointOrder();
+    const idx = order.indexOf(endpoint);
+    return ENDPOINT_COLOR_PALETTE[(idx >= 0 ? idx : order.length) % ENDPOINT_COLOR_PALETTE.length];
+  }
+  return paletteColor(state.endpointColorScheme, ds.endpointOrder(), endpoint);
+}
+
+function endpointDash(endpoint: EndpointId): string {
+  if (ENDPOINT_DASH[endpoint] !== undefined) return ENDPOINT_DASH[endpoint];
+  const order = requireDataset().endpointOrder();
+  const idx = order.indexOf(endpoint);
+  return ENDPOINT_DASH_PATTERNS[(idx >= 0 ? idx : 0) % ENDPOINT_DASH_PATTERNS.length];
+}
+
+function exposureOrder(): MetricId[] {
+  return requireDataset().exposureOrder();
+}
+
+function endpointOrder(): EndpointId[] {
+  return requireDataset().endpointOrder();
+}
+
+function DOSE_ORDER(): string[] {
+  return requireDataset().doseOrder();
+}
+
+function DOSE_COLORS(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const d of DOSE_ORDER()) out[d] = resolveDoseColor(d);
+  return out;
+}
+
+function isContinuousEndpoint(endpoint: Endpoint): boolean {
+  return usesLinearModel(endpoint);
+}
+
+function usesLinearModel(endpoint: Endpoint): boolean {
+  if (!dataset) return false;
+  const model = state.endpointModels[endpoint] ?? inferDefaultEndpointModel(dataset, endpoint);
+  return model === "linear";
+}
+
+function ensureEndpointAnalysisDefaults(): void {
+  if (!dataset) return;
+  for (const e of endpointOrder()) {
+    if (!state.endpointModels[e]) {
+      state.endpointModels[e] = inferDefaultEndpointModel(dataset, e);
+    }
+  }
+  for (const e of endpointOrder()) {
+    if (state.endpointModels[e] === "linear") ensureNormScaleForEndpoint(e);
+  }
+}
+
+function ensureNormScaleForEndpoint(endpoint: Endpoint): void {
+  if (!dataset) return;
+  const range = dataRangeForEndpoint(dataset, endpoint);
+  if (!range) return;
+  let scale = state.endpointNormScales[endpoint];
+  if (!scale) {
+    state.endpointNormScales[endpoint] = { min: range.min, max: range.max, useCustomBounds: false };
+    return;
+  }
+  if (!scale.useCustomBounds) {
+    scale.min = range.min;
+    scale.max = range.max;
+  }
+}
+
+function getCompareNormBounds(endpoint: Endpoint): { min: number; max: number; valid: boolean } {
+  if (!dataset) return { min: 0, max: 1, valid: false };
+  const range = dataRangeForEndpoint(dataset, endpoint);
+  return resolveNormBounds(state.endpointNormScales[endpoint], range);
+}
+
+function normCompareValue(y: number, endpoint: Endpoint): number {
+  if (!usesLinearModel(endpoint)) return y;
+  const { min, max, valid } = getCompareNormBounds(endpoint);
+  if (!valid) return NaN;
+  return normToCompareScale(y, min, max);
+}
+
+function isPlaceboDose(dose: string): boolean {
+  return requireDataset().isPlaceboDose(dose);
+}
+
+function rowIndicesForDose(dose: string): number[] {
+  const ds = requireDataset();
+  const out: number[] = [];
+  const allowed = new Set(dataFilteredRowIndices());
+  for (let i = 0; i < ds.rowCount; i++) {
+    if (ds.doseLabel(i) === dose && allowed.has(i)) out.push(i);
+  }
+  return out;
+}
+
+function doseForPatientId(patientId: number): string | undefined {
+  const ds = requireDataset();
+  for (let i = 0; i < ds.rowCount; i++) {
+    if (ds.patientId(i) === patientId) return ds.doseLabel(i);
+  }
+  return undefined;
+}
+
 /** Placebo is excluded from box/violin *shapes* in the exposure distribution panel: by design
  * every placebo patient has zero exposure, so a box/violin of a constant isn't informative (it
  * would just be a degenerate spike). Its row still renders (label + N), it just skips the shape
@@ -225,6 +394,18 @@ interface DemoState {
    * historically kept them off since with several curves already overlaid, raw points add a lot
    * of visual noise - but the toggle now applies uniformly to both views. */
   showPoints: boolean;
+  /** Facet grid: endpoints along rows (default) or exposures along rows. */
+  gridLayout: GridLayout;
+  doseColorScheme: ColorSchemeId;
+  endpointColorScheme: ColorSchemeId;
+  endpointModels: Record<string, EndpointAnalysisModel>;
+  endpointNormScales: Record<string, EndpointNormScale>;
+  dataFilters: DataFilterRule[];
+  compareDistByEndpoint: boolean;
+  scatterPaneRatio: number;
+  metricStackHeightPx: number;
+  showDistReadout: boolean;
+  distReadoutExpanded: boolean;
 }
 
 const state: DemoState = {
@@ -243,8 +424,25 @@ const state: DemoState = {
   showSplitValue: false,
   showDoseObserved: true,
   compareEndpoints: false,
-  showPoints: true
+  showPoints: true,
+  gridLayout: "endpoint-rows",
+  doseColorScheme: "default",
+  endpointColorScheme: "default",
+  endpointModels: {},
+  endpointNormScales: {},
+  dataFilters: [],
+  compareDistByEndpoint: true,
+  scatterPaneRatio: loadScatterPaneRatio(),
+  metricStackHeightPx: loadMetricStackHeight(),
+  showDistReadout: true,
+  distReadoutExpanded: false
 };
+
+function resolveDoseColor(dose: string): string {
+  const ds = requireDataset();
+  if (state.doseColorScheme === "default") return ds.doseColor(dose);
+  return paletteColor(state.doseColorScheme, DOSE_ORDER(), dose);
+}
 
 /** One entry per currently-rendered distribution panel (one per selected exposure metric),
  * captured at render time so the boxplot<->violin toggle can morph the existing <path>
@@ -272,9 +470,18 @@ const showObservedRespEl = $<HTMLInputElement>("showObservedResp");
 const showReferenceFitEl = $<HTMLInputElement>("showReferenceFit");
 const showSplitValueEl = $<HTMLInputElement>("showSplitValue");
 const showDoseObservedEl = $<HTMLInputElement>("showDoseObserved");
+const showDistReadoutEl = $<HTMLInputElement>("showDistReadout");
+const expandDistReadoutEl = $<HTMLInputElement>("expandDistReadout");
 const showPointsEl = $<HTMLInputElement>("showPoints");
 const endpointGroupEl = $<HTMLDivElement>("endpointGroup");
 const compareEndpointsEl = $<HTMLInputElement>("compareEndpoints");
+const compareDistByEndpointEl = $<HTMLInputElement>("compareDistByEndpoint");
+const plotStackHeightHandleEl = $<HTMLDivElement>("plotStackHeightHandle");
+const metricStackHeightRangeEl = $<HTMLInputElement>("metricStackHeightRange");
+const metricStackHeightLabelEl = $<HTMLSpanElement>("metricStackHeightLabel");
+const filterRulesListEl = $<HTMLDivElement>("filterRulesList");
+const addFilterRuleBtn = $<HTMLButtonElement>("addFilterRuleBtn");
+const filterStatusEl = $<HTMLSpanElement>("filterStatus");
 const endpointLegendEl = $<HTMLDivElement>("endpointLegend");
 const ciSelect = $<HTMLSelectElement>("ciSelect");
 const resetBtn = $<HTMLButtonElement>("resetBtn");
@@ -285,43 +492,85 @@ const sessionStatus = $<HTMLSpanElement>("sessionStatus");
 const kpiN = $<HTMLDivElement>("kpiN");
 const kpiRespondersBody = $<HTMLDivElement>("kpiRespondersBody");
 const kpiShowing = $<HTMLDivElement>("kpiShowing");
+const kpiDoses = $<HTMLDivElement>("kpiDoses");
+const csvFileInput = $<HTMLInputElement>("csvFileInput");
+const mappingPanelEl = $<HTMLDivElement>("mappingPanel");
+const mappingTableBody = $<HTMLTableSectionElement>("mappingTableBody");
+const mappingErrorsEl = $<HTMLDivElement>("mappingErrors");
+const applyMappingBtn = $<HTMLButtonElement>("applyMappingBtn");
+const reloadBundledBtn = $<HTMLButtonElement>("reloadBundledBtn");
+const loadCsvBtn = $<HTMLButtonElement>("loadCsvBtn");
+const dataStatusEl = $<HTMLSpanElement>("dataStatus");
+const gridLayoutSelect = $<HTMLSelectElement>("gridLayoutSelect");
+const doseColorSchemeSelect = $<HTMLSelectElement>("doseColorScheme");
+const endpointColorSchemeSelect = $<HTMLSelectElement>("endpointColorScheme");
+const endpointModelsListEl = $<HTMLDivElement>("endpointModelsList");
+const compareNormSectionEl = $<HTMLDivElement>("compareNormSection");
+const compareNormListEl = $<HTMLDivElement>("compareNormList");
 
-const exposureValue = (r: ExposureResponseRecord, metric: ExposureMetric) => (metric === "auc" ? r.auc : r.cmax);
-/** BRLS/PRLS are `number | null` in the generated data (a handful of patients have no
- * post-baseline rating at a given visit) - a missing value comes back as `NaN` here rather than
- * `null`, so any accidental unfiltered arithmetic on it visibly propagates as NaN instead of
- * silently coercing null to 0. ICGI/ICGI2/ICGI3 are never missing, so this is a no-op for them. */
-const endpointValue = (r: ExposureResponseRecord, endpoint: Endpoint): number =>
-  endpoint === "icgi"
-    ? r.icgi
-    : endpoint === "icgi2"
-      ? r.icgi2
-      : endpoint === "icgi3"
-        ? r.icgi3
-        : endpoint === "brls"
-          ? r.brls ?? NaN
-          : r.prls ?? NaN;
-/** Every record whose response for `endpoint` is actually present - the base row set every
- * fit/plot/summary for that endpoint should use instead of `RECORDS` directly, so the handful of
- * patients missing a BRLS/PRLS rating are excluded rather than plotted/fit as if their response
- * were 0. A no-op filter for the binary endpoints, which are never missing. */
-function recordsWithEndpoint(endpoint: Endpoint): ExposureResponseRecord[] {
-  return RECORDS.filter((r) => Number.isFinite(endpointValue(r, endpoint)));
+let pendingCsvRows: Array<Record<string, import("@er-explorer/data").RawCellValue>> | null = null;
+let pendingColumnRoles: Record<string, DemoColumnRole> = {};
+
+function dataFilteredRowIndices(): number[] {
+  if (!dataset) return [];
+  const all = dataset.allRowIndices();
+  if (!state.dataFilters.length) return all;
+  const loaded = dataset.loaded;
+  return all.filter((i) => state.dataFilters.every((r) => rowMatchesFilter(i, r, loaded)));
 }
-const exposureLabel = (metric: ExposureMetric) => metric.toUpperCase();
+
+function exposureXMax(metric: ExposureMetric): number {
+  const xs = dataFilteredRowIndices()
+    .map((i) => exposureValue(i, metric))
+    .filter((v) => Number.isFinite(v));
+  return xs.length ? Math.max(...xs) : 1;
+}
+
+function suggestFilterMode(col: { id: string; role: DemoColumnRole; numeric: boolean }): boolean {
+  if (!dataset) return !col.numeric;
+  if (col.role === "dose" || col.role === "endpoint") return true;
+  if (!col.numeric) return true;
+  return distinctColumnValues(dataset.loaded, col.id, 40).length <= 20;
+}
+
+function filterColumnOptions() {
+  const ds = requireDataset();
+  const labels: Record<string, string> = {};
+  for (const id of ds.loaded.variableOrder) {
+    const role = ds.columnRoles[id];
+    if (role === "endpoint") labels[id] = ds.endpointLabel(id);
+    else if (role === "exposure") labels[id] = ds.exposureLabel(id);
+    else if (role === "dose") labels[id] = "Dose";
+    else labels[id] = id;
+  }
+  return listFilterColumns(ds.loaded, ds.columnRoles, labels);
+}
+
+const exposureValue = (rowIndex: number, metric: ExposureMetric) => requireDataset().exposureValue(rowIndex, metric);
+const endpointValue = (rowIndex: number, endpoint: Endpoint): number => requireDataset().endpointValue(rowIndex, endpoint);
+
+function recordsWithEndpoint(endpoint: Endpoint): number[] {
+  const allowed = new Set(dataFilteredRowIndices());
+  return requireDataset().rowIndicesWithEndpoint(endpoint).filter((i) => allowed.has(i));
+}
+
+const exposureLabel = (metric: ExposureMetric) => requireDataset().exposureLabel(metric);
 
 function selectedExposureMetrics(): ExposureMetric[] {
-  return EXPOSURE_ORDER.filter((m) => state.exposureMetrics.has(m));
+  return exposureOrder().filter((m) => state.exposureMetrics.has(m));
 }
 
 function selectedEndpoints(): Endpoint[] {
-  return ENDPOINT_ORDER.filter((e) => state.endpoints.has(e));
+  return endpointOrder().filter((e) => state.endpoints.has(e));
 }
 
 /** Chart pixel width for one panel column; the SVG's viewBox keeps it responsive regardless. */
 function panelWidth(): number {
-  const count = Math.max(1, selectedExposureMetrics().length);
-  return Math.max(480, Math.floor(1200 / count));
+  const metrics = selectedExposureMetrics();
+  const endpoints = selectedEndpoints();
+  const cols =
+    state.gridLayout === "exposure-rows" ? Math.max(1, endpoints.length) : Math.max(1, metrics.length);
+  return Math.max(480, Math.floor(1200 / cols));
 }
 
 /** A fitted model for one metric/endpoint pair, tagged by which family produced it - "logistic"
@@ -333,8 +582,9 @@ function panelWidth(): number {
 type EndpointFit = { kind: "logistic"; model: LogisticModel } | { kind: "linear"; model: LinearParams };
 
 function fitFor(metric: ExposureMetric, endpoint: Endpoint): { fit: EndpointFit; xs: number[]; ys: number[] } {
-  const xs = RECORDS.map((r) => exposureValue(r, metric));
-  const ys = RECORDS.map((r) => endpointValue(r, endpoint));
+  const indices = recordsWithEndpoint(endpoint);
+  const xs = indices.map((i) => exposureValue(i, metric));
+  const ys = indices.map((i) => endpointValue(i, endpoint));
   if (isContinuousEndpoint(endpoint)) {
     const outcome = linearAnalysisModel.fit({ exposures: xs, responses: ys });
     if (!outcome.optimization.converged) throw new Error(`Unable to fit linear model for ${metric}/${endpoint}`);
@@ -429,7 +679,259 @@ function computeContinuousYDomain(points: Array<{ displayY?: number; response: n
  * height and that div's inline height ever drift out of sync with each other, the two rows stop
  * sharing the same effective horizontal scale and their vertical reference lines (Min/Median/Max)
  * visibly stop lining up between the scatter chart and the distribution strip beneath it. */
-const SCATTER_CHART_HEIGHT = 360;
+const SCATTER_CHART_HEIGHT = 380;
+const COMPARE_SCATTER_CHART_HEIGHT = 480;
+const NEUTRAL_COMPARE_COLOR = "#64748b";
+/** Dose selection accent in compare-endpoints mode (not dose palette). */
+const DOSE_SELECTION_NEUTRAL = "#475569";
+
+function compareDistUsesNeutralShapes(): boolean {
+  return isEndpointComparisonActive() && !state.compareDistByEndpoint;
+}
+
+function attachStackSplitter(stack: HTMLElement): void {
+  attachMetricStackSplitter(
+    stack,
+    (ratio) => {
+      state.scatterPaneRatio = ratio;
+      applyScatterPaneRatio(stack, ratio);
+    },
+    () => {
+      saveScatterPaneRatio(state.scatterPaneRatio);
+      paintSyncedMetricStacks(activeSet());
+    }
+  );
+}
+
+function refreshSelectionVisuals(): void {
+  const active = activeSet();
+  const endpoints = selectedEndpoints();
+  schedulePaintSyncedMetricStacks(active);
+  updateStatus(active.size);
+  updateKpis(active.size, endpoints);
+  requestAnimationFrame(() => schedulePaintSyncedMetricStacks(active));
+}
+
+function applyReadoutChrome(readoutEl?: HTMLElement | null): void {
+  const apply = (el: HTMLElement) => {
+    el.classList.toggle("readout-off", !state.showDistReadout);
+    el.classList.toggle("readout-collapsed", state.showDistReadout && !state.distReadoutExpanded);
+  };
+  if (readoutEl) apply(readoutEl);
+  else document.querySelectorAll<HTMLElement>(".readout").forEach(apply);
+}
+
+function distPaintContextForStack(
+  stack: HTMLElement,
+  endpointFallback: Endpoint
+): {
+  endpoint: Endpoint;
+  splitByEndpoints?: Endpoint[];
+  readoutEndpoints: Endpoint[];
+  omitEndpointFit: boolean;
+} {
+  const compareRaw = stack.dataset.compareEndpoints;
+  if (compareRaw) {
+    const eps = compareRaw.split("|").filter(Boolean) as Endpoint[];
+    if (eps.length > 1) {
+      return {
+        endpoint: eps[0]!,
+        splitByEndpoints: state.compareDistByEndpoint ? eps : undefined,
+        readoutEndpoints: state.compareDistByEndpoint ? eps : [eps[0]!],
+        omitEndpointFit: !state.compareDistByEndpoint
+      };
+    }
+  }
+  const readoutEps = selectedEndpoints();
+  return {
+    endpoint: endpointFallback,
+    splitByEndpoints: undefined,
+    readoutEndpoints: readoutEps.length > 1 ? readoutEps : [endpointFallback],
+    omitEndpointFit: false
+  };
+}
+
+function applyAllMetricStackHeights(): void {
+  document.querySelectorAll<HTMLElement>(".facet-layout").forEach((facet) => {
+    applyMetricStackHeight(facet, state.metricStackHeightPx);
+    applyScatterPaneRatio(facet, state.scatterPaneRatio);
+  });
+  document.querySelectorAll<HTMLElement>(".metric-stack").forEach((stack) => {
+    if (stack.closest(".facet-layout")) return;
+    applyMetricStackHeight(stack, state.metricStackHeightPx);
+  });
+}
+
+function attachFacetLayoutSplitter(facet: HTMLElement): void {
+  attachFacetBlockSplitter(
+    facet,
+    (ratio) => {
+      state.scatterPaneRatio = ratio;
+    },
+    () => {
+      saveScatterPaneRatio(state.scatterPaneRatio);
+      paintSyncedMetricStacks(activeSet());
+    }
+  );
+}
+
+function createFacetLayoutShell(): HTMLElement {
+  const facet = document.createElement("div");
+  facet.className = "facet-layout";
+  applyScatterPaneRatio(facet, state.scatterPaneRatio);
+  applyMetricStackHeight(facet, state.metricStackHeightPx);
+
+  const scatterBlock = document.createElement("div");
+  scatterBlock.className = "facet-scatter-block";
+
+  const splitter = document.createElement("div");
+  splitter.className = "metric-stack-splitter facet-block-splitter";
+  splitter.title = "Drag to resize scatter area vs exposure distributions";
+
+  const distBlock = document.createElement("div");
+  distBlock.className = "facet-dist-block";
+
+  facet.appendChild(scatterBlock);
+  facet.appendChild(splitter);
+  facet.appendChild(distBlock);
+  return facet;
+}
+
+function syncMetricStackHeightUi(): void {
+  const auto = state.metricStackHeightPx <= 0;
+  metricStackHeightRangeEl.disabled = auto;
+  if (!auto) metricStackHeightRangeEl.value = String(state.metricStackHeightPx);
+  metricStackHeightLabelEl.textContent = auto
+    ? "Auto — charts fill the plot area. Double-click the bar below the charts to return to auto after fixing height."
+    : `${state.metricStackHeightPx}px fixed · drag the bar below or use the slider`;
+  plotStackHeightHandleEl.hidden = !dataset;
+}
+
+function setMetricStackHeight(px: number, persist = true): void {
+  state.metricStackHeightPx = px <= 0 ? 0 : Math.max(320, Math.min(1200, Math.round(px)));
+  applyAllMetricStackHeights();
+  syncMetricStackHeightUi();
+  if (persist) saveMetricStackHeight(state.metricStackHeightPx);
+}
+
+/** Keep SVG x-scale aligned with its container (same width for scatter + distribution in a stack). */
+function pinChartSvgToContainer(container: HTMLElement, width: number, height: number): void {
+  const svg = container.querySelector("svg");
+  if (!svg) return;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("preserveAspectRatio", "xMinYMin meet");
+}
+
+function measureStackCharts(stack: HTMLElement): { width: number; scatterH: number; distH: number } | null {
+  const kind = stack.dataset.stackKind ?? "regular";
+  const width = Math.max(240, Math.round(stack.getBoundingClientRect().width));
+
+  if (kind === "dist-only") {
+    const distWrap = stack.querySelector(".metric-stack-dist .chart") as HTMLDivElement | null;
+    if (!distWrap) return null;
+    const distH = Math.max(72, Math.round(distWrap.getBoundingClientRect().height));
+    if (width < 32 || distH < 24) return null;
+    return { width, scatterH: 0, distH };
+  }
+
+  const scatterWrap = stack.querySelector(".metric-stack-scatter .chart") as HTMLDivElement | null;
+  if (!scatterWrap) return null;
+  const scatterH = Math.max(80, Math.round(scatterWrap.getBoundingClientRect().height));
+
+  if (kind === "scatter-only" || kind === "scatter-compare") {
+    if (width < 32 || scatterH < 24) return null;
+    return { width, scatterH, distH: 0 };
+  }
+
+  const distWrap = stack.querySelector(".metric-stack-dist .chart") as HTMLDivElement | null;
+  const distH = distWrap ? Math.max(72, Math.round(distWrap.getBoundingClientRect().height)) : 140;
+  if (width < 32 || scatterH < 24) return null;
+  return { width, scatterH, distH };
+}
+
+let metricStackResizeObserver: ResizeObserver | undefined;
+
+function resetMetricStackObservers(): void {
+  metricStackResizeObserver?.disconnect();
+}
+
+function observeMetricStacks(): void {
+  if (typeof ResizeObserver === "undefined") return;
+  if (!metricStackResizeObserver) {
+    metricStackResizeObserver = new ResizeObserver(() => {
+      if (!dataset) return;
+      schedulePaintSyncedMetricStacks(activeSet());
+    });
+  }
+  document.querySelectorAll(".facet-layout, .metric-stack").forEach((el) => metricStackResizeObserver!.observe(el));
+}
+
+let paintSyncedStacksScheduled = false;
+
+function schedulePaintSyncedMetricStacks(active: Set<number>): void {
+  if (paintSyncedStacksScheduled) return;
+  paintSyncedStacksScheduled = true;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      paintSyncedStacksScheduled = false;
+      paintSyncedMetricStacks(active);
+    });
+  });
+}
+
+function paintSyncedMetricStacks(active: Set<number>): void {
+  if (!dataset) return;
+  distributionPanels = [];
+  document.querySelectorAll<HTMLElement>(".metric-stack").forEach((stack) => {
+    const kind = stack.dataset.stackKind ?? "regular";
+    const metric = stack.dataset.metric as ExposureMetric;
+    if (!metric) return;
+    const scatterWrap = stack.querySelector(".metric-stack-scatter .chart") as HTMLDivElement | null;
+    const distCell = stack.querySelector(".metric-stack-dist") as HTMLElement | null;
+    const distWrap = stack.querySelector(".metric-stack-dist .chart") as HTMLDivElement | null;
+    const layout = measureStackCharts(stack);
+    if (!layout) return;
+    const { width, scatterH, distH } = layout;
+
+    if (kind === "scatter-only") {
+      const endpoint = stack.dataset.endpoint as Endpoint;
+      if (!endpoint || !scatterWrap) return;
+      paintRegularScatterIntoWrap(scatterWrap, metric, endpoint, active, width, scatterH);
+      pinChartSvgToContainer(scatterWrap, width, scatterH);
+      return;
+    }
+
+    if (kind === "scatter-compare") {
+      const endpoints = (stack.dataset.compareEndpoints ?? "")
+        .split("|")
+        .filter(Boolean) as Endpoint[];
+      if (!endpoints.length || !scatterWrap) return;
+      paintCompareScatterIntoWrap(scatterWrap, metric, endpoints, active, width, scatterH);
+      pinChartSvgToContainer(scatterWrap, width, scatterH);
+      return;
+    }
+
+    if (kind === "dist-only") {
+      const endpoint = stack.dataset.endpoint as Endpoint;
+      if (!endpoint || !distCell || !distWrap) return;
+      const ctx = distPaintContextForStack(stack, endpoint);
+      paintDistributionChart(
+        distCell,
+        distWrap,
+        distCell.querySelector(".readout") as HTMLDivElement | null,
+        metric,
+        ctx.endpoint,
+        active,
+        width,
+        distH,
+        ctx.splitByEndpoints,
+        ctx.readoutEndpoints,
+        { showReadout: true, omitEndpointFit: ctx.omitEndpointFit }
+      );
+      return;
+    }
+  });
+}
 
 /**
  * Renders the continuous (BRLS/PRLS) exposure-response scatter chart via `@er-explorer/renderer`
@@ -454,17 +956,19 @@ function renderContinuousScatterViaRenderer(
   endpoint: Endpoint,
   width: number,
   referenceLines: ReferenceLine[],
-  observedMeanBins: ObservedMeanBin[]
+  observedMeanBins: ObservedMeanBin[],
+  height = SCATTER_CHART_HEIGHT
 ): { content: string; metadata: ScatterMeta } {
+  const ds = requireDataset();
   const curveSamples = toCurveSamples(curve);
   const yDomain = computeContinuousYDomain(points, curveSamples);
-  const height = SCATTER_CHART_HEIGHT;
+  const plotHeight = height;
 
   const scatterPoints: ScatterPointDatum[] = (state.showPoints ? points : []).map((p) => ({
     id: p.id,
     x: p.exposure,
     y: p.displayY ?? p.response,
-    color: DOSE_COLORS[p.groupId as string] ?? "#64748b",
+    color: resolveDoseColor(String(p.groupId)) ?? "#64748b",
     radius: p.selected ? 4.2 : 3.1,
     opacity: p.selected ? 0.84 : 0.14,
     stroke: p.selected ? "#ffffff" : undefined,
@@ -584,6 +1088,9 @@ function renderContinuousScatterViaRenderer(
 
 interface BinaryCurveOverlay {
   curve: PredictionResult;
+  /** Raw-scale curve for marker labels when `curve` is compare-normalized. */
+  rawCurve?: PredictionResult;
+  fitLabelDecimals?: number;
   /** Defaults to the neutral grey/dashed styling (matches the old renderer's single-endpoint
    * default) when omitted - only "Compare endpoints" ever supplies this, one color per endpoint. */
   color?: string;
@@ -611,9 +1118,10 @@ function renderBinaryScatterOverlay(
   yAxisLabel: string,
   width: number,
   referenceLines: ReferenceLine[],
-  observedBins: ObservedResponseBin[]
+  observedBins: ObservedResponseBin[],
+  height = SCATTER_CHART_HEIGHT
 ): { content: string; metadata: ScatterMeta } {
-  const height = SCATTER_CHART_HEIGHT;
+  const plotHeight = height;
   const yDomain: [number, number] = [-0.18, 1.18];
   const hasExtras = curves.length > 1;
   const curveSamplesFor = curves.map((c) => toCurveSamples(c.curve));
@@ -679,6 +1187,22 @@ function renderBinaryScatterOverlay(
         color: p.color
       }));
     if (observedStats.length) layers.push(new ObservedStatLayer({ id: `projection-observed-${i}`, bins: observedStats }));
+
+    const observedMeanStats = projected
+      .filter((p): p is ProjectedGroup & { observedMean: NonNullable<ProjectedGroup["observedMean"]> } => Boolean(p.observedMean))
+      .map((p) => ({
+        x: p.median,
+        center: p.observedMean.mean,
+        lower: p.observedMean.ciLower,
+        upper: p.observedMean.ciUpper,
+        n: p.observedMean.n,
+        primaryLabel: p.observedMean.primaryLabel ?? p.observedMean.mean.toFixed(1),
+        secondaryLabel: p.observedMean.secondaryLabel ?? `N=${p.observedMean.n}`,
+        color: p.color
+      }));
+    if (observedMeanStats.length) {
+      layers.push(new ObservedStatLayer({ id: `projection-observed-mean-${i}`, bins: observedMeanStats }));
+    }
   });
 
   if (referenceLines.length) {
@@ -688,16 +1212,15 @@ function renderBinaryScatterOverlay(
       if (state.showReferenceFit) {
         spec.markerValues = curves.map((c, i) => {
           const at = interpolateCurveSample(curveSamplesFor[i], ref.value);
-          // The primary curve's fit marker is neutral grey unless other curves are overlaid
-          // (Compare Endpoints), in which case every curve - including the primary - gets its own
-          // color so it's still clear which curve each fit value belongs to. Each extra curve
-          // always uses its own color, matching the old renderer's `showReferenceFit` behavior.
+          const rawSamples = c.rawCurve ? toCurveSamples(c.rawCurve) : curveSamplesFor[i];
+          const rawAt = c.rawCurve ? interpolateCurveSample(rawSamples, ref.value) : at;
+          const dec = c.fitLabelDecimals ?? 2;
           const color = i === 0 ? (hasExtras ? c.color ?? "#94a3b8" : "#94a3b8") : c.color ?? "#94a3b8";
           return {
             estimate: at.estimate,
             lower: at.lower,
             upper: at.upper,
-            lines: formatFitMarkerLines(at.estimate, at.lower, at.upper, 2),
+            lines: formatFitMarkerLines(rawAt.estimate, rawAt.lower, rawAt.upper, dec),
             color
           };
         });
@@ -717,9 +1240,10 @@ function renderBinaryScatterOverlay(
           lower: b.ciLower,
           upper: b.ciUpper,
           n: b.n,
-          primaryLabel: `${Math.round(b.proportion * 100)}%`,
-          secondaryLabel: `${b.responders}/${b.n}`,
-          color: b.color
+          primaryLabel: b.primaryLabel ?? `${Math.round(b.proportion * 100)}%`,
+          secondaryLabel: b.secondaryLabel ?? `${b.responders}/${b.n}`,
+          color: b.color,
+          strokeDash: b.strokeDash
         }))
       })
     );
@@ -752,10 +1276,15 @@ function renderBinaryScatterOverlay(
  * be read directly against them: is this group mostly above the global median, above Q3, etc.
  */
 function computeReferenceLines(metric: ExposureMetric): ReferenceLine[] {
+  const ds = requireDataset();
   const kind = state.referenceLineKind;
   if (!kind) return [];
-  const values = RECORDS.filter((r) => r.dose !== "Placebo")
-    .map((r) => exposureValue(r, metric))
+  const allowed = new Set(dataFilteredRowIndices());
+  const values = ds
+    .allRowIndices()
+    .filter((i) => allowed.has(i))
+    .filter((i) => !isPlaceboDose(ds.doseLabel(i)))
+    .map((i) => exposureValue(i, metric))
     .sort((a, b) => a - b);
   if (!values.length) return [];
 
@@ -790,10 +1319,15 @@ function computeReferenceLines(metric: ExposureMetric): ReferenceLine[] {
  * caller building a chart's `referenceLines` prop wants.
  */
 function computeDisplayReferenceLines(metric: ExposureMetric): ReferenceLine[] {
+  const ds = requireDataset();
   const splits = computeReferenceLines(metric);
   if (!splits.length) return splits;
-  const values = RECORDS.filter((r) => r.dose !== "Placebo")
-    .map((r) => exposureValue(r, metric))
+  const allowed = new Set(dataFilteredRowIndices());
+  const values = ds
+    .allRowIndices()
+    .filter((i) => allowed.has(i))
+    .filter((i) => !isPlaceboDose(ds.doseLabel(i)))
+    .map((i) => exposureValue(i, metric))
     .sort((a, b) => a - b);
   if (!values.length) return splits;
   const min = Math.round(values[0] * 100) / 100;
@@ -825,7 +1359,7 @@ function computeDisplayReferenceLines(metric: ExposureMetric): ReferenceLine[] {
 function computeSplitAnnotations(metric: ExposureMetric, dose: string, xDomain: [number, number], mode: SplitAnnotationMode): DistributionSplitAnnotation[] {
   const cutpoints = computeReferenceLines(metric).map((r) => r.value);
   if (!cutpoints.length) return [];
-  const vals = RECORDS.filter((r) => r.dose === dose).map((r) => exposureValue(r, metric));
+  const vals = rowIndicesForDose(dose).map((i) => exposureValue(i, metric));
   if (!vals.length) return [];
 
   const binCount = cutpoints.length + 1;
@@ -851,13 +1385,14 @@ function computeSplitAnnotations(metric: ExposureMetric, dose: string, xDomain: 
   return out;
 }
 
-/**
- * Observed (raw, non-model) response rate + 95% Wilson CI within each bin of the active
- * exposure split - plotted on the scatter panel against the fitted curve for a direct "observed
- * vs fitted" read (mirrors ggquickeda's "Observed probability by exposure split" annotation).
- * Placebo forms its own natural bin (every placebo patient has zero exposure by design); the
- * remaining bins come from the same non-placebo cut points used for the reference lines.
- */
+function rowIndicesDosed(): number[] {
+  return dataFilteredRowIndices().filter((i) => !isPlaceboDose(requireDataset().doseLabel(i)));
+}
+
+function rowIndicesPlacebo(): number[] {
+  return dataFilteredRowIndices().filter((i) => isPlaceboDose(requireDataset().doseLabel(i)));
+}
+
 function computeObservedResponseBins(metric: ExposureMetric, endpoint: Endpoint): ObservedResponseBin[] {
   if (!state.showObservedResponders || !state.referenceLineKind) return [];
   const cutpoints = computeReferenceLines(metric).map((r) => r.value);
@@ -865,27 +1400,27 @@ function computeObservedResponseBins(metric: ExposureMetric, endpoint: Endpoint)
 
   const bins: ObservedResponseBin[] = [];
 
-  const placeboRows = RECORDS.filter((r) => r.dose === "Placebo");
+  const placeboRows = rowIndicesPlacebo();
   if (placeboRows.length) {
-    const responders = placeboRows.filter((r) => endpointValue(r, endpoint) === 1).length;
+    const responders = placeboRows.filter((i) => endpointValue(i, endpoint) === 1).length;
     const ci = wilsonScoreInterval(responders, placeboRows.length);
     bins.push({ x: 0, n: placeboRows.length, responders, proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper });
   }
 
-  const dosedRows = RECORDS.filter((r) => r.dose !== "Placebo");
+  const dosedRows = rowIndicesDosed();
   const binCount = cutpoints.length + 1;
-  const buckets: ExposureResponseRecord[][] = Array.from({ length: binCount }, () => []);
-  dosedRows.forEach((r) => {
-    const v = exposureValue(r, metric);
+  const buckets: number[][] = Array.from({ length: binCount }, () => []);
+  dosedRows.forEach((i) => {
+    const v = exposureValue(i, metric);
     let bin = 0;
     while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
-    buckets[bin].push(r);
+    buckets[bin].push(i);
   });
   buckets.forEach((rows) => {
     if (!rows.length) return;
-    const responders = rows.filter((r) => endpointValue(r, endpoint) === 1).length;
+    const responders = rows.filter((i) => endpointValue(i, endpoint) === 1).length;
     const ci = wilsonScoreInterval(responders, rows.length);
-    const meanX = rows.reduce((sum, r) => sum + exposureValue(r, metric), 0) / rows.length;
+    const meanX = rows.reduce((sum, i) => sum + exposureValue(i, metric), 0) / rows.length;
     bins.push({ x: meanX, n: rows.length, responders, proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper });
   });
 
@@ -898,6 +1433,7 @@ function computeObservedResponseBins(metric: ExposureMetric, endpoint: Endpoint)
  * (`meanConfidenceInterval`) - there is no responder/non-responder concept for BRLS/PRLS.
  */
 function computeObservedMeanBins(metric: ExposureMetric, endpoint: Endpoint): ObservedMeanBin[] {
+  const ds = requireDataset();
   if (!state.showObservedResponders || !state.referenceLineKind) return [];
   const cutpoints = computeReferenceLines(metric).map((r) => r.value);
   if (!cutpoints.length) return [];
@@ -905,25 +1441,25 @@ function computeObservedMeanBins(metric: ExposureMetric, endpoint: Endpoint): Ob
   const bins: ObservedMeanBin[] = [];
 
   const withEndpoint = recordsWithEndpoint(endpoint);
-  const placeboRows = withEndpoint.filter((r) => r.dose === "Placebo");
+  const placeboRows = withEndpoint.filter((i) => isPlaceboDose(ds.doseLabel(i)));
   if (placeboRows.length) {
-    const mci = meanConfidenceInterval(placeboRows.map((r) => endpointValue(r, endpoint)));
+    const mci = meanConfidenceInterval(placeboRows.map((i) => endpointValue(i, endpoint)));
     bins.push({ x: 0, mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n });
   }
 
-  const dosedRows = withEndpoint.filter((r) => r.dose !== "Placebo");
+  const dosedRows = withEndpoint.filter((i) => !isPlaceboDose(ds.doseLabel(i)));
   const binCount = cutpoints.length + 1;
-  const buckets: ExposureResponseRecord[][] = Array.from({ length: binCount }, () => []);
-  dosedRows.forEach((r) => {
-    const v = exposureValue(r, metric);
+  const buckets: number[][] = Array.from({ length: binCount }, () => []);
+  dosedRows.forEach((i) => {
+    const v = exposureValue(i, metric);
     let bin = 0;
     while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
-    buckets[bin].push(r);
+    buckets[bin].push(i);
   });
   buckets.forEach((rows) => {
     if (!rows.length) return;
-    const mci = meanConfidenceInterval(rows.map((r) => endpointValue(r, endpoint)));
-    const meanX = rows.reduce((sum, r) => sum + exposureValue(r, metric), 0) / rows.length;
+    const mci = meanConfidenceInterval(rows.map((i) => endpointValue(i, endpoint)));
+    const meanX = rows.reduce((sum, i) => sum + exposureValue(i, metric), 0) / rows.length;
     bins.push({ x: meanX, mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n });
   });
 
@@ -933,9 +1469,15 @@ function computeObservedMeanBins(metric: ExposureMetric, endpoint: Endpoint): Ob
 /** The active patient set is shared across every exposure panel: a brush made in one panel's
  * coordinate space still resolves to patient ids, which highlight the same patients everywhere. */
 function activeSet(): Set<number> {
-  let ids = new Set(RECORDS.map((r) => r.id));
+  const ds = requireDataset();
+  let ids = new Set(dataFilteredRowIndices().map((i) => ds.patientId(i)));
   if (state.brushedIds) ids = new Set([...ids].filter((id) => state.brushedIds!.has(id)));
-  if (state.selectedDoses.size) ids = new Set([...ids].filter((id) => state.selectedDoses.has(RECORDS[id].dose)));
+  if (state.selectedDoses.size) {
+    ids = new Set([...ids].filter((id) => {
+      const dose = doseForPatientId(id);
+      return dose !== undefined && state.selectedDoses.has(dose);
+    }));
+  }
   return ids;
 }
 
@@ -945,11 +1487,182 @@ interface ScatterMeta {
   yScale: { domain: [number, number]; range: [number, number] };
 }
 
+function renderRegularFacetGrid(metrics: ExposureMetric[], endpoints: Endpoint[], _active: Set<number>): void {
+  const ds = requireDataset();
+  const compareOverlay = isEndpointComparisonActive();
+
+  if (compareOverlay) {
+    const facet = createFacetLayoutShell();
+    const scatterBlock = facet.querySelector(".facet-scatter-block")!;
+    const distBlock = facet.querySelector(".facet-dist-block")!;
+
+    const rowEl = document.createElement("div");
+    rowEl.className = "endpoint-row";
+    rowEl.innerHTML = `<div class="facet-row-label">Response · endpoints overlaid</div>`;
+    const rowGrid = document.createElement("div");
+    rowGrid.className = "panel-grid";
+    rowEl.appendChild(rowGrid);
+    scatterBlock.appendChild(rowEl);
+    for (const metric of metrics) {
+      appendCompareScatterOnlyCell(rowGrid, metric, endpoints);
+    }
+
+    const distGrid = document.createElement("div");
+    distGrid.className = "panel-grid facet-shared-dist-grid";
+    for (const metric of metrics) {
+      appendDistOnlyCell(distGrid, metric, endpoints[0]!, { compareEndpoints: endpoints });
+    }
+    distBlock.appendChild(distGrid);
+
+    attachFacetLayoutSplitter(facet);
+    scatterPanelsEl.appendChild(facet);
+    return;
+  }
+
+  if (state.gridLayout === "exposure-rows") {
+    for (const metric of metrics) {
+      const facet = createFacetLayoutShell();
+      const scatterBlock = facet.querySelector(".facet-scatter-block")!;
+      const distBlock = facet.querySelector(".facet-dist-block")!;
+
+      const rowEl = document.createElement("div");
+      rowEl.className = "endpoint-row facet-metric-row";
+      const rowGrid = document.createElement("div");
+      rowGrid.className = "panel-grid";
+      rowEl.innerHTML = `<div class="facet-row-label">${escapeHtml(exposureLabel(metric))}</div>`;
+      rowEl.appendChild(rowGrid);
+      for (const endpoint of endpoints) {
+        appendScatterOnlyCell(rowGrid, metric, endpoint);
+      }
+      scatterBlock.appendChild(rowEl);
+
+      const distGrid = document.createElement("div");
+      distGrid.className = "panel-grid";
+      for (const endpoint of endpoints) {
+        appendDistOnlyCell(distGrid, metric, endpoint);
+      }
+      distBlock.appendChild(distGrid);
+
+      attachFacetLayoutSplitter(facet);
+      scatterPanelsEl.appendChild(facet);
+    }
+    return;
+  }
+
+  const facet = createFacetLayoutShell();
+  const scatterBlock = facet.querySelector(".facet-scatter-block")!;
+  const distBlock = facet.querySelector(".facet-dist-block")!;
+
+  for (const endpoint of endpoints) {
+    const rowEl = document.createElement("div");
+    rowEl.className = "endpoint-row";
+    rowEl.innerHTML = `<div class="facet-row-label">${escapeHtml(ds.endpointLabel(endpoint))}</div>`;
+    const rowGrid = document.createElement("div");
+    rowGrid.className = "panel-grid";
+    rowEl.appendChild(rowGrid);
+    scatterBlock.appendChild(rowEl);
+    for (const metric of metrics) {
+      appendScatterOnlyCell(rowGrid, metric, endpoint);
+    }
+  }
+
+  const distGrid = document.createElement("div");
+  distGrid.className = "panel-grid facet-shared-dist-grid";
+  const readoutAnchor = endpoints[0]!;
+  for (const metric of metrics) {
+    appendDistOnlyCell(distGrid, metric, readoutAnchor);
+  }
+  distBlock.appendChild(distGrid);
+
+  attachFacetLayoutSplitter(facet);
+  scatterPanelsEl.appendChild(facet);
+}
+
+function appendScatterOnlyCell(grid: HTMLElement, metric: ExposureMetric, endpoint: Endpoint): void {
+  const cell = document.createElement("div");
+  cell.className = "panel-cell panel-cell-scatter";
+  const stack = document.createElement("div");
+  stack.className = "metric-stack metric-stack-scatter-only";
+  stack.dataset.stackKind = "scatter-only";
+  stack.dataset.metric = metric;
+  stack.dataset.endpoint = endpoint;
+
+  const scatterPane = document.createElement("div");
+  scatterPane.className = "metric-stack-scatter";
+  const chartWrap = document.createElement("div");
+  chartWrap.className = "chart";
+  chartWrap.dataset.metric = metric;
+  scatterPane.appendChild(chartWrap);
+  stack.appendChild(scatterPane);
+  cell.appendChild(stack);
+  grid.appendChild(cell);
+}
+
+function appendCompareScatterOnlyCell(grid: HTMLElement, metric: ExposureMetric, endpoints: Endpoint[]): void {
+  const cell = document.createElement("div");
+  cell.className = "panel-cell panel-cell-scatter";
+  const stack = document.createElement("div");
+  stack.className = "metric-stack metric-stack-scatter-only";
+  stack.dataset.stackKind = "scatter-compare";
+  stack.dataset.metric = metric;
+  stack.dataset.compareEndpoints = endpoints.join("|");
+
+  const scatterPane = document.createElement("div");
+  scatterPane.className = "metric-stack-scatter";
+  const chartWrap = document.createElement("div");
+  chartWrap.className = "chart";
+  chartWrap.dataset.metric = metric;
+  scatterPane.appendChild(chartWrap);
+  stack.appendChild(scatterPane);
+  cell.appendChild(stack);
+  grid.appendChild(cell);
+}
+
+function appendDistOnlyCell(
+  grid: HTMLElement,
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  opts?: { compareEndpoints?: Endpoint[] }
+): void {
+  const cell = document.createElement("div");
+  cell.className = "panel-cell panel-cell-dist";
+  const stack = document.createElement("div");
+  stack.className = "metric-stack metric-stack-dist-only";
+  stack.dataset.stackKind = "dist-only";
+  stack.dataset.metric = metric;
+  stack.dataset.endpoint = endpoint;
+  if (opts?.compareEndpoints?.length) {
+    stack.dataset.compareEndpoints = opts.compareEndpoints.join("|");
+  }
+
+  const distPane = document.createElement("div");
+  distPane.className = "metric-stack-dist";
+  stack.appendChild(distPane);
+  cell.appendChild(stack);
+  grid.appendChild(cell);
+  ensureDistShell(distPane, { showReadout: true });
+}
+
 function render(): void {
+  if (!dataset) {
+    resetMetricStackObservers();
+    scatterPanelsEl.innerHTML = "";
+    legendEl.innerHTML = "";
+    endpointLegendEl.innerHTML = "";
+    kpiN.textContent = "—";
+    kpiDoses.textContent = "—";
+    kpiShowing.textContent = "—";
+    kpiRespondersBody.innerHTML = "";
+    statusEl.textContent = "";
+    syncCompareNormUi([], false);
+    return;
+  }
+
   const metrics = selectedExposureMetrics();
   const endpoints = selectedEndpoints();
   const active = activeSet();
 
+  resetMetricStackObservers();
   scatterPanelsEl.innerHTML = "";
   distributionPanels = [];
 
@@ -960,52 +1673,24 @@ function render(): void {
   // different scales - this restriction just avoids ever mixing a [0,1] probability curve with a
   // rating-scale curve in the same panel). Any number of exposure metrics is fine - each gets its
   // own overlaid "(all)" column.
-  const comparisonEligible = endpoints.length > 1 && endpoints.every((e) => !isContinuousEndpoint(e));
+  const comparisonEligible = endpoints.length > 1;
   compareEndpointsEl.disabled = !comparisonEligible;
 
+  const compareHasLinear =
+    state.compareEndpoints && comparisonEligible && endpoints.some((e) => usesLinearModel(e));
+  syncCompareNormUi(endpoints, compareHasLinear);
+
   if (state.compareEndpoints && comparisonEligible) {
-    renderEndpointComparisonRow(metrics, endpoints, active);
+    renderEndpointLegend(endpoints);
     endpointLegendEl.style.display = "flex";
     legendEl.style.display = "none";
+    legendEl.innerHTML = "";
   } else {
     legendEl.style.display = "flex";
-    // one row per endpoint, one column per exposure metric - mirrors facet_grid(Endpoint~expname)
-    for (const endpoint of endpoints) {
-      const rowEl = document.createElement("div");
-      rowEl.className = "endpoint-row";
-      const rowGrid = document.createElement("div");
-      rowGrid.className = "panel-grid";
-      // No separate row-label pill here - each panel's own y-axis (rendered by
-      // renderScatterPanel) already carries the endpoint name, so a pill would just repeat it
-      // and eat vertical space for no new information.
-      rowEl.appendChild(rowGrid);
-      scatterPanelsEl.appendChild(rowEl);
-      for (const metric of metrics) {
-        renderScatterPanel(metric, endpoint, active, rowGrid);
-      }
-    }
     endpointLegendEl.style.display = "none";
-
-    // The exposure-by-dose distribution doesn't depend on endpoint (dose exposure is the same
-    // regardless of which response endpoint you're looking at), so it's shown once per exposure
-    // metric - not once per endpoint row - right after all the endpoint rows above, using the
-    // primary (first-selected) endpoint for its "n=60 (40 resp.)" responder-count text.
-    const primaryEndpoint = endpoints[0] ?? "icgi";
-    const sharedRow = document.createElement("div");
-    sharedRow.className = "endpoint-row";
-    const sharedGrid = document.createElement("div");
-    sharedGrid.className = "panel-grid";
-    sharedRow.appendChild(sharedGrid);
-    scatterPanelsEl.appendChild(sharedRow);
-    for (const metric of metrics) {
-      const cell = document.createElement("div");
-      cell.className = "panel-cell dist-shared";
-      sharedGrid.appendChild(cell);
-      appendDistributionMini(cell, metric, primaryEndpoint, active, panelWidth(), undefined, endpoints);
-    }
+    renderLegend();
   }
-
-  renderLegend();
+  renderRegularFacetGrid(metrics, endpoints, active);
   updateStatus(active.size);
   updateKpis(active.size, endpoints);
   refLineNoteEl.style.display = state.referenceLineKind ? "block" : "none";
@@ -1014,6 +1699,11 @@ function render(): void {
   showObservedRespEl.disabled = !state.referenceLineKind;
   showReferenceFitEl.disabled = !state.referenceLineKind;
   showSplitValueEl.disabled = !state.referenceLineKind;
+  applyAllMetricStackHeights();
+  syncMetricStackHeightUi();
+  observeMetricStacks();
+  schedulePaintSyncedMetricStacks(active);
+  applyReadoutChrome();
 }
 
 interface BinaryDoseGroupStats {
@@ -1034,14 +1724,15 @@ interface BinaryDoseGroupStats {
  * (`renderScatterPanel`) and the "Compare endpoints" overlay (`renderEndpointComparisonRow`), so
  * clicking a dose row projects consistently in both views. */
 function computeBinaryDoseGroupStats(metric: ExposureMetric, endpoint: Endpoint, active: Set<number>): Record<string, BinaryDoseGroupStats> {
+  const ds = requireDataset();
   const groupStats: Record<string, BinaryDoseGroupStats> = {};
-  for (const dose of DOSE_ORDER) {
-    const doseRecords = RECORDS.filter((r) => active.has(r.id) && r.dose === dose);
-    const vals = doseRecords.map((r) => exposureValue(r, metric)).sort((a, b) => a - b);
+  for (const dose of DOSE_ORDER()) {
+    const doseRecords = rowIndicesForDose(dose).filter((i) => active.has(ds.patientId(i)));
+    const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
     if (!vals.length) continue;
     const s = summarizeDistribution(vals);
     if (!s) continue;
-    const responders = doseRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
+    const responders = doseRecords.filter((i) => endpointValue(i, endpoint) === 1).length;
     const ci = wilsonScoreInterval(responders, doseRecords.length);
     groupStats[dose] = {
       q1: s.q1,
@@ -1058,6 +1749,63 @@ function computeBinaryDoseGroupStats(metric: ExposureMetric, endpoint: Endpoint,
   return groupStats;
 }
 
+type ContinuousDoseGroupStats = Omit<ProjectedGroup, "groupId" | "color">;
+
+/** Exposure quantiles + observed mean/CI for a continuous endpoint, per dose (active patients). */
+function computeContinuousDoseGroupStats(metric: ExposureMetric, endpoint: Endpoint, active: Set<number>): Record<string, ContinuousDoseGroupStats> {
+  const ds = requireDataset();
+  const groupStats: Record<string, ContinuousDoseGroupStats> = {};
+  for (const dose of DOSE_ORDER()) {
+    const doseRecords = recordsWithEndpoint(endpoint).filter((i) => active.has(ds.patientId(i)) && ds.doseLabel(i) === dose);
+    const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
+    if (!vals.length) continue;
+    const s = summarizeDistribution(vals);
+    if (!s) continue;
+    const mci = meanConfidenceInterval(doseRecords.map((i) => endpointValue(i, endpoint)));
+    groupStats[dose] = {
+      q1: s.q1,
+      q3: s.q3,
+      median: s.median,
+      whiskerLow: s.whiskerLow,
+      whiskerHigh: s.whiskerHigh,
+      min: s.min,
+      max: s.max,
+      observedMean: { mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n }
+    };
+  }
+  return groupStats;
+}
+
+function projectedLinearGroupsFor(
+  groupStats: Record<string, ContinuousDoseGroupStats>,
+  colorOverride?: string,
+  compareNormalizeEndpoint?: Endpoint
+): ProjectedGroup[] {
+  return [...state.selectedDoses]
+    .filter((dose) => groupStats[dose])
+    .map((dose) => {
+      const { observedMean: rawObservedMean, ...rest } = groupStats[dose]!;
+      let observedMean = rawObservedMean;
+      if (state.showDoseObserved && rawObservedMean && compareNormalizeEndpoint) {
+        const fmt = (v: number) => (Number.isFinite(v) ? v.toFixed(1) : "—");
+        observedMean = {
+          mean: normCompareValue(rawObservedMean.mean, compareNormalizeEndpoint),
+          ciLower: normCompareValue(rawObservedMean.ciLower, compareNormalizeEndpoint),
+          ciUpper: normCompareValue(rawObservedMean.ciUpper, compareNormalizeEndpoint),
+          n: rawObservedMean.n,
+          primaryLabel: fmt(rawObservedMean.mean),
+          secondaryLabel: `[${fmt(rawObservedMean.ciLower)}–${fmt(rawObservedMean.ciUpper)}] N=${rawObservedMean.n}`
+        };
+      }
+      return {
+        groupId: dose,
+        color: colorOverride ?? resolveDoseColor(dose),
+        ...rest,
+        observedMean: state.showDoseObserved ? observedMean : undefined
+      };
+    });
+}
+
 /** The clicked-dose projection for a binary endpoint's chart, built from `computeBinaryDoseGroupStats` -
  * shared by both `renderScatterPanel` and `renderEndpointComparisonRow`. Each projected group is
  * colored by dose by default (the regular per-endpoint grid, where dose is the meaningful
@@ -1065,13 +1813,14 @@ function computeBinaryDoseGroupStats(metric: ExposureMetric, endpoint: Endpoint,
  * dose's projection by the endpoint's own color instead, so the projection reads as "this curve's
  * highlight" rather than blending into the dose-colored points/legend of a different endpoint. */
 function projectedGroupsFor(groupStats: Record<string, BinaryDoseGroupStats>, colorOverride?: string): ProjectedGroup[] {
+  const ds = requireDataset();
   return [...state.selectedDoses]
     .filter((dose) => groupStats[dose])
     .map((dose) => {
       const { observed, ...rest } = groupStats[dose]!;
       return {
         groupId: dose,
-        color: colorOverride ?? DOSE_COLORS[dose] ?? "#111827",
+        color: colorOverride ?? resolveDoseColor(dose),
         ...rest,
         observed: state.showDoseObserved ? observed : undefined
       };
@@ -1082,24 +1831,30 @@ function renderScatterPanel(
   metric: ExposureMetric,
   endpoint: Endpoint,
   active: Set<number>,
-  container: HTMLElement
+  container: HTMLElement,
+  opts?: { embedded?: boolean; chartHeight?: number }
 ): void {
+  const ds = requireDataset();
   const { fit, xs, ys } = fitFor(metric, endpoint);
-  const xMax = Math.max(...xs);
+  const xMax = exposureXMax(metric);
   const curve = curveFor(fit, xs, ys, xMax);
   const continuous = isContinuousEndpoint(endpoint);
 
-  const points: ScatterPoint[] = recordsWithEndpoint(endpoint).map((r) => ({
-    id: r.id,
-    exposure: exposureValue(r, metric),
-    response: endpointValue(r, endpoint),
-    // binary responses (0/1) get a small vertical jitter so overlapping points are visible; a
-    // continuous rating-scale response is plotted at its own actual value.
-    displayY: continuous ? endpointValue(r, endpoint) : endpointValue(r, endpoint) + seededJitter(r.id),
-    groupId: r.dose,
-    label: `${exposureLabel(metric)} ${exposureValue(r, metric).toFixed(1)} · ${endpoint.toUpperCase()} ${endpointValue(r, endpoint)} · ${r.dose} · Study ${r.study}`,
-    selected: active.has(r.id)
-  }));
+  const points: ScatterPoint[] = recordsWithEndpoint(endpoint).map((i) => {
+    const pid = ds.patientId(i);
+    const dose = ds.doseLabel(i);
+    const study = ds.studyLabel(i);
+    const studySuffix = study ? ` · Study ${study}` : "";
+    return {
+      id: pid,
+      exposure: exposureValue(i, metric),
+      response: endpointValue(i, endpoint),
+      displayY: continuous ? endpointValue(i, endpoint) : endpointValue(i, endpoint) + seededJitter(pid),
+      groupId: dose,
+      label: `${exposureLabel(metric)} ${exposureValue(i, metric).toFixed(1)} · ${endpoint.toUpperCase()} ${endpointValue(i, endpoint)} · ${dose}${studySuffix}`,
+      selected: active.has(pid)
+    };
+  });
 
   const width = panelWidth();
   let scatterResult: { content: string; metadata: unknown };
@@ -1119,13 +1874,13 @@ function renderScatterPanel(
         observedMean: { mean: number; ciLower: number; ciUpper: number; n: number };
       }
     > = {};
-    for (const dose of DOSE_ORDER) {
-      const doseRecords = recordsWithEndpoint(endpoint).filter((r) => active.has(r.id) && r.dose === dose);
-      const vals = doseRecords.map((r) => exposureValue(r, metric)).sort((a, b) => a - b);
+    for (const dose of DOSE_ORDER()) {
+      const doseRecords = recordsWithEndpoint(endpoint).filter((i) => active.has(ds.patientId(i)) && ds.doseLabel(i) === dose);
+      const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
       if (!vals.length) continue;
       const s = summarizeDistribution(vals);
       if (!s) continue;
-      const mci = meanConfidenceInterval(doseRecords.map((r) => endpointValue(r, endpoint)));
+      const mci = meanConfidenceInterval(doseRecords.map((i) => endpointValue(i, endpoint)));
       groupStats[dose] = {
         q1: s.q1,
         q3: s.q3,
@@ -1145,7 +1900,7 @@ function renderScatterPanel(
         const { observedMean, ...rest } = groupStats[dose]!;
         return {
           groupId: dose,
-          color: DOSE_COLORS[dose] ?? "#111827",
+          color: resolveDoseColor(dose),
           ...rest,
           observedMean: state.showDoseObserved ? observedMean : undefined
         };
@@ -1169,7 +1924,7 @@ function renderScatterPanel(
     scatterResult = renderBinaryScatterOverlay(
       state.showPoints ? points : [],
       [{ curve, projected }],
-      DOSE_COLORS,
+      DOSE_COLORS(),
       xMax,
       exposureLabel(metric),
       endpoint.toUpperCase(),
@@ -1179,18 +1934,356 @@ function renderScatterPanel(
     );
   }
 
-  const cell = document.createElement("div");
-  cell.className = "panel-cell";
-  // No panel-cell-title here - the chart's own x/y axis labels (exposure metric, endpoint) already
-  // carry this information, so a repeated text title above it would just add whitespace.
-  cell.innerHTML = `<div class="chart" data-metric="${metric}" style="height: ${SCATTER_CHART_HEIGHT}px;"></div>`;
-  container.appendChild(cell);
-  const chartWrap = cell.querySelector(".chart") as HTMLDivElement;
+  const chartH = opts?.chartHeight ?? SCATTER_CHART_HEIGHT;
+  const chartWrap = document.createElement("div");
+  chartWrap.className = "chart";
+  chartWrap.dataset.metric = metric;
+  chartWrap.style.height = opts?.embedded ? "100%" : `${chartH}px`;
+  if (opts?.embedded) chartWrap.style.minHeight = "120px";
+
+  if (opts?.embedded) {
+    container.appendChild(chartWrap);
+  } else {
+    const cell = document.createElement("div");
+    cell.className = "panel-cell";
+    cell.appendChild(chartWrap);
+    container.appendChild(cell);
+  }
+
   chartWrap.innerHTML = scatterResult.content;
   const tip = document.createElement("div");
   tip.className = "tooltip";
   chartWrap.appendChild(tip);
   attachScatterInteractivity(chartWrap, tip, metric, endpoint, scatterResult.metadata as unknown as ScatterMeta);
+}
+
+function paintRegularScatterIntoWrap(
+  chartWrap: HTMLDivElement,
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  active: Set<number>,
+  width: number,
+  height: number
+): void {
+  const ds = requireDataset();
+  const { fit, xs, ys } = fitFor(metric, endpoint);
+  const xMax = exposureXMax(metric);
+  const curve = curveFor(fit, xs, ys, xMax);
+  const continuous = isContinuousEndpoint(endpoint);
+
+  const points: ScatterPoint[] = recordsWithEndpoint(endpoint).map((i) => {
+    const pid = ds.patientId(i);
+    const dose = ds.doseLabel(i);
+    const study = ds.studyLabel(i);
+    const studySuffix = study ? ` · Study ${study}` : "";
+    return {
+      id: pid,
+      exposure: exposureValue(i, metric),
+      response: endpointValue(i, endpoint),
+      displayY: continuous ? endpointValue(i, endpoint) : endpointValue(i, endpoint) + seededJitter(pid),
+      groupId: dose,
+      label: `${exposureLabel(metric)} ${exposureValue(i, metric).toFixed(1)} · ${endpoint.toUpperCase()} ${endpointValue(i, endpoint)} · ${dose}${studySuffix}`,
+      selected: active.has(pid)
+    };
+  });
+
+  let scatterResult: { content: string; metadata: unknown };
+
+  if (continuous) {
+    const groupStats: Record<
+      string,
+      {
+        q1: number;
+        q3: number;
+        median: number;
+        whiskerLow: number;
+        whiskerHigh: number;
+        min: number;
+        max: number;
+        n: number;
+        observedMean: { mean: number; ciLower: number; ciUpper: number; n: number };
+      }
+    > = {};
+    for (const dose of DOSE_ORDER()) {
+      const doseRecords = recordsWithEndpoint(endpoint).filter((i) => active.has(ds.patientId(i)) && ds.doseLabel(i) === dose);
+      const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
+      if (!vals.length) continue;
+      const s = summarizeDistribution(vals);
+      if (!s) continue;
+      const mci = meanConfidenceInterval(doseRecords.map((i) => endpointValue(i, endpoint)));
+      groupStats[dose] = {
+        q1: s.q1,
+        q3: s.q3,
+        median: s.median,
+        whiskerLow: s.whiskerLow,
+        whiskerHigh: s.whiskerHigh,
+        min: s.min,
+        max: s.max,
+        n: vals.length,
+        observedMean: { mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n }
+      };
+    }
+
+    const projected: LinearProjectedGroup[] = [...state.selectedDoses]
+      .filter((dose) => groupStats[dose])
+      .map((dose) => {
+        const { observedMean, ...rest } = groupStats[dose]!;
+        return {
+          groupId: dose,
+          color: resolveDoseColor(dose),
+          ...rest,
+          observedMean: state.showDoseObserved ? observedMean : undefined
+        };
+      });
+
+    scatterResult = renderContinuousScatterViaRenderer(
+      points,
+      curve,
+      projected,
+      xMax,
+      metric,
+      endpoint,
+      width,
+      computeDisplayReferenceLines(metric),
+      computeObservedMeanBins(metric, endpoint),
+      height
+    );
+  } else {
+    const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
+    const projected = projectedGroupsFor(groupStats);
+
+    scatterResult = renderBinaryScatterOverlay(
+      state.showPoints ? points : [],
+      [{ curve, projected }],
+      DOSE_COLORS(),
+      xMax,
+      exposureLabel(metric),
+      endpoint.toUpperCase(),
+      width,
+      computeDisplayReferenceLines(metric),
+      computeObservedResponseBins(metric, endpoint),
+      height
+    );
+  }
+
+  chartWrap.innerHTML = scatterResult.content;
+  pinChartSvgToContainer(chartWrap, width, height);
+  let tip = chartWrap.querySelector(".tooltip") as HTMLDivElement | null;
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.className = "tooltip";
+    chartWrap.appendChild(tip);
+  }
+  attachScatterInteractivity(chartWrap, tip, metric, endpoint, scatterResult.metadata as unknown as ScatterMeta);
+}
+
+function paintCompareScatterIntoWrap(
+  chartWrap: HTMLDivElement,
+  metric: ExposureMetric,
+  endpoints: Endpoint[],
+  active: Set<number>,
+  width: number,
+  height: number
+): void {
+  const ds = requireDataset();
+  const xMax = exposureXMax(metric);
+  const referenceLines = computeDisplayReferenceLines(metric);
+
+  const pointsFor = (endpoint: Endpoint): ScatterPoint[] =>
+    recordsWithEndpoint(endpoint).map((i) => {
+      const pid = ds.patientId(i);
+      const dose = ds.doseLabel(i);
+      const study = ds.studyLabel(i);
+      const studySuffix = study ? ` · Study ${study}` : "";
+      const raw = endpointValue(i, endpoint);
+      const linear = usesLinearModel(endpoint);
+      const yDisplay = linear ? normCompareValue(raw, endpoint) + seededJitter(pid, 0.04) : raw + seededJitter(pid);
+      return {
+        id: pid,
+        exposure: exposureValue(i, metric),
+        response: raw,
+        displayY: yDisplay,
+        groupId: endpoint,
+        label: `${exposureLabel(metric)} ${exposureValue(i, metric).toFixed(1)} · ${ds.endpointLabel(endpoint)} ${linear ? raw.toFixed(1) : String(raw)} · ${dose}${studySuffix}`,
+        selected: active.has(pid)
+      };
+    });
+
+  const fits = endpoints.map((endpoint) => {
+    const { fit, xs, ys } = fitFor(metric, endpoint);
+    const rawCurve = curveFor(fit, xs, ys, xMax);
+    const linear = usesLinearModel(endpoint);
+    const { min, max, valid } = getCompareNormBounds(endpoint);
+    const curve = linear && valid ? mapCurveToCompareScale(rawCurve, min, max) : rawCurve;
+    const observedBins = computeCompareObservedBins(metric, endpoint);
+    let projected: ProjectedGroup[] = [];
+    if (linear) {
+      const linearStats = computeContinuousDoseGroupStats(metric, endpoint, active);
+      projected = projectedLinearGroupsFor(linearStats, DOSE_SELECTION_NEUTRAL, endpoint);
+    } else {
+      const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
+      projected = projectedGroupsFor(groupStats, DOSE_SELECTION_NEUTRAL);
+    }
+    return {
+      endpoint,
+      curve,
+      rawCurve: linear ? rawCurve : undefined,
+      fitLabelDecimals: linear ? 1 : 2,
+      observedBins,
+      projected
+    };
+  });
+
+  const neutralCurves = compareDistUsesNeutralShapes();
+  const curves: BinaryCurveOverlay[] = fits.map((f) => ({
+    curve: f.curve,
+    rawCurve: f.rawCurve,
+    fitLabelDecimals: f.fitLabelDecimals,
+    color: neutralCurves ? NEUTRAL_COMPARE_COLOR : endpointColor(f.endpoint),
+    dash: endpointDash(f.endpoint),
+    projected: f.projected
+  }));
+  const allObservedBins = fits.flatMap((f) => f.observedBins);
+  const allPoints = state.showPoints ? fits.flatMap((f) => pointsFor(f.endpoint)) : [];
+  const pointColors = Object.fromEntries(endpoints.map((ep) => [ep, endpointColor(ep)]));
+  const yLabel = endpoints.some((e) => usesLinearModel(e)) ? "Response (compare 0–1)" : "Response";
+  const result = renderBinaryScatterOverlay(
+    allPoints,
+    curves,
+    pointColors,
+    xMax,
+    exposureLabel(metric),
+    yLabel,
+    width,
+    referenceLines,
+    allObservedBins,
+    height
+  );
+  chartWrap.innerHTML = result.content;
+  pinChartSvgToContainer(chartWrap, width, height);
+}
+
+function ensureDistShell(
+  cell: HTMLElement,
+  opts?: { externalReadout?: HTMLDivElement; showReadout?: boolean }
+): { chartWrap: HTMLDivElement; readoutEl: HTMLDivElement | null } {
+  const existing = cell.querySelector(".dist-inline");
+  if (existing) {
+    return {
+      chartWrap: existing.querySelector(".chart") as HTMLDivElement,
+      readoutEl: (opts?.externalReadout ?? existing.querySelector(".readout")) as HTMLDivElement | null
+    };
+  }
+  const showReadout = opts?.showReadout !== false && !opts?.externalReadout;
+  const wrap = document.createElement("div");
+  wrap.className = "dist-inline";
+  if (showReadout) {
+    wrap.innerHTML =
+      '<div class="dist-inline-label">Exposure distribution by dose</div><div class="chart dist-inline-chart" style="min-height:72px;height:100%;"></div><div class="readout"><span class="muted">Click a row above to show projected fit values at Min, Q1, Median, Q3, and Max.</span></div>';
+  } else {
+    wrap.innerHTML =
+      '<div class="dist-inline-label">Exposure distribution by dose</div><div class="chart dist-inline-chart" style="min-height:72px;height:100%;"></div>';
+  }
+  cell.appendChild(wrap);
+  return {
+    chartWrap: wrap.querySelector(".chart") as HTMLDivElement,
+    readoutEl: (opts?.externalReadout ?? (showReadout ? (wrap.querySelector(".readout") as HTMLDivElement) : null)) as HTMLDivElement | null
+  };
+}
+
+function buildDistributionGroups(
+  metric: ExposureMetric,
+  splitByEndpoints?: Endpoint[]
+): DistributionRawGroup[] {
+  const xMax = exposureXMax(metric);
+  const xDomain: [number, number] = [0, xMax];
+
+  const selectionAccent = doseSelectionAccentForDistribution();
+
+  if (splitByEndpoints && splitByEndpoints.length > 1) {
+    return DOSE_ORDER()
+      .slice()
+      .reverse()
+      .flatMap((dose) => {
+        const isPlacebo = isPlaceboDose(dose);
+        if (!splitByEndpoints.some((ep) => rowIndicesForDose(dose).some((i) => Number.isFinite(endpointValue(i, ep))))) {
+          return [];
+        }
+        return splitByEndpoints.map((ep, i) => {
+          const rows = rowIndicesForDose(dose).filter((r) => Number.isFinite(endpointValue(r, ep)));
+          const values = isPlacebo ? [] : rows.map((r) => exposureValue(r, metric)).filter(Number.isFinite);
+          return {
+            groupId: dose,
+            label: i === 0 ? dose : "",
+            color: endpointColor(ep),
+            values,
+            n: rows.length,
+            selected: state.selectedDoses.has(dose),
+            selectionColor: selectionAccent,
+            skipShape: isPlacebo,
+            splitAnnotations:
+              !isPlacebo && state.splitAnnotationMode !== "off"
+                ? computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
+                : undefined
+          };
+        });
+      });
+  }
+
+  return DOSE_ORDER()
+    .slice()
+    .reverse()
+    .map((dose) => {
+      const isPlacebo = isPlaceboDose(dose);
+      const rows = rowIndicesForDose(dose);
+      const values = isPlacebo ? [] : rows.map((i) => exposureValue(i, metric));
+      return {
+        groupId: dose,
+        label: dose,
+        color: compareDistUsesNeutralShapes() ? NEUTRAL_COMPARE_COLOR : resolveDoseColor(dose),
+        values,
+        n: rows.length,
+        selected: state.selectedDoses.has(dose),
+        selectionColor: selectionAccent,
+        skipShape: isPlacebo,
+        splitAnnotations:
+          isPlacebo || state.splitAnnotationMode === "off" ? undefined : computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
+      };
+    })
+    .filter((g) => g.n > 0);
+}
+
+function paintDistributionChart(
+  distCell: HTMLElement,
+  chartWrap: HTMLDivElement,
+  readoutEl: HTMLDivElement | null,
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  active: Set<number>,
+  width: number,
+  height: number,
+  splitByEndpoints?: Endpoint[],
+  readoutEndpoints?: Endpoint[],
+  opts?: { showReadout?: boolean; omitEndpointFit?: boolean }
+): void {
+  const xMax = exposureXMax(metric);
+  const distGroups = buildDistributionGroups(metric, splitByEndpoints);
+  const distResult = renderDistributionViaRenderer(
+    distGroups,
+    [0, xMax],
+    state.distributionMode,
+    computeDisplayReferenceLines(metric),
+    exposureLabel(metric),
+    width,
+    height
+  );
+  chartWrap.innerHTML = distResult.content;
+  pinChartSvgToContainer(chartWrap, width, height);
+  if (!readoutEl) return;
+  const finalReadoutEndpoints = readoutEndpoints ?? (splitByEndpoints && splitByEndpoints.length > 1 ? splitByEndpoints : [endpoint]);
+  attachDistributionInteractivity(chartWrap, metric, finalReadoutEndpoints, active, readoutEl, distResult.metadata, {
+    omitEndpointFit: opts?.omitEndpointFit ?? (isEndpointComparisonActive() && !state.compareDistByEndpoint)
+  });
 }
 
 /** Appends a compact exposure-by-dose distribution strip (Boxplot, Distribution/half-violin, or
@@ -1217,6 +2310,7 @@ interface DistributionRawGroup {
   nResponders?: number;
   selected?: boolean;
   skipShape?: boolean;
+  selectionColor?: string;
   splitAnnotations?: DistributionSplitAnnotation[];
 }
 
@@ -1226,7 +2320,7 @@ interface DistributionRawGroup {
  * `SVGRenderer.render()` below, since `computeDistributionGroupData` needs the same
  * `boxHalfHeightPx` the `DistributionLayer` will independently (re-)compute from `plotRect.height`
  * - both sides derive it from the same `band = plotHeight / groups.length` formula. */
-const DISTRIBUTION_MARGIN = { top: 30, right: 20, bottom: 56, left: 96 };
+const DISTRIBUTION_MARGIN = { top: 22, right: 20, bottom: 56, left: 96 };
 
 /** The x-sample grid a group's KDE/box shape is traced over: an even base grid across the whole
  * domain, plus the group's own distribution breakpoints so box edges land exactly on
@@ -1334,6 +2428,7 @@ function renderDistributionViaRenderer(
       n: g.n,
       nResponders: g.nResponders,
       selected: g.selected,
+      selectionColor: g.selectionColor,
       skipShape: g.skipShape,
       splitAnnotations: g.splitAnnotations,
       xSamples: computed?.xSamples,
@@ -1374,108 +2469,6 @@ function renderDistributionViaRenderer(
   };
 }
 
-function appendDistributionMini(
-  cell: HTMLElement,
-  metric: ExposureMetric,
-  endpoint: Endpoint,
-  active: Set<number>,
-  width: number,
-  splitByEndpoints?: Endpoint[],
-  // Which endpoints' fit values to show in the dose-click readout below the chart - independent
-  // of `splitByEndpoints` (which controls whether the boxplot/lineranges rows themselves are
-  // split per endpoint). The regular per-endpoint-row view never splits the shared distribution
-  // rows (exposure doesn't depend on endpoint), but with 2+ endpoints selected its readout is
-  // just as ambiguous as Compare endpoints' was - so this lets the caller pass every selected
-  // endpoint here even when `splitByEndpoints` is omitted.
-  readoutEndpoints?: Endpoint[]
-): void {
-  const xs = RECORDS.map((r) => exposureValue(r, metric));
-  const xMax = Math.max(...xs);
-  const xDomain: [number, number] = [0, xMax];
-
-  let distGroups: DistributionRawGroup[];
-
-  if (splitByEndpoints && splitByEndpoints.length > 1) {
-    distGroups = DOSE_ORDER.slice()
-      .reverse()
-      .flatMap((dose) => {
-        const isPlacebo = dose === "Placebo";
-        const rows = RECORDS.filter((r) => r.dose === dose);
-        if (!rows.length) return [];
-        const values = isPlacebo ? [] : rows.map((r) => exposureValue(r, metric));
-        return splitByEndpoints.map((ep, i) => ({
-          groupId: dose,
-          label: i === 0 ? dose : "",
-          color: ENDPOINT_COLORS[ep],
-          values,
-          n: rows.length,
-          // per-dose responder counts used to be shown here ("n=60 (40 resp.)"), but that
-          // observed %/N is already available (and unambiguous, since it's for one clicked dose
-          // at a time) by clicking the box/row above - see showDoseObserved.
-          selected: state.selectedDoses.has(dose),
-          skipShape: isPlacebo,
-          splitAnnotations:
-            !isPlacebo && state.splitAnnotationMode !== "off"
-              ? computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
-              : undefined
-        }));
-      });
-  } else {
-    distGroups = DOSE_ORDER.slice()
-      .reverse()
-      .map((dose) => {
-        const isPlacebo = dose === "Placebo";
-        const rows = RECORDS.filter((r) => r.dose === dose);
-        const values = isPlacebo ? [] : rows.map((r) => exposureValue(r, metric));
-        return {
-          groupId: dose,
-          label: dose,
-          color: DOSE_COLORS[dose],
-          values,
-          n: rows.length,
-          // Deliberately no responder count here: this shared strip is shown once per exposure
-          // metric regardless of how many endpoints are selected, so a responder count here
-          // could only ever reflect one of them - misleadingly silent about the rest. That
-          // per-dose observed %/N is still available, unambiguously, by clicking the row (see
-          // showDoseObserved) which reports it for whichever endpoint panel it's clicked under.
-          selected: state.selectedDoses.has(dose),
-          skipShape: isPlacebo,
-          splitAnnotations:
-            isPlacebo || state.splitAnnotationMode === "off" ? undefined : computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
-        };
-      })
-      .filter((g) => g.n > 0);
-  }
-
-  // Panel height is always based on the plain 5-dose count, regardless of whether this is the
-  // regular view or the "Compare endpoints" split-by-endpoint view - so the panel is visually the
-  // same size in both places. When split into per-endpoint sub-rows there are more (denser) rows
-  // to fit in that same height; renderDistributionChart's own band = plot.height / groups.length
-  // shrinks each row proportionally to fit, rather than growing the panel taller.
-  const doseCount = DOSE_ORDER.filter((dose) => RECORDS.some((r) => r.dose === dose)).length;
-  const height = Math.max(200, doseCount * 26 + 60);
-
-  const distResult = renderDistributionViaRenderer(
-    distGroups,
-    [0, xMax],
-    state.distributionMode,
-    computeDisplayReferenceLines(metric),
-    exposureLabel(metric),
-    width,
-    height
-  );
-
-  const wrap = document.createElement("div");
-  wrap.className = "dist-inline";
-  wrap.innerHTML = `<div class="dist-inline-label">Exposure distribution by dose</div><div class="chart dist-inline-chart" style="height: ${height}px;"></div><div class="readout"><span class="muted">Click a row above to show projected fit values at Min, Q1, Median, Q3, and Max.</span></div>`;
-  cell.appendChild(wrap);
-  const chartWrap = wrap.querySelector(".chart") as HTMLDivElement;
-  const readoutEl = wrap.querySelector(".readout") as HTMLDivElement;
-  chartWrap.innerHTML = distResult.content;
-  const finalReadoutEndpoints = readoutEndpoints ?? (splitByEndpoints && splitByEndpoints.length > 1 ? splitByEndpoints : [endpoint]);
-  attachDistributionInteractivity(chartWrap, metric, finalReadoutEndpoints, active, readoutEl, distResult.metadata);
-}
-
 interface DistributionMeta {
   xScale: { domain: [number, number]; range: [number, number] };
   groups: DistributionGroupMeta[];
@@ -1490,132 +2483,58 @@ interface DistributionMeta {
  * (mirroring the regular grid's one-column-per-metric layout), rather than multiplying into a
  * full endpoints x metrics grid.
  */
-function renderEndpointComparisonRow(metrics: ExposureMetric[], endpoints: Endpoint[], active: Set<number>): void {
-  renderEndpointLegend(endpoints);
-
-  const chartHeight = SCATTER_CHART_HEIGHT;
-  const width = panelWidth();
-
-  const rowEl = document.createElement("div");
-  rowEl.className = "endpoint-row";
-  const rowGrid = document.createElement("div");
-  rowGrid.className = "panel-grid";
-  rowEl.appendChild(rowGrid);
-  scatterPanelsEl.appendChild(rowEl);
-
-  // Only the combined "(all)" overlay is ever shown here - one column per selected exposure
-  // metric, mirroring the regular grid's one-column-per-metric layout. Individual per-endpoint
-  // panels (and the "Only show (all)" toggle that used to switch between the two) were dropped:
-  // with 2+ exposure metrics they'd multiply into a full endpoints x metrics grid, defeating the
-  // point of a compact side-by-side comparison, so the overlay is simply always the view.
-  for (const metric of metrics) {
-    const xMax = Math.max(...RECORDS.map((r) => exposureValue(r, metric)));
-    const referenceLines = computeDisplayReferenceLines(metric);
-
-    // Raw jittered points, colored by endpoint instead of dose (gated by the shared "Show
-    // points" toggle) - one set per endpoint, all overlaid together in this metric's panel.
-    const pointsFor = (endpoint: Endpoint): ScatterPoint[] =>
-      RECORDS.map((r) => ({
-        id: r.id,
-        exposure: exposureValue(r, metric),
-        response: endpointValue(r, endpoint),
-        displayY: endpointValue(r, endpoint) + seededJitter(r.id),
-        groupId: endpoint,
-        label: `${exposureLabel(metric)} ${exposureValue(r, metric).toFixed(1)} · ${endpoint.toUpperCase()} ${endpointValue(r, endpoint)} · ${r.dose} · Study ${r.study}`,
-        selected: active.has(r.id)
-      }));
-
-    const fits = endpoints.map((endpoint) => {
-      // this comparison view is only ever reached with binary (logistic) endpoints - see
-      // comparisonEligible in render(), which excludes any continuous (linear) endpoint.
-      const { fit, xs, ys } = fitFor(metric, endpoint);
-      const curve = curveFor(fit, xs, ys, xMax);
-      const observedBins: ObservedResponseBin[] = computeObservedResponseBins(metric, endpoint).map((b) => ({
-        ...b,
-        color: ENDPOINT_COLORS[endpoint]
-      }));
-      // Each endpoint gets its own dose-click projection, drawn against its own curve and colored
-      // by that endpoint (not by dose) - so clicking a dose row highlights every overlaid
-      // endpoint's curve at once, each in its own color, instead of only the primary endpoint's.
-      const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
-      const projected = projectedGroupsFor(groupStats, ENDPOINT_COLORS[endpoint]);
-      return { endpoint, curve, observedBins, projected };
+function computeCompareObservedBins(metric: ExposureMetric, endpoint: Endpoint): ObservedResponseBin[] {
+  const neutral = compareDistUsesNeutralShapes();
+  const color = neutral ? NEUTRAL_COMPARE_COLOR : endpointColor(endpoint);
+  const strokeDash = neutral ? endpointMarkerDash(endpoint) : undefined;
+  if (usesLinearModel(endpoint)) {
+    return computeObservedMeanBins(metric, endpoint).map((b) => {
+      const fmt = (v: number) => (Number.isFinite(v) ? v.toFixed(1) : "—");
+      return {
+        x: b.x,
+        proportion: normCompareValue(b.mean, endpoint),
+        ciLower: normCompareValue(b.ciLower, endpoint),
+        ciUpper: normCompareValue(b.ciUpper, endpoint),
+        n: b.n,
+        responders: 0,
+        color,
+        strokeDash,
+        primaryLabel: fmt(b.mean),
+        secondaryLabel: `[${fmt(b.ciLower)}–${fmt(b.ciUpper)}] n=${b.n}`
+      };
     });
-
-    if (!fits.length) continue;
-
-    const curves: BinaryCurveOverlay[] = fits.map((f) => ({
-      curve: f.curve,
-      color: ENDPOINT_COLORS[f.endpoint],
-      dash: ENDPOINT_DASH[f.endpoint],
-      projected: f.projected
-    }));
-    const allObservedBins = fits.flatMap((f) => f.observedBins);
-    const allPoints = state.showPoints ? fits.flatMap((f) => pointsFor(f.endpoint)) : [];
-    const allGroupColors = Object.fromEntries(fits.map((f) => [f.endpoint, ENDPOINT_COLORS[f.endpoint]]));
-    const result = renderBinaryScatterOverlay(
-      allPoints,
-      curves,
-      allGroupColors,
-      xMax,
-      exposureLabel(metric),
-      "Response",
-      width,
-      referenceLines,
-      allObservedBins
-    );
-
-    // Deliberately no attachScatterInteractivity here (unlike the regular grid): its brush-select
-    // math resolves a drag rectangle to patient ids via a single endpoint's response value, which
-    // would be wrong for points drawn from several different endpoints overlaid at once. Hover
-    // tooltips read each point's own data-* attributes already baked into the SVG, so those would
-    // be accurate, but brushing isn't - simplest to leave both off here rather than ship a
-    // half-correct interaction.
-    const cell = document.createElement("div");
-    cell.className = "panel-cell";
-    cell.innerHTML = `<div class="panel-cell-title">${exposureLabel(metric)}</div><div class="chart" data-metric="${metric}" style="height: ${chartHeight}px;"></div>`;
-    rowGrid.appendChild(cell);
-    (cell.querySelector(".chart") as HTMLDivElement).innerHTML = result.content;
   }
-
-  // The exposure-by-dose distribution (Boxplot / Distribution / Lineranges - the same toggle used
-  // in the regular view) doesn't depend on which endpoint's curve it's being compared against, so
-  // it's shown once per exposure metric, shared beneath the overlay panel above (not duplicated
-  // per endpoint). Split into one sub-row per endpoint (colored by endpoint, clustered by dose)
-  // so the per-endpoint coloring this view is built around isn't lost just because the panel
-  // itself is shared/unduplicated.
-  const distRowEl = document.createElement("div");
-  distRowEl.className = "endpoint-row";
-  const distGrid = document.createElement("div");
-  distGrid.className = "panel-grid";
-  distRowEl.appendChild(distGrid);
-  scatterPanelsEl.appendChild(distRowEl);
-  for (const metric of metrics) {
-    const distCell = document.createElement("div");
-    distCell.className = "panel-cell dist-shared";
-    distGrid.appendChild(distCell);
-    appendDistributionMini(distCell, metric, endpoints[0], active, panelWidth(), endpoints);
-  }
+  return computeObservedResponseBins(metric, endpoint).map((b) => ({ ...b, color, strokeDash }));
 }
 
 function renderEndpointLegend(endpoints: Endpoint[]): void {
   endpointLegendEl.innerHTML = "";
+  const ds = requireDataset();
   endpoints.forEach((endpoint) => {
     const item = document.createElement("div");
     item.className = "dotKey";
-    const color = ENDPOINT_COLORS[endpoint];
-    const dash = ENDPOINT_DASH[endpoint];
-    item.innerHTML = `<svg width="24" height="10" style="flex:none"><line x1="1" y1="5" x2="23" y2="5" stroke="${color}" stroke-width="2.4" stroke-dasharray="${dash}" stroke-linecap="round" /></svg> ${endpoint.toUpperCase()}`;
+    const color = endpointColor(endpoint);
+    const dash = endpointDash(endpoint);
+    const linear = usesLinearModel(endpoint);
+    const bounds = linear ? getCompareNormBounds(endpoint) : null;
+    const scaleNote =
+      linear && bounds?.valid
+        ? ` · scaled ${bounds.min.toFixed(1)}–${bounds.max.toFixed(1)}`
+        : linear
+          ? " · scale invalid"
+          : " · binary";
+    item.innerHTML = `<svg width="24" height="10" style="flex:none"><line x1="1" y1="5" x2="23" y2="5" stroke="${color}" stroke-width="2.4" stroke-dasharray="${dash}" stroke-linecap="round" /></svg> ${escapeHtml(ds.endpointLabel(endpoint))}<span class="muted">${scaleNote}</span>`;
     endpointLegendEl.appendChild(item);
   });
 }
 
 function renderLegend(): void {
+  const ds = requireDataset();
   legendEl.innerHTML = "";
-  for (const dose of DOSE_ORDER) {
+  for (const dose of DOSE_ORDER()) {
     const item = document.createElement("div");
     item.className = "dotKey";
-    item.innerHTML = `<span class="swatch" style="background:${DOSE_COLORS[dose]}"></span> ${dose}`;
+    item.innerHTML = `<span class="swatch" style="background:${resolveDoseColor(dose)}"></span> ${dose}`;
     legendEl.appendChild(item);
   }
 }
@@ -1629,27 +2548,42 @@ function isEndpointComparisonActive(): boolean {
   // Mirrors comparisonEligible in render() - Compare endpoints now works with any number of
   // exposure metrics (each gets its own overlaid "(all)" column), so this must not require
   // exactly one metric to be selected the way it used to before that redesign.
-  return state.compareEndpoints && endpoints.length > 1 && endpoints.every((e) => !isContinuousEndpoint(e));
+  return state.compareEndpoints && endpoints.length > 1;
 }
 
 function doseColorFor(dose: string): string {
-  return isEndpointComparisonActive() ? "#334155" : DOSE_COLORS[dose] ?? "#111827";
+  if (isEndpointComparisonActive()) return DOSE_SELECTION_NEUTRAL;
+  return resolveDoseColor(dose);
+}
+
+function doseSelectionAccentForDistribution(): string | undefined {
+  return isEndpointComparisonActive() ? DOSE_SELECTION_NEUTRAL : undefined;
 }
 
 function updateStatus(activeCount: number): void {
-  const total = RECORDS.length;
-  // color each dose name to match its swatch/marker color, so it's easy to tell which
-  // highlighted dose is which at a glance, consistent with the rest of the UI - except in
-  // Compare Endpoints mode, where a dose no longer has one color (see doseColorFor).
-  const doseNamesHtml = [...state.selectedDoses]
-    .map((dose) => `<strong style="color:${doseColorFor(dose)}">${dose}</strong>`)
-    .join(", ");
+  const ds = requireDataset();
+  const total = ds.rowCount;
+  const filterHtml =
+    state.dataFilters.length > 0
+      ? describeActiveFilters(state.dataFilters, (col) => filterColumnOptions().find((c) => c.id === col)?.label ?? col)
+      : "";
+  const doseNamesHtml = isEndpointComparisonActive()
+    ? [...state.selectedDoses].map((dose) => escapeHtml(dose)).join(", ")
+    : [...state.selectedDoses]
+        .map((dose) => `<strong style="color:${resolveDoseColor(dose)}">${escapeHtml(dose)}</strong>`)
+        .join(", ");
   const focusHtml = state.selectedDoses.size ? `dose = ${doseNamesHtml}` : "";
   const brushText = state.brushedIds ? `${state.brushedIds.size} brushed` : "";
-  if (!state.brushedIds && !state.selectedDoses.size) {
-    statusEl.textContent = "Showing all rows";
+  const parts = [filterHtml, brushText, focusHtml].filter(Boolean);
+  if (parts.length) {
+    statusEl.innerHTML = parts.join(" · ") + ` (${activeCount} of ${total} rows)`;
   } else {
-    statusEl.innerHTML = [brushText, focusHtml].filter(Boolean).join(" and ") + ` (${activeCount} of ${total} rows)`;
+    const filtered = dataFilteredRowIndices().length;
+    if (state.dataFilters.length && filtered < total) {
+      statusEl.textContent = `Showing ${filtered} of ${total} rows (filters active)`;
+    } else {
+      statusEl.textContent = "Showing all rows";
+    }
   }
 }
 
@@ -1658,21 +2592,22 @@ function updateStatus(activeCount: number): void {
  * dose would blend a very different baseline (Placebo) into the treated-population rate, and
  * previously this card only ever reflected one endpoint even when several were selected. */
 function updateKpis(activeCount: number, endpoints: Endpoint[]): void {
-  kpiN.textContent = String(RECORDS.length);
+  const ds = requireDataset();
+  kpiN.textContent = String(ds.rowCount);
   kpiShowing.textContent = String(activeCount);
+  if (kpiDoses) kpiDoses.textContent = String(DOSE_ORDER().length);
 
-  const placeboRecords = RECORDS.filter((r) => r.dose === "Placebo");
-  const dosedRecords = RECORDS.filter((r) => r.dose !== "Placebo");
+  const placeboRows = rowIndicesPlacebo();
+  const dosedRows = rowIndicesDosed();
   const pct = (n: number, total: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
 
   kpiRespondersBody.innerHTML = endpoints
     .map((endpoint) => {
-      // A continuous endpoint (BRLS/PRLS) has no responder/non-responder concept - this row
-      // reports the observed mean response + 95% CI + n contributing instead of a % responders.
       if (isContinuousEndpoint(endpoint)) {
-        const hasValue = (r: ExposureResponseRecord) => Number.isFinite(endpointValue(r, endpoint));
-        const placeboMci = meanConfidenceInterval(placeboRecords.filter(hasValue).map((r) => endpointValue(r, endpoint)));
-        const dosedMci = meanConfidenceInterval(dosedRecords.filter(hasValue).map((r) => endpointValue(r, endpoint)));
+        const placeboVals = placeboRows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).map((i) => endpointValue(i, endpoint));
+        const dosedVals = dosedRows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).map((i) => endpointValue(i, endpoint));
+        const placeboMci = meanConfidenceInterval(placeboVals);
+        const dosedMci = meanConfidenceInterval(dosedVals);
         const fmt = (m: { mean: number; lower: number; upper: number }) => `${m.mean.toFixed(1)} [${m.lower.toFixed(1)}-${m.upper.toFixed(1)}]`;
         return `<div class="responder-row">
           <span class="responder-endpoint">${endpoint.toUpperCase()}</span>
@@ -1680,12 +2615,12 @@ function updateKpis(activeCount: number, endpoints: Endpoint[]): void {
           <span class="responder-group"><span class="muted">Dosed</span> <strong>${fmt(dosedMci)}</strong> <span class="muted">(n=${dosedMci.n})</span></span>
         </div>`;
       }
-      const placeboResponders = placeboRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
-      const dosedResponders = dosedRecords.filter((r) => endpointValue(r, endpoint) === 1).length;
+      const placeboResponders = placeboRows.filter((i) => endpointValue(i, endpoint) === 1).length;
+      const dosedResponders = dosedRows.filter((i) => endpointValue(i, endpoint) === 1).length;
       return `<div class="responder-row">
         <span class="responder-endpoint">${endpoint.toUpperCase()}</span>
-        <span class="responder-group"><span class="muted">Placebo</span> <strong>${pct(placeboResponders, placeboRecords.length)}%</strong> <span class="muted">(${placeboResponders}/${placeboRecords.length})</span></span>
-        <span class="responder-group"><span class="muted">Dosed</span> <strong>${pct(dosedResponders, dosedRecords.length)}%</strong> <span class="muted">(${dosedResponders}/${dosedRecords.length})</span></span>
+        <span class="responder-group"><span class="muted">Placebo</span> <strong>${pct(placeboResponders, placeboRows.length)}%</strong> <span class="muted">(${placeboResponders}/${placeboRows.length})</span></span>
+        <span class="responder-group"><span class="muted">Dosed</span> <strong>${pct(dosedResponders, dosedRows.length)}%</strong> <span class="muted">(${dosedResponders}/${dosedRows.length})</span></span>
       </div>`;
     })
     .join("");
@@ -1700,13 +2635,21 @@ function updateKpis(activeCount: number, endpoints: Endpoint[]): void {
  * own panel/axis above, so there's nothing to disambiguate by color there; every line for a given
  * dose instead stays in that dose's own color (or neutral, in Compare endpoints - see
  * doseColorFor), matching the dose swatches/boxplot rows elsewhere in the UI. */
-function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoints: Endpoint[], active: Set<number>): void {
+function updateReadout(
+  readoutEl: HTMLDivElement,
+  metric: ExposureMetric,
+  endpoints: Endpoint[],
+  active: Set<number>,
+  opts?: { omitEndpointFit?: boolean }
+): void {
+  const ds = requireDataset();
+  const omitEndpointFit = opts?.omitEndpointFit ?? false;
   const groupStats: Record<string, { min: number; q1: number; median: number; q3: number; max: number }> = {};
   const doseN: Record<string, number> = {};
   for (const dose of state.selectedDoses) {
-    const rows = RECORDS.filter((r) => active.has(r.id) && r.dose === dose);
+    const rows = rowIndicesForDose(dose).filter((i) => active.has(ds.patientId(i)));
     doseN[dose] = rows.length;
-    const vals = rows.map((r) => exposureValue(r, metric)).sort((a, b) => a - b);
+    const vals = rows.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
     const s = summarizeDistribution(vals);
     if (s) groupStats[dose] = { min: s.min, q1: s.q1, median: s.median, q3: s.q3, max: s.max };
   }
@@ -1717,36 +2660,38 @@ function updateReadout(readoutEl: HTMLDivElement, metric: ExposureMetric, endpoi
   }
   const multiEndpoint = endpoints.length > 1;
   const colorByEndpoint = isEndpointComparisonActive();
-  const lines: string[] = [];
+  const blocks: string[] = [];
   for (const dose of doses) {
     const g = groupStats[dose];
+    const doseColor = isEndpointComparisonActive() ? DOSE_SELECTION_NEUTRAL : doseColorFor(dose);
+    const expLine = `<div class="readout-line-exposure"><strong style="color:${doseColor}">${escapeHtml(dose)}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} &nbsp; Q1 = ${g.q1.toFixed(1)} &nbsp; Median = ${g.median.toFixed(1)} &nbsp; Q3 = ${g.q3.toFixed(1)} &nbsp; Max = ${g.max.toFixed(1)} &nbsp; N=${doseN[dose]}</div>`;
+    blocks.push(expLine);
+
+    if (omitEndpointFit) continue;
+
     for (const endpoint of endpoints) {
       const { fit } = fitFor(metric, endpoint);
       const continuous = isContinuousEndpoint(endpoint);
       const decimals = continuous ? 1 : 3;
       const fitAt = (x: number) =>
         fit.kind === "linear" ? fit.model.intercept + fit.model.slope * x : 1 / (1 + Math.exp(-(fit.model.intercept + fit.model.slope * x)));
-      const color = colorByEndpoint ? ENDPOINT_COLORS[endpoint] : doseColorFor(dose);
-      const label = multiEndpoint ? `${dose} · ${endpoint.toUpperCase()}` : dose;
-      // The dose's boxplot shape (and its "N=" row label) is built from every active patient in
-      // this dose, regardless of endpoint - but a given endpoint's own value can be missing for
-      // some of those patients (a continuous score not recorded, say). Rather than printing a
-      // second n=/N= pair (confusing next to the row's own N=), call out the missing count
-      // directly against the dose's N - this is what would have caught the BRLS-missing-one-
-      // patient case in the 1200mg dose immediately instead of only being noticeable by eye in
-      // the boxplot, and generalizes cleanly to endpoints with more than one missing value.
-      const endpointN = RECORDS.filter((r) => active.has(r.id) && r.dose === dose && Number.isFinite(endpointValue(r, endpoint))).length;
+      const color = colorByEndpoint ? endpointColor(endpoint) : doseColor;
+      const label = multiEndpoint ? ds.endpointLabel(endpoint) : dose;
+      const endpointN = rowIndicesForDose(dose).filter(
+        (i) => active.has(ds.patientId(i)) && Number.isFinite(endpointValue(i, endpoint))
+      ).length;
       const missing = doseN[dose] - endpointN;
       const nNote =
         missing === 0
-          ? `N=${doseN[dose]}`
-          : `<strong>${missing} missing value${missing === 1 ? "" : "s"} removed from N=${doseN[dose]}</strong>`;
-      lines.push(
-        `<div><strong style="color:${color}">${label}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} (fit ${fitAt(g.min).toFixed(decimals)}) &nbsp; Q1 = ${g.q1.toFixed(1)} (fit ${fitAt(g.q1).toFixed(decimals)}) &nbsp; Median = ${g.median.toFixed(1)} (fit ${fitAt(g.median).toFixed(decimals)}) &nbsp; Q3 = ${g.q3.toFixed(1)} (fit ${fitAt(g.q3).toFixed(decimals)}) &nbsp; Max = ${g.max.toFixed(1)} (fit ${fitAt(g.max).toFixed(decimals)}) &nbsp; ${nNote}</div>`
+          ? ""
+          : ` &nbsp; <span class="muted">${missing} missing from N=${doseN[dose]}</span>`;
+      blocks.push(
+        `<div class="readout-line-fit"><span style="color:${color}">${label}</span> — fit @ Min ${fitAt(g.min).toFixed(decimals)} · Q1 ${fitAt(g.q1).toFixed(decimals)} · Med ${fitAt(g.median).toFixed(decimals)} · Q3 ${fitAt(g.q3).toFixed(decimals)} · Max ${fitAt(g.max).toFixed(decimals)}${nNote}</div>`
       );
     }
   }
-  readoutEl.innerHTML = lines.join("");
+  readoutEl.innerHTML = blocks.join("");
+  applyReadoutChrome(readoutEl);
 }
 
 function attachScatterInteractivity(chartWrap: HTMLDivElement, tip: HTMLDivElement, metric: ExposureMetric, endpoint: Endpoint, meta: ScatterMeta): void {
@@ -1829,16 +2774,14 @@ function attachScatterInteractivity(chartWrap: HTMLDivElement, tip: HTMLDivEleme
     const minY = y.invert(Math.max(drag.y0, drag.y1));
     const maxY = y.invert(Math.min(drag.y0, drag.y1));
     const continuous = isContinuousEndpoint(endpoint);
-    const selected = RECORDS.filter((r) => {
-      const ex = exposureValue(r, metric);
-      // matches how points are actually plotted in renderScatterPanel: a continuous response is
-      // shown at its own value (no jitter); a missing continuous response (NaN) never satisfies
-      // this range check, so those rows are simply never brushable, matching that they're never
-      // drawn as a point either.
-      const disp = continuous ? endpointValue(r, endpoint) : endpointValue(r, endpoint) + seededJitter(r.id);
+    const ds = requireDataset();
+    const selected = ds.allRowIndices().filter((i) => {
+      const ex = exposureValue(i, metric);
+      const pid = ds.patientId(i);
+      const disp = continuous ? endpointValue(i, endpoint) : endpointValue(i, endpoint) + seededJitter(pid);
       return ex >= minExposure && ex <= maxExposure && disp >= minY && disp <= maxY;
     });
-    state.brushedIds = new Set(selected.map((r) => r.id));
+    state.brushedIds = new Set(selected.map((i) => ds.patientId(i)));
     drag = null;
     render();
   });
@@ -1850,10 +2793,11 @@ function attachDistributionInteractivity(
   endpoints: Endpoint[],
   active: Set<number>,
   readoutEl: HTMLDivElement,
-  meta: DistributionMeta
+  meta: DistributionMeta,
+  readoutOpts?: { omitEndpointFit?: boolean }
 ): void {
   const svg = chartWrap.querySelector("svg");
-  updateReadout(readoutEl, metric, endpoints, active);
+  updateReadout(readoutEl, metric, endpoints, active, readoutOpts);
   if (!svg) return;
 
   const rows = svg.querySelectorAll<SVGGElement>("g.er-ridge");
@@ -1867,7 +2811,7 @@ function attachDistributionInteractivity(
       if (!dose || distributionAnimating) return;
       if (state.selectedDoses.has(dose)) state.selectedDoses.delete(dose);
       else state.selectedDoses.add(dose);
-      render();
+      refreshSelectionVisuals();
     });
   });
 
@@ -2013,10 +2957,350 @@ function resetSelection(): void {
 }
 
 /* ---------------------------------------------------------------------- *
+ * Dataset upload / column mapping
+ * ---------------------------------------------------------------------- */
+
+function syncEndpointModelsUi(): void {
+  if (!dataset) {
+    endpointModelsListEl.innerHTML = "";
+    return;
+  }
+  const ds = dataset;
+  const endpoints = endpointOrder();
+  endpointModelsListEl.innerHTML = endpoints
+    .map((e) => {
+      const model = state.endpointModels[e] ?? inferDefaultEndpointModel(ds, e);
+      return `<div class="endpoint-model-row" data-endpoint="${escapeAttr(e)}">
+        <span>${escapeHtml(ds.endpointLabel(e))}</span>
+        <select data-endpoint-model="${escapeAttr(e)}">
+          <option value="logistic" ${model === "logistic" ? "selected" : ""}>Logistic</option>
+          <option value="linear" ${model === "linear" ? "selected" : ""}>Linear</option>
+        </select>
+      </div>`;
+    })
+    .join("");
+  endpointModelsListEl.querySelectorAll<HTMLSelectElement>("select[data-endpoint-model]").forEach((sel) => {
+    sel.onchange = () => {
+      const ep = sel.dataset.endpointModel as Endpoint | undefined;
+      if (!ep) return;
+      const val = sel.value === "linear" ? "linear" : "logistic";
+      state.endpointModels[ep] = val;
+      if (val === "linear") ensureNormScaleForEndpoint(ep);
+      syncCompareNormUi(selectedEndpoints(), state.compareEndpoints && selectedEndpoints().length > 1);
+      render();
+    };
+  });
+}
+
+function syncCompareNormUi(endpoints: Endpoint[], show: boolean): void {
+  if (!dataset || !show) {
+    compareNormSectionEl.hidden = true;
+    compareNormListEl.innerHTML = "";
+    return;
+  }
+  const ds = dataset;
+  const linearEps = endpoints.filter((e) => usesLinearModel(e));
+  if (!linearEps.length) {
+    compareNormSectionEl.hidden = true;
+    compareNormListEl.innerHTML = "";
+    return;
+  }
+  compareNormSectionEl.hidden = false;
+  const dataRanges = linearEps.map((e) => ({ e, range: dataRangeForEndpoint(ds, e) }));
+  compareNormListEl.innerHTML = dataRanges
+    .map(({ e, range }) => {
+      ensureNormScaleForEndpoint(e);
+      const scale = state.endpointNormScales[e]!;
+      const resolved = resolveNormBounds(scale, range);
+      const dataHint = range ? `data ${range.min.toFixed(1)}–${range.max.toFixed(1)}` : "no data";
+      return `<div class="compare-norm-row" data-endpoint="${escapeAttr(e)}">
+        <span title="${escapeAttr(dataHint)}">${escapeHtml(ds.endpointLabel(e))}</span>
+        <input type="number" step="any" data-norm-min="${escapeAttr(e)}" value="${scale.min}" aria-label="Min ${escapeAttr(e)}" />
+        <input type="number" step="any" data-norm-max="${escapeAttr(e)}" value="${scale.max}" aria-label="Max ${escapeAttr(e)}" />
+        <button type="button" class="btn-reset-norm" data-norm-reset="${escapeAttr(e)}">Use data</button>
+      </div>`;
+    })
+    .join("");
+
+  compareNormListEl.querySelectorAll<HTMLInputElement>("input[data-norm-min]").forEach((inp) => {
+    inp.onchange = () => applyNormInput(inp.dataset.normMin as Endpoint, "min", inp.value);
+  });
+  compareNormListEl.querySelectorAll<HTMLInputElement>("input[data-norm-max]").forEach((inp) => {
+    inp.onchange = () => applyNormInput(inp.dataset.normMax as Endpoint, "max", inp.value);
+  });
+  compareNormListEl.querySelectorAll<HTMLButtonElement>("button[data-norm-reset]").forEach((btn) => {
+    btn.onclick = () => {
+      const ep = btn.dataset.normReset as Endpoint;
+      if (!dataset || !ep) return;
+      const range = dataRangeForEndpoint(dataset, ep);
+      if (!range) return;
+      state.endpointNormScales[ep] = { min: range.min, max: range.max, useCustomBounds: false };
+      syncCompareNormUi(selectedEndpoints(), true);
+      render();
+    };
+  });
+}
+
+function applyNormInput(endpoint: Endpoint, field: "min" | "max", raw: string): void {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !dataset) return;
+  ensureNormScaleForEndpoint(endpoint);
+  const scale = state.endpointNormScales[endpoint]!;
+  scale.useCustomBounds = true;
+  if (field === "min") scale.min = n;
+  else scale.max = n;
+  render();
+}
+
+function syncFiltersUi(): void {
+  if (!dataset) {
+    filterRulesListEl.innerHTML = "";
+    filterStatusEl.textContent = "";
+    return;
+  }
+  const cols = filterColumnOptions();
+  const colById = new Map(cols.map((c) => [c.id, c]));
+
+  filterRulesListEl.innerHTML = state.dataFilters
+    .map((rule, idx) => {
+      const col = colById.get(rule.column) ?? cols[0];
+      if (rule.categorical === undefined && col) rule.categorical = suggestFilterMode(col);
+      const categorical = rule.categorical ?? false;
+      const colOptions = cols.map((c) => `<option value="${escapeAttr(c.id)}" ${c.id === rule.column ? "selected" : ""}>${escapeHtml(c.label)}</option>`).join("");
+      const ops = filterOperatorsForColumn(categorical ? false : (col?.numeric ?? false))
+        .map((o) => `<option value="${o.value}" ${o.value === rule.operator ? "selected" : ""}>${escapeHtml(o.label)}</option>`)
+        .join("");
+      const distinct = col ? distinctColumnValues(dataset!.loaded, col.id, 50) : [];
+      const selectedSet = new Set(rule.values);
+      const catPickers =
+        categorical && distinct.length
+          ? `<div class="filter-cat-values">${distinct
+              .map(
+                (v) =>
+                  `<label><input type="checkbox" data-filter-cat-val="${escapeAttr(rule.id)}" value="${escapeAttr(v)}" ${selectedSet.has(v) ? "checked" : ""} /> ${escapeHtml(v)}</label>`
+              )
+              .join("")}</div>`
+          : `<input class="filter-values-input" data-filter-val="${escapeAttr(rule.id)}" value="${escapeHtml(rule.values.join(", "))}" placeholder="${categorical ? "Pick values above or type" : col?.numeric ? "e.g. 340" : "comma-separated"}" />`;
+      return `<div class="filter-rule" data-rule-id="${escapeAttr(rule.id)}">
+        <div class="filter-rule-head"><span>Rule ${idx + 1}</span>
+          <button type="button" class="btn-reset-norm" data-remove-filter="${escapeAttr(rule.id)}">Remove</button></div>
+        <div class="filter-rule-row">
+          <select data-filter-col="${escapeAttr(rule.id)}">${colOptions}</select>
+          <div class="filter-mode-row"><label><input type="checkbox" data-filter-cat-mode="${escapeAttr(rule.id)}" ${categorical ? "checked" : ""} /> Categorical (pick values)</label></div>
+          <select data-filter-op="${escapeAttr(rule.id)}" ${categorical ? "" : ""}>${ops}</select>
+          ${catPickers}
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  const n = dataFilteredRowIndices().length;
+  const total = dataset.rowCount;
+  filterStatusEl.textContent = state.dataFilters.length ? `${n} of ${total} rows pass filters.` : `${total} rows (no filters).`;
+
+  filterRulesListEl.querySelectorAll<HTMLSelectElement>("select[data-filter-col]").forEach((sel) => {
+    sel.onchange = () => {
+      const id = sel.dataset.filterCol;
+      const rule = state.dataFilters.find((r) => r.id === id);
+      if (!rule) return;
+      rule.column = sel.value;
+      const c = colById.get(rule.column);
+      rule.categorical = c ? suggestFilterMode(c) : false;
+      const ops = filterOperatorsForColumn(rule.categorical ? false : (c?.numeric ?? false));
+      if (!ops.some((o) => o.value === rule.operator)) rule.operator = ops[0]!.value;
+      syncFiltersUi();
+      render();
+    };
+  });
+  filterRulesListEl.querySelectorAll<HTMLInputElement>("input[data-filter-cat-mode]").forEach((cb) => {
+    cb.onchange = () => {
+      const id = cb.dataset.filterCatMode;
+      const rule = state.dataFilters.find((r) => r.id === id);
+      if (!rule) return;
+      rule.categorical = cb.checked;
+      if (rule.categorical) {
+        rule.operator = rule.operator === "notIn" ? "notIn" : "in";
+      }
+      syncFiltersUi();
+      render();
+    };
+  });
+  filterRulesListEl.querySelectorAll<HTMLInputElement>("input[data-filter-cat-val]").forEach((cb) => {
+    cb.onchange = () => {
+      const id = cb.dataset.filterCatVal;
+      const rule = state.dataFilters.find((r) => r.id === id);
+      if (!rule) return;
+      const checked = [...filterRulesListEl.querySelectorAll<HTMLInputElement>(`input[data-filter-cat-val="${id}"]:checked`)].map(
+        (el) => el.value
+      );
+      rule.values = checked;
+      render();
+    };
+  });
+  filterRulesListEl.querySelectorAll<HTMLSelectElement>("select[data-filter-op]").forEach((sel) => {
+    sel.onchange = () => {
+      const id = sel.dataset.filterOp;
+      const rule = state.dataFilters.find((r) => r.id === id);
+      if (!rule) return;
+      rule.operator = sel.value as FilterOperator;
+      render();
+    };
+  });
+  filterRulesListEl.querySelectorAll<HTMLInputElement>("input[data-filter-val]").forEach((inp) => {
+    inp.onchange = () => {
+      const id = inp.dataset.filterVal;
+      const rule = state.dataFilters.find((r) => r.id === id);
+      if (!rule) return;
+      rule.values = inp.value.split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+      render();
+    };
+  });
+  filterRulesListEl.querySelectorAll<HTMLButtonElement>("button[data-remove-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      const id = btn.dataset.removeFilter;
+      state.dataFilters = state.dataFilters.filter((r) => r.id !== id);
+      syncFiltersUi();
+      render();
+    };
+  });
+}
+
+function syncMetricEndpointControls(): void {
+  if (!dataset) return;
+  const ds = dataset;
+  const metrics = exposureOrder();
+  const endpoints = endpointOrder();
+  if (!state.exposureMetrics.size || ![...state.exposureMetrics].some((m) => metrics.includes(m))) {
+    state.exposureMetrics = new Set(metrics.slice(0, 1));
+  }
+  if (!state.endpoints.size || ![...state.endpoints].some((e) => endpoints.includes(e))) {
+    state.endpoints = new Set(endpoints.slice(0, 1));
+  }
+  exposureGroupEl.innerHTML = metrics
+    .map(
+      (m) =>
+        `<label><input type="checkbox" value="${escapeAttr(m)}" ${state.exposureMetrics.has(m) ? "checked" : ""} /> ${escapeHtml(ds.exposureLabel(m))}</label>`
+    )
+    .join("");
+  endpointGroupEl.innerHTML = endpoints
+    .map(
+      (e) =>
+        `<label><input type="checkbox" value="${escapeAttr(e)}" ${state.endpoints.has(e) ? "checked" : ""} /> ${escapeHtml(ds.endpointLabel(e))}</label>`
+    )
+    .join("");
+  installExposureEndpointListeners();
+  syncEndpointModelsUi();
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+}
+
+function installExposureEndpointListeners(): void {
+  exposureGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {
+    cb.onchange = () => {
+      const checked = new Set(
+        [...exposureGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked")].map((el) => el.value as ExposureMetric)
+      );
+      if (checked.size === 0) {
+        cb.checked = true;
+        return;
+      }
+      state.exposureMetrics = checked;
+      state.brushedIds = null;
+      render();
+    };
+  });
+  endpointGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {
+    cb.onchange = () => {
+      const checked = new Set(
+        [...endpointGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked")].map((el) => el.value as Endpoint)
+      );
+      if (checked.size === 0) {
+        cb.checked = true;
+        return;
+      }
+      state.endpoints = checked;
+      state.brushedIds = null;
+      render();
+    };
+  });
+}
+
+function activateDataset(next: DatasetContext, statusMessage?: string, options?: { focusPlot?: boolean }): void {
+  dataset = next;
+  state.brushedIds = null;
+  state.selectedDoses.clear();
+  ensureEndpointAnalysisDefaults();
+  syncMetricEndpointControls();
+  syncFiltersUi();
+  mappingPanelEl.style.display = "none";
+  pendingCsvRows = null;
+  dataStatusEl.textContent = statusMessage ?? `${dataset.datasetName} — ${dataset.rowCount} rows`;
+  saveSessionBtn.disabled = false;
+  setPlotWorkspaceVisible(true);
+  if (options?.focusPlot !== false) setShellRail("plot");
+  render();
+}
+
+function showMappingUi(rows: Array<Record<string, import("@er-explorer/data").RawCellValue>>, roles: Record<string, DemoColumnRole>): void {
+  pendingCsvRows = rows;
+  pendingColumnRoles = roles;
+  const { loaded, inferred } = buildPendingContext(rows, roles);
+  mappingTableBody.innerHTML = loaded.variableOrder
+    .map((colId: string) => {
+      const inf = inferred[colId];
+      const role = roles[colId] ?? "ignore";
+      const missingPct = inf ? `${Math.round(inf.missing.missingFraction * 100)}%` : "—";
+      const options = DEMO_COLUMN_ROLES.map(
+        (r) => `<option value="${r}" ${role === r ? "selected" : ""}>${r}</option>`
+      ).join("");
+      return `<tr>
+        <td>${escapeHtml(colId)}</td>
+        <td>${inf?.type ?? "—"}</td>
+        <td>${missingPct}</td>
+        <td><select data-col="${escapeAttr(colId)}">${options}</select></td>
+      </tr>`;
+    })
+    .join("");
+  mappingPanelEl.style.display = "block";
+  mappingErrorsEl.textContent = "";
+  mappingTableBody.querySelectorAll<HTMLSelectElement>("select[data-col]").forEach((sel) => {
+    sel.onchange = () => {
+      const col = sel.dataset.col;
+      if (col) pendingColumnRoles[col] = sel.value as DemoColumnRole;
+    };
+  });
+}
+
+function applyPendingMapping(): void {
+  if (!pendingCsvRows) return;
+  mappingErrorsEl.textContent = "";
+  try {
+    const next = DatasetContext.fromRows(pendingCsvRows, pendingColumnRoles, {
+      datasetId: `upload-${Date.now()}`,
+      datasetName: "Uploaded CSV"
+    });
+    activateDataset(next, `Loaded uploaded CSV — ${next.rowCount} rows`);
+  } catch (err) {
+    mappingErrorsEl.textContent = err instanceof Error ? err.message : "Could not apply mapping.";
+  }
+}
+
+function reloadBundledDataset(): void {
+  activateDataset(DatasetContext.fromRecords(RECORDS), "Bundled effICGI loaded");
+}
+
+/* ---------------------------------------------------------------------- *
  * Session save / load
  * ---------------------------------------------------------------------- */
 
 function buildSessionState(): SessionState {
+  const ds = requireDataset();
   const metrics = selectedExposureMetrics();
   const endpoints = selectedEndpoints();
   const primaryMetric = metrics[0] ?? "auc";
@@ -2032,14 +3316,15 @@ function buildSessionState(): SessionState {
   const { fit, xs, ys } = fitFor(primaryMetric, primaryEndpoint);
   const xMax = Math.max(...xs);
   const curve = curveFor(fit, xs, ys, xMax);
-  const visualization = createVisualizationSpec(`${DATASET_ID}-scatter`, model, curve, {
+  const visualization = createVisualizationSpec(`${ds.datasetId}-scatter`, model, curve, {
     title: "Exposure vs response",
     xAxisLabel: exposureLabel(primaryMetric),
     yAxisLabel: primaryEndpoint.toUpperCase(),
     renderTarget: "svg"
   });
+  const byod = buildByodPayload(ds.loaded, ds.columnRoles, ds.datasetName);
   return createSessionState(
-    DATASET_ID,
+    ds.datasetId,
     model,
     visualization,
     {
@@ -2060,12 +3345,25 @@ function buildSessionState(): SessionState {
       showSplitValue: state.showSplitValue,
       showDoseObserved: state.showDoseObserved,
       compareEndpoints: state.compareEndpoints,
-      showPoints: state.showPoints
+      showPoints: state.showPoints,
+      gridLayout: state.gridLayout,
+      doseColorScheme: state.doseColorScheme,
+      endpointColorScheme: state.endpointColorScheme,
+      endpointModels: { ...state.endpointModels },
+      endpointNormScales: { ...state.endpointNormScales },
+      dataFilters: state.dataFilters.map((r) => ({ ...r, values: [...r.values] })),
+      compareDistByEndpoint: state.compareDistByEndpoint,
+      scatterPaneRatio: state.scatterPaneRatio,
+      metricStackHeightPx: state.metricStackHeightPx,
+      showDistReadout: state.showDistReadout,
+      distReadoutExpanded: state.distReadoutExpanded,
+      byod
     }
   );
 }
 
 function saveSession(): void {
+  if (!dataset) return;
   const session = buildSessionState();
   const json = serializeSession(session);
   const blob = new Blob([json], { type: "application/json" });
@@ -2103,30 +3401,49 @@ function loadSessionFromFile(file: File): void {
   reader.onload = () => {
     try {
       const session = parseSession(String(reader.result));
+
+      const byodRaw = session.settings["byod"] as ByodSessionPayload | undefined;
+      if (byodRaw?.snapshot && byodRaw.columnRoles) {
+        const checksumOk = verifySnapshotChecksum(byodRaw.snapshot, byodRaw.snapshotChecksum);
+        dataset = DatasetContext.fromSnapshot(byodRaw.snapshot, byodRaw.columnRoles, {
+          datasetId: session.datasetId,
+          datasetName: byodRaw.datasetName ?? "Session dataset"
+        });
+        if (!checksumOk) {
+          sessionStatus.textContent = "Loaded session (dataset checksum mismatch — data may have been edited).";
+        }
+      } else if (session.datasetId === "effICGI-demo-v1" || session.datasetId.startsWith("effICGI")) {
+        dataset = DatasetContext.fromRecords(RECORDS);
+      } else {
+        throw new InvalidSessionFileError("Session has no embedded dataset; save a new session after loading CSV or example data.");
+      }
+
+      setPlotWorkspaceVisible(true);
+      saveSessionBtn.disabled = false;
+
       const ci = session.settings["ciMethod"];
       const metricsRaw = session.settings["exposureMetrics"];
-      // fall back to the older single-exposure session format for backward compatibility
       const legacyMetric = session.settings["exposureMetric"];
       let metrics: ExposureMetric[] = [];
+      const knownMetrics = new Set(exposureOrder());
       if (Array.isArray(metricsRaw)) {
-        metrics = metricsRaw.filter((m): m is ExposureMetric => m === "auc" || m === "cmax");
-      } else if (legacyMetric === "auc" || legacyMetric === "cmax") {
+        metrics = metricsRaw.filter((m): m is ExposureMetric => typeof m === "string" && knownMetrics.has(m));
+      } else if (typeof legacyMetric === "string" && knownMetrics.has(legacyMetric)) {
         metrics = [legacyMetric];
       }
-      if (!metrics.length) metrics = ["auc"];
+      if (!metrics.length) metrics = exposureOrder().slice(0, 1);
       state.exposureMetrics = new Set(metrics);
 
       const endpointsRaw = session.settings["endpoints"];
-      // fall back to the older single-endpoint session format for backward compatibility
       const legacyEndpoint = session.settings["endpoint"];
       let endpoints: Endpoint[] = [];
-      const isKnownEndpoint = (e: unknown): e is Endpoint => e === "icgi" || e === "icgi2" || e === "icgi3" || e === "brls" || e === "prls";
+      const knownEndpoints = new Set(endpointOrder());
       if (Array.isArray(endpointsRaw)) {
-        endpoints = endpointsRaw.filter(isKnownEndpoint);
-      } else if (isKnownEndpoint(legacyEndpoint)) {
+        endpoints = endpointsRaw.filter((e): e is Endpoint => typeof e === "string" && knownEndpoints.has(e));
+      } else if (typeof legacyEndpoint === "string" && knownEndpoints.has(legacyEndpoint)) {
         endpoints = [legacyEndpoint];
       }
-      if (!endpoints.length) endpoints = ["icgi"];
+      if (!endpoints.length) endpoints = endpointOrder().slice(0, 1);
       state.endpoints = new Set(endpoints);
 
       if (ci === "wald" || ci === "bootstrap" || ci === "none") state.ciMethod = ci;
@@ -2161,13 +3478,51 @@ function loadSessionFromFile(file: File): void {
       state.showDoseObserved = session.settings["showDoseObserved"] !== false;
       state.compareEndpoints = session.settings["compareEndpoints"] === true;
       state.showPoints = session.settings["showPoints"] !== false;
+      const gridRaw = session.settings["gridLayout"];
+      if (gridRaw === "endpoint-rows" || gridRaw === "exposure-rows") state.gridLayout = gridRaw;
+      const doseScheme = session.settings["doseColorScheme"];
+      if (doseScheme === "default" || doseScheme === "tableau" || doseScheme === "set2" || doseScheme === "dark") {
+        state.doseColorScheme = doseScheme;
+      }
+      const epScheme = session.settings["endpointColorScheme"];
+      if (epScheme === "default" || epScheme === "tableau" || epScheme === "set2" || epScheme === "dark") {
+        state.endpointColorScheme = epScheme;
+      }
+      const modelsRaw = session.settings["endpointModels"];
+      if (modelsRaw && typeof modelsRaw === "object" && !Array.isArray(modelsRaw)) {
+        state.endpointModels = { ...(modelsRaw as Record<string, EndpointAnalysisModel>) };
+      }
+      const normRaw = session.settings["endpointNormScales"];
+      if (normRaw && typeof normRaw === "object" && !Array.isArray(normRaw)) {
+        state.endpointNormScales = { ...(normRaw as Record<string, EndpointNormScale>) };
+      }
+      ensureEndpointAnalysisDefaults();
+      const filtersRaw = session.settings["dataFilters"];
+      if (Array.isArray(filtersRaw)) {
+        state.dataFilters = filtersRaw.filter(
+          (r): r is DataFilterRule =>
+            r &&
+            typeof r === "object" &&
+            typeof (r as DataFilterRule).id === "string" &&
+            typeof (r as DataFilterRule).column === "string"
+        );
+      }
+      if (typeof session.settings["compareDistByEndpoint"] === "boolean") {
+        state.compareDistByEndpoint = session.settings["compareDistByEndpoint"] as boolean;
+      }
+      if (typeof session.settings["scatterPaneRatio"] === "number") {
+        state.scatterPaneRatio = session.settings["scatterPaneRatio"] as number;
+      }
+      if (typeof session.settings["metricStackHeightPx"] === "number") {
+        state.metricStackHeightPx = session.settings["metricStackHeightPx"] as number;
+        saveMetricStackHeight(state.metricStackHeightPx);
+      }
       const brushed = session.filters["brushedIds"];
       state.brushedIds = Array.isArray(brushed) ? new Set(brushed as number[]) : null;
       const doses = session.filters["selectedDoses"];
       state.selectedDoses = new Set(Array.isArray(doses) ? (doses as string[]) : []);
 
-      setExposureCheckboxes(metrics);
-      setEndpointCheckboxes(endpoints);
+      syncMetricEndpointControls();
       ciSelect.value = state.ciMethod;
       setDistModeButtonsActive(state.distributionMode);
       setRefLineRadio(state.referenceLineKind);
@@ -2176,10 +3531,26 @@ function loadSessionFromFile(file: File): void {
       showReferenceFitEl.checked = state.showReferenceFit;
       showSplitValueEl.checked = state.showSplitValue;
       showDoseObservedEl.checked = state.showDoseObserved;
+      if (typeof session.settings["showDistReadout"] === "boolean") {
+        state.showDistReadout = session.settings["showDistReadout"] as boolean;
+      }
+      if (typeof session.settings["distReadoutExpanded"] === "boolean") {
+        state.distReadoutExpanded = session.settings["distReadoutExpanded"] as boolean;
+      }
+      showDistReadoutEl.checked = state.showDistReadout;
+      expandDistReadoutEl.checked = state.distReadoutExpanded;
       compareEndpointsEl.checked = state.compareEndpoints;
+      compareDistByEndpointEl.checked = state.compareDistByEndpoint;
+      syncFiltersUi();
       showPointsEl.checked = state.showPoints;
+      gridLayoutSelect.value = state.gridLayout;
+      doseColorSchemeSelect.value = state.doseColorScheme;
+      endpointColorSchemeSelect.value = state.endpointColorScheme;
+      setShellRail("plot");
       render();
-      sessionStatus.textContent = `Loaded session from ${session.metadata.createdAt}.`;
+      if (!sessionStatus.textContent?.includes("checksum mismatch")) {
+        sessionStatus.textContent = `Loaded session from ${session.metadata.createdAt}.`;
+      }
     } catch (err) {
       const message = err instanceof InvalidSessionFileError ? err.message : "Could not read this file as a session.";
       sessionStatus.textContent = `Load failed: ${message}`;
@@ -2192,21 +3563,53 @@ function loadSessionFromFile(file: File): void {
  * Wiring
  * ---------------------------------------------------------------------- */
 
-exposureGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {
-  cb.addEventListener("change", () => {
-    const checked = new Set(
-      [...exposureGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked")].map((el) => el.value as ExposureMetric)
-    );
-    if (checked.size === 0) {
-      // keep at least one exposure selected; revert this checkbox
-      cb.checked = true;
-      return;
-    }
-    state.exposureMetrics = checked;
-    state.brushedIds = null;
-    render();
-  });
+initAppShell((rail) => {
+  const titles: Record<string, string> = {
+    data: "Data",
+    filters: "Filters",
+    analysis: "Analysis",
+    overlays: "Overlays",
+    style: "Style",
+    plot: "Plot",
+    session: "Session"
+  };
+  const titleEl = document.getElementById("drawerTitle");
+  if (titleEl && titles[rail]) titleEl.textContent = titles[rail];
 });
+
+document.getElementById("openDataDrawerBtn")?.addEventListener("click", () => setShellRail("data"));
+
+setPlotWorkspaceVisible(false);
+saveSessionBtn.disabled = true;
+dataStatusEl.textContent = "No dataset loaded.";
+
+reloadBundledBtn.addEventListener("click", reloadBundledDataset);
+loadCsvBtn.addEventListener("click", () => csvFileInput.click());
+csvFileInput.addEventListener("change", () => {
+  const file = csvFileInput.files?.[0];
+  csvFileInput.value = "";
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const rows = parseCsv(String(reader.result));
+      if (!rows.length) {
+        dataStatusEl.textContent = "CSV contained no data rows.";
+        return;
+      }
+      const loaded = loadDataset(rows);
+      const roles = inferRolesForColumns(loaded, {});
+      showMappingUi(rows, roles);
+      setShellRail("data");
+      dataStatusEl.textContent = `Parsed ${rows.length} rows — map columns and apply.`;
+    } catch (err) {
+      dataStatusEl.textContent = err instanceof Error ? err.message : "Could not parse CSV.";
+    }
+  };
+  reader.readAsText(file);
+});
+applyMappingBtn.addEventListener("click", applyPendingMapping);
+
 refLineGroupEl.querySelectorAll<HTMLInputElement>("input[type=radio]").forEach((rb) => {
   rb.addEventListener("change", () => {
     state.referenceLineKind = rb.value === "none" ? null : (rb.value as ReferenceLineKind);
@@ -2234,8 +3637,39 @@ showDoseObservedEl.addEventListener("change", () => {
   state.showDoseObserved = showDoseObservedEl.checked;
   render();
 });
+showDistReadoutEl.addEventListener("change", () => {
+  state.showDistReadout = showDistReadoutEl.checked;
+  applyReadoutChrome();
+  schedulePaintSyncedMetricStacks(activeSet());
+});
+expandDistReadoutEl.addEventListener("change", () => {
+  state.distReadoutExpanded = expandDistReadoutEl.checked;
+  applyReadoutChrome();
+  schedulePaintSyncedMetricStacks(activeSet());
+});
 compareEndpointsEl.addEventListener("change", () => {
   state.compareEndpoints = compareEndpointsEl.checked;
+  syncCompareNormUi(selectedEndpoints(), state.compareEndpoints && selectedEndpoints().length > 1);
+  render();
+});
+compareDistByEndpointEl.addEventListener("change", () => {
+  state.compareDistByEndpoint = compareDistByEndpointEl.checked;
+  refreshSelectionVisuals();
+});
+
+addFilterRuleBtn.addEventListener("click", () => {
+  if (!dataset) return;
+  const cols = filterColumnOptions();
+  if (!cols.length) return;
+  const col = cols[0]!;
+  state.dataFilters.push({
+    id: `f-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    column: col.id,
+    operator: col.numeric && !suggestFilterMode(col) ? "lt" : "in",
+    values: [],
+    categorical: suggestFilterMode(col)
+  });
+  syncFiltersUi();
   render();
 });
 
@@ -2243,20 +3677,24 @@ showPointsEl.addEventListener("change", () => {
   state.showPoints = showPointsEl.checked;
   render();
 });
-endpointGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {
-  cb.addEventListener("change", () => {
-    const checked = new Set(
-      [...endpointGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked")].map((el) => el.value as Endpoint)
-    );
-    if (checked.size === 0) {
-      // keep at least one endpoint selected; revert this checkbox
-      cb.checked = true;
-      return;
-    }
-    state.endpoints = checked;
-    state.brushedIds = null;
+gridLayoutSelect.addEventListener("change", () => {
+  const val = gridLayoutSelect.value;
+  state.gridLayout = val === "exposure-rows" ? "exposure-rows" : "endpoint-rows";
+  render();
+});
+doseColorSchemeSelect.addEventListener("change", () => {
+  const val = doseColorSchemeSelect.value;
+  if (val === "default" || val === "tableau" || val === "set2" || val === "dark") {
+    state.doseColorScheme = val;
     render();
-  });
+  }
+});
+endpointColorSchemeSelect.addEventListener("change", () => {
+  const val = endpointColorSchemeSelect.value;
+  if (val === "default" || val === "tableau" || val === "set2" || val === "dark") {
+    state.endpointColorScheme = val;
+    render();
+  }
 });
 ciSelect.addEventListener("change", () => {
   state.ciMethod = ciSelect.value as CIMethod;
@@ -2277,10 +3715,7 @@ fileInput.addEventListener("change", () => {
   fileInput.value = "";
 });
 
-// panel descriptive text is collapsed by default (it's useful but takes real vertical space) -
-// each "Show details" button just toggles its own associated note element, independent of any
-// app state, so this wiring is a plain DOM behavior rather than something round-tripped through
-// render().
+// Chart help toggle (header)
 document.querySelectorAll<HTMLButtonElement>(".note-toggle").forEach((btn) => {
   const targetId = btn.dataset.target;
   const target = targetId ? document.getElementById(targetId) : null;
@@ -2288,9 +3723,47 @@ document.querySelectorAll<HTMLButtonElement>(".note-toggle").forEach((btn) => {
   btn.addEventListener("click", () => {
     const isHidden = target.style.display === "none";
     target.style.display = isHidden ? "block" : "none";
-    btn.textContent = isHidden ? "Hide details ▴" : "Show details ▾";
+    btn.textContent = isHidden ? "Hide help ▴" : "Chart help ▾";
     btn.setAttribute("aria-expanded", String(isHidden));
   });
 });
 
-render();
+plotStackHeightHandleEl.addEventListener("dblclick", () => {
+  setMetricStackHeight(0);
+  render();
+});
+
+attachPlotStackHeightResizer(
+  plotStackHeightHandleEl,
+  () => {
+    if (state.metricStackHeightPx > 0) return state.metricStackHeightPx;
+    const facet = document.querySelector(".facet-layout") ?? document.querySelector(".metric-stack");
+    return facet ? Math.round(facet.getBoundingClientRect().height) : 480;
+  },
+  (px) => setMetricStackHeight(px, false),
+  () => {
+    saveMetricStackHeight(state.metricStackHeightPx);
+    paintSyncedMetricStacks(activeSet());
+  }
+);
+
+metricStackHeightRangeEl.addEventListener("pointerdown", () => {
+  if (state.metricStackHeightPx <= 0) setMetricStackHeight(Number(metricStackHeightRangeEl.value) || 560, false);
+});
+metricStackHeightRangeEl.addEventListener("input", () => {
+  setMetricStackHeight(Number(metricStackHeightRangeEl.value));
+  paintSyncedMetricStacks(activeSet());
+});
+
+let windowResizePaintTimer: number | undefined;
+window.addEventListener("resize", () => {
+  if (!dataset) return;
+  window.clearTimeout(windowResizePaintTimer);
+  windowResizePaintTimer = window.setTimeout(() => schedulePaintSyncedMetricStacks(activeSet()), 120);
+});
+
+syncMetricStackHeightUi();
+showDistReadoutEl.checked = state.showDistReadout;
+expandDistReadoutEl.checked = state.distReadoutExpanded;
+
+// No chart until user loads example data or CSV (see welcome screen).

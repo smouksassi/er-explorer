@@ -4,14 +4,17 @@ const LABEL_HEIGHT = 30;
 const LABEL_GAP = 5;
 const CLUSTER_GAP_PX = 80;
 
+/** Preferred label top (px): just above the marker's center point on the curve. */
+function labelNaturalTop(m: MarkerCandidate): number {
+  return m.y - LABEL_HEIGHT - LABEL_GAP;
+}
+
 /**
  * Lays out curve-adjacent marker labels (an observed-rate readout, a reference-line fit value,
  * a censoring tick, ...) so nearby ones never overlap - ported from the current renderer's
  * `layoutMarkers`. Markers whose pixel-x positions are close together are grouped into a
- * cluster and stacked into a vertical column - the one with the highest natural position
- * anchors the stack, and the rest are placed directly above it. A dependency-free stand-in for
- * a proper force/repel layout, dispatched purely on geometry (x-proximity, natural position from
- * `yHigh`), never on `kind` - the algorithm doesn't need to know what a marker represents.
+ * cluster and de-collided vertically while staying anchored near each marker's `y` (curve
+ * height), not the top of the plot.
  *
  * Called exactly once by the Renderer, across every marker every Layer pushed, after every
  * Layer has rendered - not per-Layer, which is what preserves whole-chart collision avoidance
@@ -30,38 +33,44 @@ export function resolveMarkers(candidates: MarkerCandidate[], plotTop: number, p
 
   const minTop = plotTop + 2;
   const maxBottom = plotBottom - 2;
-  const available = maxBottom - minTop;
   const placed: LaidOutMarker[] = [];
 
-  for (const cluster of clusters) {
-    const withNatural = cluster
-      .map((m) => ({ m, natural: (m.yHigh ?? m.y) - 34 }))
-      .sort((a, b) => a.natural - b.natural);
-    const n = withNatural.length;
-    const requiredSpan = n * LABEL_HEIGHT + (n - 1) * LABEL_GAP;
+  const rangesOverlap = (topA: number, topB: number): boolean =>
+    topA < topB + LABEL_HEIGHT + LABEL_GAP && topB < topA + LABEL_HEIGHT + LABEL_GAP;
 
-    if (requiredSpan > available) {
-      // More markers are crowded into this x-region than can fit at full size while both
-      // staying on-canvas and keeping their natural stacking order - spread them evenly across
-      // the whole available vertical range instead of letting some run off an edge.
-      const step = n > 1 ? (available - LABEL_HEIGHT) / (n - 1) : 0;
-      withNatural.forEach(({ m }, i) => placed.push({ ...m, labelTop: minTop + i * step }));
-      continue;
+  for (const cluster of clusters) {
+    const byY = [...cluster].sort((a, b) => a.y - b.y);
+    const tops: number[] = [];
+
+    for (const m of byY) {
+      let top = labelNaturalTop(m);
+      for (const existing of tops) {
+        if (rangesOverlap(top, existing)) top = existing - LABEL_HEIGHT - LABEL_GAP;
+      }
+      tops.push(top);
+      placed.push({ ...m, labelTop: top });
     }
 
-    const tops: number[] = [];
-    let nextTop = Infinity;
-    withNatural.forEach(({ natural }, i) => {
-      const top = i === 0 ? natural : Math.min(natural, nextTop - LABEL_HEIGHT - LABEL_GAP);
-      nextTop = top;
-      tops.push(top);
-    });
-    // A tall stack can run out of room above or below the plot - shift the whole stack just
-    // enough to clear whichever edge it overflows, keeping every label's relative spacing intact.
-    const topOverflow = minTop - Math.min(...tops);
-    const bottomOverflow = Math.max(...tops) + LABEL_HEIGHT - maxBottom;
-    const shift = topOverflow > 0 ? topOverflow : bottomOverflow > 0 ? -bottomOverflow : 0;
-    withNatural.forEach(({ m }, i) => placed.push({ ...m, labelTop: tops[i] + shift }));
+    const minLabel = Math.min(...tops);
+    const maxLabel = Math.max(...tops) + LABEL_HEIGHT;
+    const topOverflow = minTop - minLabel;
+    const bottomOverflow = maxLabel - maxBottom;
+    let shift = topOverflow > 0 ? topOverflow : bottomOverflow > 0 ? -bottomOverflow : 0;
+    if (shift !== 0) {
+      for (let i = placed.length - byY.length; i < placed.length; i++) {
+        placed[i]!.labelTop += shift;
+      }
+    }
+
+    const clusterStart = placed.length - byY.length;
+    const clusterTops = placed.slice(clusterStart).map((m) => m.labelTop);
+    const span = Math.max(...clusterTops) + LABEL_HEIGHT - Math.min(...clusterTops);
+    if (span > maxBottom - minTop && byY.length > 1) {
+      const gap = Math.max(2, (maxBottom - minTop - byY.length * LABEL_HEIGHT) / (byY.length - 1));
+      byY.forEach((m, i) => {
+        placed[clusterStart + i] = { ...m, labelTop: minTop + i * (LABEL_HEIGHT + gap) };
+      });
+    }
   }
 
   return placed;
@@ -82,7 +91,15 @@ export function renderLaidOutMarker(target: DrawTarget, marker: LaidOutMarker): 
   const labelBoxWidth = Math.max(line1.length, line2.length) * 7 + 10;
   const labelBottom = labelTop + LABEL_HEIGHT;
 
-  if (labelBottom < yHi - 2) {
+  if (labelBottom < y - 2) {
+    target.drawLine(
+      [
+        { x, y },
+        { x, y: labelBottom }
+      ],
+      { stroke: color, strokeWidth: 1, dash: "2 2", opacity: 0.6 }
+    );
+  } else if (labelBottom < yHi - 2) {
     target.drawLine(
       [
         { x, y: yHi },
@@ -101,7 +118,7 @@ export function renderLaidOutMarker(target: DrawTarget, marker: LaidOutMarker): 
   target.drawCircle(x, y, 8, { fill: "#ffffff", opacity: 0.92 });
   target.drawRect(
     { x: x - labelBoxWidth / 2, y: labelTop, width: labelBoxWidth, height: LABEL_HEIGHT },
-    { fill: "#ffffff", opacity: 0.94, stroke: color, strokeWidth: 1.2, rx: 5 }
+    { fill: "#ffffff", opacity: 0.94, stroke: color, strokeWidth: marker.strokeDash ? 1.6 : 1.2, dash: marker.strokeDash, rx: 5 }
   );
 
   target.drawLine(

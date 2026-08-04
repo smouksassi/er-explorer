@@ -1,120 +1,130 @@
 # Session handoff (for a fresh Claude session on a new machine)
 
 Purpose: this project has been built almost entirely through Claude Cowork
-local sessions, which are tied to the device they run on (per Anthropic's own
-Cowork architecture docs, only *remote* sessions follow your account across
-machines - local sessions don't). This file exists so a brand-new Claude
-session, on any machine, can pick up the full context in one read instead of
-re-deriving it. If you're a person reading this: point a new Claude session at
-this repo and ask it to read this file plus `docs/DECISIONS.md` and
+local sessions, which are tied to the device they run on. This file exists so
+a brand-new session can pick up context in one read. Point Cursor or Claude at
+this repo and read this file plus `docs/DECISIONS.md` and
 `docs/RENDERER_ARCHITECTURE.md`.
 
-Last updated: 2026-07-30, after commit `8846301`.
+Last updated: **2026-08-04** (demo BYOD, compare-endpoints UX, marker layout).
 
 ## What this project is
 
 ER Explorer: a pnpm/turborepo monorepo for exploring exposure-response
-relationships (dose vs. exposure metrics vs. endpoints like BRLS/PRLS/ICGI2/
-ICGI3), with an interactive demo app (`apps/demo`) built on a small
-from-scratch charting stack (`packages/renderer`).
+relationships (dose vs. exposure metrics vs. endpoints), with an interactive
+demo app (`apps/demo`) on `@er-explorer/renderer` (Layer/SVG composition).
 
-Workspace packages: `domain` (shared types), `analysis` (statistical model
-plugin architecture + legacy logistic fitter), `model-linear` (linear model
-plugin), `data` (dataset loading/query), `renderer` (Renderer/Layer SVG
-composition), `session-engine` (`.erx` session file format + legacy
-visualization-spec adapter). `packages/visualization-engine` (the old
-monolithic renderer) has been fully deleted - do not try to resurrect it.
+Workspace packages: `domain`, `analysis`, `model-linear`, `data`, `renderer`,
+`session-engine`. **`packages/visualization-engine` is deleted** — do not
+resurrect it.
 
-## Current state
+## Current state (2026-08-04)
 
-The 7-phase renderer migration (visualization-engine -> renderer) is complete
-and committed/pushed. See ADR-0009 in `docs/DECISIONS.md` for the design
-summary and `docs/RENDERER_ARCHITECTURE.md` §8 for the phase-by-phase log.
+The renderer migration (Phases 1–7) is complete. On top of that, the demo has
+been extended into a **PK-Explorer-style workbench** with BYOD CSV, filters,
+facet grids, compare-endpoints overlay, synced axes, and session persistence.
 
-Most recent work on top of that migration (commit `8846301`, "Add None CI
-option, fix N/n labeling, surface missing endpoint values"):
+### Bring your own data (BYOD)
 
-- **CI method "None"**: `apps/demo`'s CI dropdown has a `none` option
-  alongside `wald`/`bootstrap`. When selected, `curveFor()` in
-  `apps/demo/src/main.ts` skips CI computation and returns `NaN` for
-  `lower`/`upper`. `packages/renderer/src/layers/annotation.ts`'s marker-push
-  code now checks `Number.isFinite(mv.lower) && Number.isFinite(mv.upper)`
-  and *omits* `yLow`/`yHigh` entirely (rather than passing computed `NaN`
-  values through `yScale`) when there's no CI to show -
-  `MarkerCandidate.yLow`/`yHigh` are optional exactly for this case, and
-  `resolveMarkers`/`renderLaidOutMarker` in `packages/renderer/src/markers.ts`
-  already fall back to `y` gracefully. Covered by a regression test in
-  `annotation.test.ts` ("omits yLow/yHigh ... for a markerValue with
-  non-finite lower/upper").
-- **N/n labeling convention**: capital `N=` means a group's total sample
-  size; lowercase `n=` means a sub-group/bin count. Applied to:
-  `DistributionLayer`'s row-total label (`distribution.ts`, `N=40 (12
-  resp.)`), `computeSplitAnnotations()`'s per-quartile/tertile split counts
-  in `main.ts` (`n=83 (35%)`), and the dose-click projection's observed-mean
-  marker secondary label (`N=...`).
-- **"Observed % responders" checkbox** renamed to **"Observed (%/N)"** in
-  `apps/demo/index.html`, since continuous endpoints (BRLS/PRLS) have no
-  "responders" concept - the toggle shows an observed mean + N there.
-- **Missing-value readout**: `updateReadout()` in `main.ts` compares a dose's
-  total N against the count of patients with a *finite* value for the
-  currently-selected endpoint, and - when they differ - prints `"k missing
-  value(s) removed from N=<total>"` in bold (e.g. `1200 mg`'s BRLS endpoint
-  is missing one patient's value: `1 missing value removed from N=238`).
-  This replaced an earlier, less readable `n=237 of N=238` phrasing per user
-  feedback.
+- **Load CSV…** → wide table parsed via `apps/demo/src/csvParse.ts`
+- **Column mapping** UI (`columnMapping.ts`) with role hints; **Apply mapping**
+  builds a `DatasetContext` (`datasetContext.ts`) from `@er-explorer/data`
+- Bundled **effICGI** remains via **Reload bundled effICGI**
+- **`verify-build.mjs`**: CI-parity `tsc` chain + demo bundle — see `docs/BUILD.md`
 
-## Deferred work (do not start unless asked)
+### Session / reproducibility
 
-The user explicitly said they'll handle this themselves later: allowing
-"Compare Endpoints" for continuous + mixed endpoint types (currently Compare
-Endpoints assumes binary/logistic endpoints). Don't pick this up proactively.
+- Save/load JSON session embeds dataset snapshot + mappings + view state
+  (`session-engine`); checksum warning if embedded CSV was edited after save
+- Persists filters, compare flags, pane heights, readout toggles, selection, etc.
 
-## Practical gotchas for whoever continues this
+### Data filters
 
-- **OneDrive git lock files.** The repo folder lives under OneDrive, which
-  intermittently locks `.git/index.lock`, `.git/HEAD.lock`, or stray
-  `.git/objects/*/tmp_obj_*` files. Git often prints `unable to unlink ...:
-  Operation not permitted` warnings during `add`/`commit` but the operation
-  usually still succeeds underneath - verify with `git log --oneline` /
-  `git status --short`, not the exit code. If a whole directory is
-  undeletable from a sandboxed shell (`rm -rf` fails on every file inside
-  with the same "Operation not permitted"), ask the user to delete it via
-  Windows Explorer instead.
-- **No git push credentials in the Cowork sandbox.** Commits can be made
-  locally, but `git push` fails with "could not read Username for
-  'https://github.com'" - the user has pushed every commit themselves
-  throughout this project. Don't assume push access; tell them what's
-  committed and ask them to push.
-- **Verification workflow** (used for every phase/fix in this project,
-  because building directly in the OneDrive-synced working tree is slow and
-  lock-prone): rsync the repo into a scratch copy under `/tmp` (excluding
-  `node_modules`, `dist`, `.git`, `*.tsbuildinfo`, `.turbo`), run
-  `pnpm install --frozen-lockfile`, then `tsc -p packages/<pkg>/tsconfig.build.json`
-  per package in dependency order (`domain` -> `analysis` -> `model-linear`
-  -> `data` -> `renderer` -> `session-engine`), then
-  `node apps/demo/scripts/build-data.mjs`, `tsc -p apps/demo/tsconfig.json --noEmit`,
-  and `node apps/demo/scripts/build.mjs`. Run `npx vitest run` inside
-  `packages/renderer` for the layer test suite. For end-to-end UI
-  verification, load the built `apps/demo/dist/index.html` into `jsdom`
-  (`runScripts: "dangerously", resources: "usable", pretendToBeVisual: true`)
-  and drive the actual DOM controls (selects, checkboxes, clicking
-  `g.er-ridge` elements to select a dose) rather than guessing at behavior.
-  Once verified, copy the rebuilt `apps/demo/dist/index.html` and `bundle.js`
-  back into the real working tree so the user can preview them before
-  committing.
-- **The demo's dose-selection interaction** happens by clicking a
-  `g.er-ridge` element (with a `data-group` attribute) in the distribution
-  strip, not by clicking legend items - a smoke test that clicks the wrong
-  element will silently find no effect.
+- **`apps/demo/src/dataFilters.ts`**: rule list (numeric ops, categorical in-list)
+- Status bar summarizes active filters (e.g. `CMAX ≤ 228; study = S3`) together
+  with dose selection and row counts (`describeActiveFilters` in `updateStatus`)
+
+### Layout: facet grid + stacked scatter / distribution
+
+- **Regular grid**: endpoints × exposure metrics; one shared distribution row per
+  exposure column when endpoints are rows (`paneSplit.ts`, facet shell in `main.ts`)
+- **Compare endpoints** (2+ endpoints): one overlaid scatter row per exposure metric;
+  endpoint-colored curves (solid/dash); optional **split distribution by endpoint**
+- **Metric stack height**: auto-fill + draggable splitter; scatter/distribution ratio
+- **Axis sync**: measure `.metric-stack` width/height, repaint SVGs, `ResizeObserver`
+  on facet layout; `schedulePaintSyncedMetricStacks` after readout toggles and dose
+  clicks (second frame repaint when readout height changes)
+
+### Compare endpoints — behavior summary
+
+| Element | Regular grid | Compare endpoints |
+|--------|--------------|-------------------|
+| Scatter points | Dose colors | **Endpoint colors** |
+| Curves / CI | Per panel | Overlaid; endpoint color/dash (or neutral gray when split dist off) |
+| Dose legend (top) | Shown | **Hidden** |
+| Endpoint legend | Hidden | Shown |
+| Dose click highlight (dist row) | Dose color | **Neutral slate** (`selectionColor`) |
+| Status / readout dose name | Dose-colored | **Plain / neutral gray** |
+| Dose projection on scatter | Dose-colored bands | **Neutral** bands; binary **%/N** and linear **mean+CI** callouts |
+| Split dist by endpoint off | N/A | Dist shapes neutral; observed annotation boxes use **endpoint dash** on border |
+
+- **Linear endpoints in compare**: dose-click **observed mean + CI** on compare scale
+  (`computeContinuousDoseGroupStats`, `projectedLinearGroupsFor`, `observedMean` on
+  `ProjectedGroup` in `renderBinaryScatterOverlay`)
+- **Dose click** uses `refreshSelectionVisuals()` → repaint stacks (not full `render()`)
+
+### Overlays drawer
+
+- Group exposures by median/tertiles/quartiles; observed %/N; split value; fitted+CI
+- **On dose click**: observed rate/mean
+- Distribution mode: boxplot / distribution / lineranges; group N
+- **Show readout** / **Expand readout** under distribution (collapsible); toggling
+  triggers stack repaint for x-axis alignment
+
+### Renderer changes (this sprint)
+
+- **`ObservedStatBin.strokeDash`**: dashed label box borders (compare neutral mode)
+- **`DistributionGroupDatum.selectionColor`**: row highlight independent of shape color
+- **`svgDrawTarget.drawRect`**: honors `stroke-dasharray` for dashed box borders
+- **`markers.ts`**: label layout anchors each callout **just above the marker center `y`**
+  (curve height), not at `yHigh` / top of plot; clustered markers at different y stay
+  near their curves; leader line from center dot when label is offset
+
+### CI / labeling (prior commit `8846301`, still true)
+
+- CI method **None** omits finite CI on reference markers
+- **N=** vs **n=** conventions; **Observed (%/N)** toggle name
+- Missing endpoint values in readout: `k missing from N=…`
+
+## Deferred / not in repo
+
+- **`ER_Explorer_Portable_Handoff.zip`**: stale; use this repo + `docs/CURSOR_START_HERE.md`
+- R scratch edits in `claudetwoexposureoneendpoint.R` and local PDFs — not part of demo ship
+
+## Practical gotchas
+
+- **OneDrive** can lock `.git/index.lock`; verify with `git status` after commit
+- **`dist/`** and `apps/demo/src/data.generated.ts` are gitignored — run
+  `node apps/demo/scripts/verify-build.mjs` before manual smoke on `dist/index.html`
+- **Dose selection**: click `g.er-ridge` in the distribution strip (`data-group` = dose)
+- **`pnpm run clean`**: also removes `*.tsbuildinfo`; see `docs/BUILD.md`
+
+## Verification checklist (manual smoke)
+
+1. `node apps/demo/scripts/verify-build.mjs`
+2. Open `apps/demo/dist/index.html`
+3. Bundled effICGI: multi-endpoint grid, brush, dose click, overlays
+4. **Compare endpoints**: endpoint legend only; points by endpoint; dose click neutral;
+   linear mean callout near curve; filters in status bar
+5. BYOD: CSV → map → apply → save session → reload
+6. Toggle **Show readout** — scatter and distribution x-axes stay aligned
+7. `pnpm --filter @er-explorer/renderer test` (marker layout tests)
 
 ## Where to look for more
 
-- `docs/DECISIONS.md` - ADR log, including ADR-0009 (Renderer/Layer
-  architecture).
-- `docs/RENDERER_ARCHITECTURE.md` - the full design rationale and an 8-phase
-  migration log with what each phase delivered.
-- `packages/renderer/src/types.ts` - the `Layer`/`DrawContext`/
-  `MarkerCandidate`/`RenderResult` contracts every Layer implements against.
-- `apps/demo/src/main.ts` - the demo's own state machine, curve-fitting glue,
-  and readout logic; large (2000+ lines) but the only place that bridges
-  `packages/analysis`/`packages/model-linear` output into renderer input.
+- `docs/BUILD.md` — Windows/CI build commands
+- `docs/CURSOR_START_HERE.md` — entry point for Cursor
+- `docs/DECISIONS.md` — ADR log (ADR-0009 renderer)
+- `docs/RENDERER_ARCHITECTURE.md` — Layer design + migration log
+- `apps/demo/src/main.ts` — demo state, render/paint, compare mode, readouts
+- `apps/demo/src/dataFilters.ts`, `datasetContext.ts`, `paneSplit.ts`

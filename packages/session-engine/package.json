@@ -14,7 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm typecheck && vitest run",
     "lint": "eslint . --ext .ts",
-    "clean": "rimraf dist"
+    "clean": "rimraf dist tsconfig.build.tsbuildinfo tsconfig.tsbuildinfo"
   },
   "dependencies": {
     "@er-explorer/domain": "workspace:*",

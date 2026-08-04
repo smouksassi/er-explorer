@@ -8,6 +8,8 @@
     "clean": "rimraf dist src/data.generated.ts"
   },
   "dependencies": {
+    "@er-explorer/data": "workspace:*",
+    "@er-explorer/domain": "workspace:*",
     "@er-explorer/session-engine": "workspace:*",
     "@er-explorer/analysis": "workspace:*",
     "@er-explorer/model-linear": "workspace:*",

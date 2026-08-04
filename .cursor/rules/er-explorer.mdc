@@ -1,0 +1,22 @@
+---
+description: ER Explorer monorepo conventions for agents and contributors
+alwaysApply: true
+---
+
+You are working on ER Explorer.
+
+Always:
+- read the docs before editing code (`docs/SESSION_HANDOFF.md`, `docs/ARCHITECTURE.md`, `docs/REPRODUCIBILITY.md`)
+- keep wide datasets canonical
+- derive long analysis views lazily (`@er-explorer/data`)
+- keep analysis separate from rendering (`@er-explorer/analysis` / plugins vs `@er-explorer/renderer`)
+- preserve reproducibility (session files, checksums, bootstrap seeds)
+- prefer small, mergeable changes
+- add tests and docs with meaningful changes
+
+Never:
+- collapse everything into a single React file
+- mix rendering and statistical logic inside renderer layers
+- force the user to manage wide/long conversions manually
+- break session reproducibility
+- resurrect deleted `packages/visualization-engine`

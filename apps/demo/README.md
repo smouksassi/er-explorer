@@ -4,6 +4,23 @@ A first working, interactive exposure-response demo built directly on the
 three ER Explorer engine packages, to show potential users the shape of the
 product.
 
+## Build
+
+```bash
+node apps/demo/scripts/build-data.mjs && node apps/demo/scripts/build.mjs
+```
+
+Full CI-parity verification: `node apps/demo/scripts/verify-build.mjs` (see [`docs/BUILD.md`](../../docs/BUILD.md)).
+
+## Bring your own data (wide CSV)
+
+1. Open the built demo (`dist/index.html`) or run the build above.
+2. Use **Load CSV…**, map columns (identifier, dose, exposure, endpoint, …), then **Apply mapping & load dataset**.
+3. Exposure and endpoint checkboxes update from your mapped columns.
+4. **Save session** embeds the dataset snapshot + mapping (checksum on reload); edit the JSON and reload to see a checksum warning.
+
+Bundled effICGI remains available via **Reload bundled effICGI**.
+
 ## What it shows
 
 - A real logistic exposure-response fit (Newton-Raphson IRLS, ridge-stabilized)

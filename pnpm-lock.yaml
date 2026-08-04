@@ -38,6 +38,12 @@ importers:
       '@er-explorer/analysis':
         specifier: workspace:*
         version: link:../../packages/analysis
+      '@er-explorer/data':
+        specifier: workspace:*
+        version: link:../../packages/data
+      '@er-explorer/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@er-explorer/model-linear':
         specifier: workspace:*
         version: link:../../packages/model-linear

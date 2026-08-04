@@ -8,6 +8,8 @@ ER Explorer is an open-source scientific workbench for exposure–response analy
 
 See the documentation in `docs/` for the project vision and roadmap.
 
+**Continuing in Cursor:** start with [`docs/CURSOR_START_HERE.md`](docs/CURSOR_START_HERE.md) and [`docs/BUILD.md`](docs/BUILD.md).
+
 ## Packages
 
 - `packages/domain` — the scientific domain model (`@er-explorer/domain`): pure TypeScript interfaces and types only. The root dependency of the project; every other package may depend on it, it depends on nothing else in this repo.

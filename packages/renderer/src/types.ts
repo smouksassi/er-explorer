@@ -79,6 +79,8 @@ export interface MarkerCandidate {
   color: string;
   lines: string[];
   kind: string;
+  /** Optional dash for label box border (e.g. endpoint line style in compare overlay). */
+  strokeDash?: string;
 }
 
 /** A `MarkerCandidate` after collision-avoidant layout - `labelTop` is the resolved pixel y for

@@ -18,6 +18,8 @@ export interface ObservedStatBin {
   secondaryLabel?: string;
   /** Overrides the marker's default color - used to match a dose/endpoint/group. */
   color?: string;
+  /** Dashed border on the label box (matches endpoint curve dash in compare mode). */
+  strokeDash?: string;
 }
 
 export interface ObservedStatLayerOptions {
@@ -57,7 +59,8 @@ export class ObservedStatLayer implements Layer {
         yHigh: ctx.yScale(bin.upper),
         color: bin.color ?? defaultColor,
         lines: [primary, secondary],
-        kind: "observed-stat"
+        kind: "observed-stat",
+        strokeDash: bin.strokeDash
       });
     });
   }
