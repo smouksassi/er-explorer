@@ -50,14 +50,16 @@ import { parseCsv } from "./csvParse";
 import {
   type DemoColumnRole,
   DEMO_COLUMN_ROLES,
-  EFFICGI_DEFAULT_ROLES
+  EFFICGI_DEFAULT_ROLES,
+  looksLikePkExposureColumn
 } from "./columnMapping";
 import {
   DatasetContext,
   type EndpointId,
   type MetricId,
   inferRolesForColumns,
-  buildPendingContext
+  buildPendingContext,
+  rowsFromLoaded
 } from "./datasetContext";
 import { loadDataset } from "@er-explorer/data";
 import {
@@ -66,6 +68,7 @@ import {
   verifySnapshotChecksum
 } from "./datasetSnapshot";
 import { initAppShell, setPlotWorkspaceVisible, setShellRail } from "./appShell";
+import { mountSortableFieldList } from "./sortableFieldList";
 import {
   type EndpointAnalysisModel,
   type EndpointNormScale,
@@ -242,12 +245,22 @@ function endpointDash(endpoint: EndpointId): string {
   return ENDPOINT_DASH_PATTERNS[(idx >= 0 ? idx : 0) % ENDPOINT_DASH_PATTERNS.length];
 }
 
+function mergeColumnOrder(preferred: string[], fromDataset: string[]): string[] {
+  const kept = preferred.filter((id) => fromDataset.includes(id));
+  const added = fromDataset.filter((id) => !kept.includes(id));
+  return [...kept, ...added];
+}
+
 function exposureOrder(): MetricId[] {
-  return requireDataset().exposureOrder();
+  const fromDs = dataset?.exposureOrder() ?? [];
+  if (!fromDs.length) return [];
+  return mergeColumnOrder(state.exposureColumnOrder, fromDs);
 }
 
 function endpointOrder(): EndpointId[] {
-  return requireDataset().endpointOrder();
+  const fromDs = dataset?.endpointOrder() ?? [];
+  if (!fromDs.length) return [];
+  return mergeColumnOrder(state.endpointColumnOrder, fromDs);
 }
 
 function DOSE_ORDER(): string[] {
@@ -311,7 +324,40 @@ function normCompareValue(y: number, endpoint: Endpoint): number {
 }
 
 function isPlaceboDose(dose: string): boolean {
+  if (state.referenceArmDoses.length) {
+    return state.referenceArmDoses.some((a) => a.toLowerCase() === dose.toLowerCase());
+  }
   return requireDataset().isPlaceboDose(dose);
+}
+
+/** PK-like exposures: reference arm ~0 on x; non-PK (wt, age): all dose groups on x. */
+function exposureIsPkMetric(metric: ExposureMetric): boolean {
+  if (looksLikePkExposureColumn(metric)) return true;
+  const placeboRows = rowIndicesPlacebo();
+  if (!placeboRows.length) return false;
+  const vals = placeboRows.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
+  if (!vals.length) return true;
+  return Math.max(...vals) <= 1e-6;
+}
+
+function exposureXDomain(metric: ExposureMetric): [number, number] {
+  const xs = dataFilteredRowIndices().map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
+  if (!xs.length) return [0, 1];
+  const hi = Math.max(...xs);
+  if (exposureIsPkMetric(metric)) return [0, hi];
+  const lo = Math.min(...xs);
+  const pad = Math.max((hi - lo) * 0.04, 0.5);
+  return [lo - pad, hi + pad];
+}
+
+function inferDefaultReferenceArmDoses(): string[] {
+  const ds = requireDataset();
+  return ds.doseOrder().filter((d) => ds.isPlaceboDose(d));
+}
+
+function syncReferenceArmUi(): void {
+  const labels = state.referenceArmDoses.length ? state.referenceArmDoses : inferDefaultReferenceArmDoses();
+  referenceArmDosesEl.value = labels.join(", ");
 }
 
 function rowIndicesForDose(dose: string): number[] {
@@ -374,6 +420,10 @@ interface DemoState {
    * space as showObservedResponders, and because its grey styling is easy to mix up with the
    * (near-black) observed markers if always on. */
   showReferenceFit: boolean;
+  /** Show fitted value + CI at each observed split bin's center exposure (mean exposure in
+   * bin among dosed patients; placebo bin stays at 0). Independent of showReferenceFit
+   * (split-line fits). */
+  showFittedAtObservedBin: boolean;
   /** Show each active reference-line split's own exposure value (e.g. "83.8") printed beneath the
    * line on the scatter panel - the same value the distribution panel below it always shows.
    * Independent of showReferenceFit. Off by default. */
@@ -406,6 +456,12 @@ interface DemoState {
   metricStackHeightPx: number;
   showDistReadout: boolean;
   distReadoutExpanded: boolean;
+  /** Display order for exposure columns in the plot grid (subset of dataset exposures). */
+  exposureColumnOrder: MetricId[];
+  /** Display order for endpoint rows/columns in the plot grid. */
+  endpointColumnOrder: EndpointId[];
+  /** Dose labels treated as reference arm (placebo/SOC). Empty = auto-detect from dataset. */
+  referenceArmDoses: string[];
 }
 
 const state: DemoState = {
@@ -421,6 +477,7 @@ const state: DemoState = {
   splitAnnotationMode: "off",
   showObservedResponders: false,
   showReferenceFit: false,
+  showFittedAtObservedBin: false,
   showSplitValue: false,
   showDoseObserved: true,
   compareEndpoints: false,
@@ -435,7 +492,10 @@ const state: DemoState = {
   scatterPaneRatio: loadScatterPaneRatio(),
   metricStackHeightPx: loadMetricStackHeight(),
   showDistReadout: true,
-  distReadoutExpanded: false
+  distReadoutExpanded: false,
+  exposureColumnOrder: [],
+  endpointColumnOrder: [],
+  referenceArmDoses: []
 };
 
 function resolveDoseColor(dose: string): string {
@@ -468,6 +528,7 @@ const refLineNoteEl = $<HTMLDivElement>("refLineNote");
 const splitAnnotationModeEl = $<HTMLSelectElement>("splitAnnotationMode");
 const showObservedRespEl = $<HTMLInputElement>("showObservedResp");
 const showReferenceFitEl = $<HTMLInputElement>("showReferenceFit");
+const showFittedAtObservedBinEl = $<HTMLInputElement>("showFittedAtObservedBin");
 const showSplitValueEl = $<HTMLInputElement>("showSplitValue");
 const showDoseObservedEl = $<HTMLInputElement>("showDoseObserved");
 const showDistReadoutEl = $<HTMLInputElement>("showDistReadout");
@@ -499,8 +560,13 @@ const mappingTableBody = $<HTMLTableSectionElement>("mappingTableBody");
 const mappingErrorsEl = $<HTMLDivElement>("mappingErrors");
 const applyMappingBtn = $<HTMLButtonElement>("applyMappingBtn");
 const reloadBundledBtn = $<HTMLButtonElement>("reloadBundledBtn");
+const editMappingBtn = $<HTMLButtonElement>("editMappingBtn");
 const loadCsvBtn = $<HTMLButtonElement>("loadCsvBtn");
 const dataStatusEl = $<HTMLSpanElement>("dataStatus");
+const columnRolesSummaryEl = $<HTMLDivElement>("columnRolesSummary");
+const columnRolesListEl = $<HTMLUListElement>("columnRolesList");
+const referenceArmDosesEl = $<HTMLInputElement>("referenceArmDoses");
+const referenceArmFieldEl = $<HTMLDivElement>("referenceArmField");
 const gridLayoutSelect = $<HTMLSelectElement>("gridLayoutSelect");
 const doseColorSchemeSelect = $<HTMLSelectElement>("doseColorScheme");
 const endpointColorSchemeSelect = $<HTMLSelectElement>("endpointColorScheme");
@@ -510,6 +576,13 @@ const compareNormListEl = $<HTMLDivElement>("compareNormList");
 
 let pendingCsvRows: Array<Record<string, import("@er-explorer/data").RawCellValue>> | null = null;
 let pendingColumnRoles: Record<string, DemoColumnRole> = {};
+interface PendingDatasetMeta {
+  datasetId: string;
+  datasetName: string;
+  /** Turn on reference splits + observed markers for first-time example load. */
+  applyExampleDefaults?: boolean;
+}
+let pendingDatasetMeta: PendingDatasetMeta | null = null;
 
 function dataFilteredRowIndices(): number[] {
   if (!dataset) return [];
@@ -520,10 +593,7 @@ function dataFilteredRowIndices(): number[] {
 }
 
 function exposureXMax(metric: ExposureMetric): number {
-  const xs = dataFilteredRowIndices()
-    .map((i) => exposureValue(i, metric))
-    .filter((v) => Number.isFinite(v));
-  return xs.length ? Math.max(...xs) : 1;
+  return exposureXDomain(metric)[1];
 }
 
 function suggestFilterMode(col: { id: string; role: DemoColumnRole; numeric: boolean }): boolean {
@@ -595,8 +665,10 @@ function fitFor(metric: ExposureMetric, endpoint: Endpoint): { fit: EndpointFit;
   return { fit: { kind: "logistic", model }, xs, ys };
 }
 
-function curveFor(fit: EndpointFit, xs: number[], ys: number[], xMax: number): PredictionResult {
-  const dense = Array.from({ length: 121 }, (_, i) => (i * xMax) / 120);
+function curveFor(fit: EndpointFit, xs: number[], ys: number[], xDomain: [number, number]): PredictionResult {
+  const [xMin, xMax] = xDomain;
+  const span = xMax - xMin || 1;
+  const dense = Array.from({ length: 121 }, (_, i) => xMin + (span * i) / 120);
   if (fit.kind === "linear") {
     const surface = linearAnalysisModel.predict(fit.model);
     const points = surface.evaluate(dense);
@@ -636,14 +708,95 @@ function curveFor(fit: EndpointFit, xs: number[], ys: number[], xMax: number): P
   });
 }
 
-/** Formats a "Fitted + CI" reference-line marker's two label lines - `["Fit 0.72", "[0.65-0.79]"]`
- * normally, but when `state.ciMethod === "none"` the curve's `lower`/`upper` are deliberately
- * `NaN` (see `curveFor`), so this omits the bracketed CI line entirely rather than printing
- * "[NaN-NaN]". */
+/** Two-line fit callout: estimate, then optional bracketed CI (no "Fit" prefix — color encodes split vs bin). */
 function formatFitMarkerLines(estimate: number, lower: number, upper: number, decimals: number): [string, string] {
-  const line1 = `Fit ${estimate.toFixed(decimals)}`;
+  const line1 = estimate.toFixed(decimals);
   if (!Number.isFinite(lower) || !Number.isFinite(upper)) return [line1, ""];
   return [line1, `[${lower.toFixed(decimals)}-${upper.toFixed(decimals)}]`];
+}
+
+function formatExposureForReadout(x: number): string {
+  return x >= 100 ? x.toFixed(0) : x.toFixed(1);
+}
+
+function scatterPointHoverLabel(rowIndex: number, metric: ExposureMetric, endpoint: Endpoint, endpointDisplay?: string): string {
+  const ds = requireDataset();
+  const epName = endpointDisplay ?? endpoint.toUpperCase();
+  const epVal = endpointValue(rowIndex, endpoint);
+  const epStr = Number.isFinite(epVal) && !Number.isInteger(epVal) ? epVal.toFixed(1) : String(epVal);
+  return [
+    `${exposureLabel(metric)} ${exposureValue(rowIndex, metric).toFixed(1)}`,
+    `${epName} ${epStr}`,
+    ds.doseLabel(rowIndex),
+    ...ds.covariateHoverParts(rowIndex)
+  ].join(" · ");
+}
+
+function scatterDatumFromPoint(p: ScatterPoint, style: Omit<ScatterPointDatum, "id" | "x" | "y" | "data" | "label">): ScatterPointDatum {
+  const tip = p.label ?? "";
+  return {
+    id: p.id,
+    x: p.exposure,
+    y: p.displayY ?? p.response,
+    label: tip,
+    ...style,
+    data: {
+      "data-id": p.id,
+      "data-exposure": p.exposure,
+      "data-response": p.response,
+      "data-group": String(p.groupId),
+      ...(tip ? { "data-tip": tip } : {})
+    }
+  };
+}
+
+/** Plain-text tooltip for observed / dose-click markers (no fitted values — those have their own callouts). */
+function observedMarkerTooltip(exposureAxisLabel: string, exposureX: number, headline: string, detail: string): string {
+  return [`${exposureAxisLabel}: ${formatExposureForReadout(exposureX)}`, headline, detail].join("\n");
+}
+
+/** Exposure-only hover for split-line fit callouts (label already shows Fit + CI). */
+function splitFitMarkerTooltip(exposureAxisLabel: string, exposureX: number): string {
+  return `${exposureAxisLabel} at split: ${formatExposureForReadout(exposureX)}`;
+}
+
+function binFitMarkerTooltip(exposureAxisLabel: string, exposureX: number): string {
+  return `${exposureAxisLabel} at bin (mean): ${formatExposureForReadout(exposureX)}`;
+}
+
+/** Pushes fit+CI markers at exposure x-positions (e.g. mean exposure per split bin). */
+function createFitAtObservedBinLayer(
+  layerId: string,
+  exposureXs: number[],
+  curveSamples: CurveSample[],
+  exposureAxisLabel: string,
+  fitDecimals: number,
+  color = "#0f172a"
+): RendererLayer {
+  const uniq = [...new Set(exposureXs.filter((x) => Number.isFinite(x)).map((x) => Math.round(x * 1000) / 1000))];
+  return {
+    id: layerId,
+    kind: "observed-stat",
+    render(ctx) {
+      uniq.forEach((exposureX, i) => {
+        const at = interpolateCurveSample(curveSamples, exposureX);
+        const [l1, l2] = formatFitMarkerLines(at.estimate, at.lower, at.upper, fitDecimals);
+        ctx.markers.add({
+          id: `${layerId}:${i}`,
+          ownerLayerId: layerId,
+          x: ctx.xScale(exposureX),
+          y: ctx.yScale(at.estimate),
+          ...(Number.isFinite(at.lower) && Number.isFinite(at.upper)
+            ? { yLow: ctx.yScale(at.lower), yHigh: ctx.yScale(at.upper) }
+            : {}),
+          color,
+          lines: [l1, l2],
+          kind: "reference-fit-at-bin",
+          tooltip: binFitMarkerTooltip(exposureAxisLabel, exposureX)
+        });
+      });
+    }
+  };
 }
 
 /** Adapts a legacy `PredictionResult`'s loosely-typed `estimates` into `@er-explorer/renderer`'s
@@ -951,7 +1104,7 @@ function renderContinuousScatterViaRenderer(
   points: ScatterPoint[],
   curve: PredictionResult,
   projected: LinearProjectedGroup[],
-  xMax: number,
+  xDomain: [number, number],
   metric: ExposureMetric,
   endpoint: Endpoint,
   width: number,
@@ -964,17 +1117,15 @@ function renderContinuousScatterViaRenderer(
   const yDomain = computeContinuousYDomain(points, curveSamples);
   const plotHeight = height;
 
-  const scatterPoints: ScatterPointDatum[] = (state.showPoints ? points : []).map((p) => ({
-    id: p.id,
-    x: p.exposure,
-    y: p.displayY ?? p.response,
-    color: resolveDoseColor(String(p.groupId)) ?? "#64748b",
-    radius: p.selected ? 4.2 : 3.1,
-    opacity: p.selected ? 0.84 : 0.14,
-    stroke: p.selected ? "#ffffff" : undefined,
-    strokeWidth: p.selected ? 1 : undefined,
-    data: { "data-id": p.id, "data-exposure": p.exposure, "data-response": p.response, "data-group": String(p.groupId) }
-  }));
+  const scatterPoints: ScatterPointDatum[] = (state.showPoints ? points : []).map((p) =>
+    scatterDatumFromPoint(p, {
+      color: resolveDoseColor(String(p.groupId)) ?? "#64748b",
+      radius: p.selected ? 4.2 : 3.1,
+      opacity: p.selected ? 0.84 : 0.14,
+      stroke: p.selected ? "#ffffff" : undefined,
+      strokeWidth: p.selected ? 1 : undefined
+    })
+  );
 
   const layers: RendererLayer[] = [
     new GridLayer({ id: "grid" }),
@@ -1022,8 +1173,14 @@ function renderContinuousScatterViaRenderer(
         primaryLabel: p.observedMean.mean.toFixed(1),
         // Capital N - this is the clicked dose's own total observed count, not a quartile-bin
         // sub-count (see computeSplitAnnotations' "n=" for that).
-        secondaryLabel: `N=${p.observedMean.n}`,
-        color: p.color
+        secondaryLabel: `N=${p.observedMean.n} · @ ${formatExposureForReadout(p.median)}`,
+        color: p.color,
+        tooltip: observedMarkerTooltip(
+          exposureLabel(metric),
+          p.median,
+          `Observed mean ${p.observedMean.mean.toFixed(1)}`,
+          `95% CI · N=${p.observedMean.n}`
+        )
       }));
     if (observedMeanStats.length) layers.push(new ObservedStatLayer({ id: "projection-observed", bins: observedMeanStats }));
   }
@@ -1034,13 +1191,15 @@ function renderContinuousScatterViaRenderer(
       if (state.showSplitValue) spec.valueLabel = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
       if (state.showReferenceFit) {
         const at = interpolateCurveSample(curveSamples, ref.value);
+        const [l1, l2] = formatFitMarkerLines(at.estimate, at.lower, at.upper, 1);
         spec.markerValues = [
           {
             estimate: at.estimate,
             lower: at.lower,
             upper: at.upper,
-            lines: formatFitMarkerLines(at.estimate, at.lower, at.upper, 1),
-            color: "#94a3b8"
+            lines: [l1, l2],
+            color: "#94a3b8",
+            tooltip: splitFitMarkerTooltip(exposureLabel(metric), ref.value)
           }
         ];
       }
@@ -1060,16 +1219,34 @@ function renderContinuousScatterViaRenderer(
           upper: b.ciUpper,
           n: b.n,
           primaryLabel: b.mean.toFixed(1),
-          secondaryLabel: `n=${b.n}`,
-          color: b.color
+          secondaryLabel: `n=${b.n} · @ ${formatExposureForReadout(b.x)}`,
+          color: b.color,
+          tooltip: observedMarkerTooltip(
+            exposureLabel(metric),
+            b.x,
+            `Observed mean ${b.mean.toFixed(1)}`,
+            `95% CI ${b.ciLower.toFixed(1)}–${b.ciUpper.toFixed(1)} · n=${b.n}`
+          )
         }))
       })
     );
   }
 
-  layers.push(new ScatterLayer({ id: "points", points: scatterPoints }));
+  if (state.showFittedAtObservedBin && observedMeanBins.length) {
+    layers.push(
+      createFitAtObservedBinLayer(
+        "fit-at-observed-bin",
+        observedMeanBins.map((b) => b.x),
+        curveSamples,
+        exposureLabel(metric),
+        1
+      )
+    );
+  }
 
-  const result = new SVGRenderer().render({ width, height, xDomain: [0, xMax], yDomain, layers });
+  layers.push(new ScatterLayer({ id: "points", points: scatterPoints, nativeTitle: false }));
+
+  const result = new SVGRenderer().render({ width, height, xDomain, yDomain, layers });
 
   return {
     content: result.content as string,
@@ -1113,7 +1290,7 @@ function renderBinaryScatterOverlay(
   points: ScatterPoint[],
   curves: BinaryCurveOverlay[],
   groupColors: Record<string, string>,
-  xMax: number,
+  xDomain: [number, number],
   xAxisLabel: string,
   yAxisLabel: string,
   width: number,
@@ -1126,18 +1303,15 @@ function renderBinaryScatterOverlay(
   const hasExtras = curves.length > 1;
   const curveSamplesFor = curves.map((c) => toCurveSamples(c.curve));
 
-  const scatterPoints: ScatterPointDatum[] = points.map((p) => ({
-    id: p.id,
-    x: p.exposure,
-    y: p.displayY ?? p.response,
-    color: groupColors[String(p.groupId)] ?? "#64748b",
-    radius: p.selected ? 4.2 : 3.1,
-    opacity: p.selected ? 0.84 : 0.14,
-    stroke: p.selected ? "#ffffff" : undefined,
-    strokeWidth: p.selected ? 1 : undefined,
-    label: p.label,
-    data: { "data-id": p.id, "data-exposure": p.exposure, "data-response": p.response, "data-group": String(p.groupId) }
-  }));
+  const scatterPoints: ScatterPointDatum[] = points.map((p) =>
+    scatterDatumFromPoint(p, {
+      color: groupColors[String(p.groupId)] ?? "#64748b",
+      radius: p.selected ? 4.2 : 3.1,
+      opacity: p.selected ? 0.84 : 0.14,
+      stroke: p.selected ? "#ffffff" : undefined,
+      strokeWidth: p.selected ? 1 : undefined
+    })
+  );
 
   const layers: RendererLayer[] = [
     new GridLayer({ id: "grid", yTickValues: [0, 1] }),
@@ -1176,16 +1350,25 @@ function renderBinaryScatterOverlay(
 
     const observedStats = projected
       .filter((p): p is ProjectedGroup & { observed: NonNullable<ProjectedGroup["observed"]> } => Boolean(p.observed))
-      .map((p) => ({
-        x: p.median,
-        center: p.observed.proportion,
-        lower: p.observed.ciLower,
-        upper: p.observed.ciUpper,
-        n: p.observed.n,
-        primaryLabel: `${Math.round(p.observed.proportion * 100)}%`,
-        secondaryLabel: `${p.observed.responders}/${p.observed.n}`,
-        color: p.color
-      }));
+      .map((p) => {
+        const pct = Math.round(p.observed.proportion * 100);
+        return {
+          x: p.median,
+          center: p.observed.proportion,
+          lower: p.observed.ciLower,
+          upper: p.observed.ciUpper,
+          n: p.observed.n,
+          primaryLabel: `${pct}%`,
+          secondaryLabel: `${p.observed.responders}/${p.observed.n} · @ ${formatExposureForReadout(p.median)}`,
+          color: p.color,
+          tooltip: observedMarkerTooltip(
+            xAxisLabel,
+            p.median,
+            `${pct}% observed (${p.observed.responders}/${p.observed.n})`,
+            `Wilson 95% CI ${(p.observed.ciLower * 100).toFixed(0)}–${(p.observed.ciUpper * 100).toFixed(0)}%`
+          )
+        };
+      });
     if (observedStats.length) layers.push(new ObservedStatLayer({ id: `projection-observed-${i}`, bins: observedStats }));
 
     const observedMeanStats = projected
@@ -1210,18 +1393,20 @@ function renderBinaryScatterOverlay(
       const spec: ReferenceLineSpec = { value: ref.value, label: ref.label };
       if (state.showSplitValue) spec.valueLabel = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
       if (state.showReferenceFit) {
-        spec.markerValues = curves.map((c, i) => {
-          const at = interpolateCurveSample(curveSamplesFor[i], ref.value);
-          const rawSamples = c.rawCurve ? toCurveSamples(c.rawCurve) : curveSamplesFor[i];
+        spec.markerValues = curves.map((c, ci) => {
+          const at = interpolateCurveSample(curveSamplesFor[ci], ref.value);
+          const rawSamples = c.rawCurve ? toCurveSamples(c.rawCurve) : curveSamplesFor[ci];
           const rawAt = c.rawCurve ? interpolateCurveSample(rawSamples, ref.value) : at;
           const dec = c.fitLabelDecimals ?? 2;
-          const color = i === 0 ? (hasExtras ? c.color ?? "#94a3b8" : "#94a3b8") : c.color ?? "#94a3b8";
+          const color = ci === 0 ? (hasExtras ? c.color ?? "#94a3b8" : "#94a3b8") : c.color ?? "#94a3b8";
+          const [l1, l2] = formatFitMarkerLines(rawAt.estimate, rawAt.lower, rawAt.upper, dec);
           return {
             estimate: at.estimate,
             lower: at.lower,
             upper: at.upper,
-            lines: formatFitMarkerLines(rawAt.estimate, rawAt.lower, rawAt.upper, dec),
-            color
+            lines: [l1, l2] as [string, string],
+            color,
+            tooltip: splitFitMarkerTooltip(xAxisLabel, ref.value)
           };
         });
       }
@@ -1234,24 +1419,52 @@ function renderBinaryScatterOverlay(
     layers.push(
       new ObservedStatLayer({
         id: "observed-response-bins",
-        bins: observedBins.map((b) => ({
-          x: b.x,
-          center: b.proportion,
-          lower: b.ciLower,
-          upper: b.ciUpper,
-          n: b.n,
-          primaryLabel: b.primaryLabel ?? `${Math.round(b.proportion * 100)}%`,
-          secondaryLabel: b.secondaryLabel ?? `${b.responders}/${b.n}`,
-          color: b.color,
-          strokeDash: b.strokeDash
-        }))
+        bins: observedBins.map((b) => {
+          const pct = Math.round(b.proportion * 100);
+          const primary = b.primaryLabel ?? `${pct}%`;
+          const secondary = b.secondaryLabel ?? `${b.responders}/${b.n} · @ ${formatExposureForReadout(b.x)}`;
+          return {
+            x: b.x,
+            center: b.proportion,
+            lower: b.ciLower,
+            upper: b.ciUpper,
+            n: b.n,
+            primaryLabel: primary,
+            secondaryLabel: secondary,
+            color: b.color,
+            strokeDash: b.strokeDash,
+            tooltip: observedMarkerTooltip(
+              xAxisLabel,
+              b.x,
+              `${pct}% observed (${b.responders}/${b.n})`,
+              `Wilson 95% CI ${(b.ciLower * 100).toFixed(0)}–${(b.ciUpper * 100).toFixed(0)}% · mean ${xAxisLabel} in bin`
+            )
+          };
+        })
       })
     );
   }
 
-  layers.push(new ScatterLayer({ id: "points", points: scatterPoints }));
+  if (state.showFittedAtObservedBin && observedBins.length) {
+    curves.forEach((c, ci) => {
+      const dec = c.fitLabelDecimals ?? 2;
+      const color = hasExtras ? c.color ?? "#0f172a" : "#0f172a";
+      layers.push(
+        createFitAtObservedBinLayer(
+          `fit-at-observed-bin-${ci}`,
+          observedBins.map((b) => b.x),
+          curveSamplesFor[ci]!,
+          xAxisLabel,
+          dec,
+          color
+        )
+      );
+    });
+  }
 
-  const result = new SVGRenderer().render({ width, height, xDomain: [0, xMax], yDomain, layers });
+  layers.push(new ScatterLayer({ id: "points", points: scatterPoints, nativeTitle: false }));
+
+  const result = new SVGRenderer().render({ width, height, xDomain, yDomain, layers });
 
   return {
     content: result.content as string,
@@ -1280,11 +1493,13 @@ function computeReferenceLines(metric: ExposureMetric): ReferenceLine[] {
   const kind = state.referenceLineKind;
   if (!kind) return [];
   const allowed = new Set(dataFilteredRowIndices());
+  const pkLike = exposureIsPkMetric(metric);
   const values = ds
     .allRowIndices()
     .filter((i) => allowed.has(i))
-    .filter((i) => !isPlaceboDose(ds.doseLabel(i)))
+    .filter((i) => !pkLike || !isPlaceboDose(ds.doseLabel(i)))
     .map((i) => exposureValue(i, metric))
+    .filter((v) => Number.isFinite(v))
     .sort((a, b) => a - b);
   if (!values.length) return [];
 
@@ -1323,11 +1538,13 @@ function computeDisplayReferenceLines(metric: ExposureMetric): ReferenceLine[] {
   const splits = computeReferenceLines(metric);
   if (!splits.length) return splits;
   const allowed = new Set(dataFilteredRowIndices());
+  const pkLike = exposureIsPkMetric(metric);
   const values = ds
     .allRowIndices()
     .filter((i) => allowed.has(i))
-    .filter((i) => !isPlaceboDose(ds.doseLabel(i)))
+    .filter((i) => !pkLike || !isPlaceboDose(ds.doseLabel(i)))
     .map((i) => exposureValue(i, metric))
+    .filter((v) => Number.isFinite(v))
     .sort((a, b) => a - b);
   if (!values.length) return splits;
   const min = Math.round(values[0] * 100) / 100;
@@ -1398,32 +1615,44 @@ function computeObservedResponseBins(metric: ExposureMetric, endpoint: Endpoint)
   const cutpoints = computeReferenceLines(metric).map((r) => r.value);
   if (!cutpoints.length) return [];
 
+  const pkLike = exposureIsPkMetric(metric);
   const bins: ObservedResponseBin[] = [];
-
-  const placeboRows = rowIndicesPlacebo();
-  if (placeboRows.length) {
-    const responders = placeboRows.filter((i) => endpointValue(i, endpoint) === 1).length;
-    const ci = wilsonScoreInterval(responders, placeboRows.length);
-    bins.push({ x: 0, n: placeboRows.length, responders, proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper });
-  }
-
-  const dosedRows = rowIndicesDosed();
   const binCount = cutpoints.length + 1;
   const buckets: number[][] = Array.from({ length: binCount }, () => []);
-  dosedRows.forEach((i) => {
-    const v = exposureValue(i, metric);
-    let bin = 0;
-    while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
-    buckets[bin].push(i);
-  });
-  buckets.forEach((rows) => {
+
+  const pushBin = (rows: number[]) => {
     if (!rows.length) return;
     const responders = rows.filter((i) => endpointValue(i, endpoint) === 1).length;
     const ci = wilsonScoreInterval(responders, rows.length);
     const meanX = rows.reduce((sum, i) => sum + exposureValue(i, metric), 0) / rows.length;
     bins.push({ x: meanX, n: rows.length, responders, proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper });
-  });
+  };
 
+  if (pkLike) {
+    const placeboRows = rowIndicesPlacebo();
+    if (placeboRows.length) {
+      const responders = placeboRows.filter((i) => endpointValue(i, endpoint) === 1).length;
+      const ci = wilsonScoreInterval(responders, placeboRows.length);
+      bins.push({ x: 0, n: placeboRows.length, responders, proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper });
+    }
+    rowIndicesDosed().forEach((i) => {
+      const v = exposureValue(i, metric);
+      let bin = 0;
+      while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
+      buckets[bin].push(i);
+    });
+    buckets.forEach(pushBin);
+    return bins;
+  }
+
+  recordsWithEndpoint(endpoint).forEach((i) => {
+    const v = exposureValue(i, metric);
+    if (!Number.isFinite(v)) return;
+    let bin = 0;
+    while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
+    buckets[bin].push(i);
+  });
+  buckets.forEach(pushBin);
   return bins;
 }
 
@@ -1438,31 +1667,45 @@ function computeObservedMeanBins(metric: ExposureMetric, endpoint: Endpoint): Ob
   const cutpoints = computeReferenceLines(metric).map((r) => r.value);
   if (!cutpoints.length) return [];
 
+  const pkLike = exposureIsPkMetric(metric);
   const bins: ObservedMeanBin[] = [];
-
   const withEndpoint = recordsWithEndpoint(endpoint);
-  const placeboRows = withEndpoint.filter((i) => isPlaceboDose(ds.doseLabel(i)));
-  if (placeboRows.length) {
-    const mci = meanConfidenceInterval(placeboRows.map((i) => endpointValue(i, endpoint)));
-    bins.push({ x: 0, mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n });
-  }
-
-  const dosedRows = withEndpoint.filter((i) => !isPlaceboDose(ds.doseLabel(i)));
   const binCount = cutpoints.length + 1;
   const buckets: number[][] = Array.from({ length: binCount }, () => []);
-  dosedRows.forEach((i) => {
-    const v = exposureValue(i, metric);
-    let bin = 0;
-    while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
-    buckets[bin].push(i);
-  });
-  buckets.forEach((rows) => {
+
+  const pushBin = (rows: number[]) => {
     if (!rows.length) return;
     const mci = meanConfidenceInterval(rows.map((i) => endpointValue(i, endpoint)));
     const meanX = rows.reduce((sum, i) => sum + exposureValue(i, metric), 0) / rows.length;
     bins.push({ x: meanX, mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n });
-  });
+  };
 
+  if (pkLike) {
+    const placeboRows = withEndpoint.filter((i) => isPlaceboDose(ds.doseLabel(i)));
+    if (placeboRows.length) {
+      const mci = meanConfidenceInterval(placeboRows.map((i) => endpointValue(i, endpoint)));
+      bins.push({ x: 0, mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n });
+    }
+    withEndpoint
+      .filter((i) => !isPlaceboDose(ds.doseLabel(i)))
+      .forEach((i) => {
+        const v = exposureValue(i, metric);
+        let bin = 0;
+        while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
+        buckets[bin].push(i);
+      });
+    buckets.forEach(pushBin);
+    return bins;
+  }
+
+  withEndpoint.forEach((i) => {
+    const v = exposureValue(i, metric);
+    if (!Number.isFinite(v)) return;
+    let bin = 0;
+    while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
+    buckets[bin].push(i);
+  });
+  buckets.forEach(pushBin);
   return bins;
 }
 
@@ -1698,6 +1941,7 @@ function render(): void {
   splitAnnotationModeEl.disabled = !state.referenceLineKind;
   showObservedRespEl.disabled = !state.referenceLineKind;
   showReferenceFitEl.disabled = !state.referenceLineKind;
+  showFittedAtObservedBinEl.disabled = !state.referenceLineKind || !state.showObservedResponders;
   showSplitValueEl.disabled = !state.referenceLineKind;
   applyAllMetricStackHeights();
   syncMetricStackHeightUi();
@@ -1836,22 +2080,19 @@ function renderScatterPanel(
 ): void {
   const ds = requireDataset();
   const { fit, xs, ys } = fitFor(metric, endpoint);
-  const xMax = exposureXMax(metric);
-  const curve = curveFor(fit, xs, ys, xMax);
+  const xDomain = exposureXDomain(metric);
+  const curve = curveFor(fit, xs, ys, xDomain);
   const continuous = isContinuousEndpoint(endpoint);
 
   const points: ScatterPoint[] = recordsWithEndpoint(endpoint).map((i) => {
     const pid = ds.patientId(i);
-    const dose = ds.doseLabel(i);
-    const study = ds.studyLabel(i);
-    const studySuffix = study ? ` · Study ${study}` : "";
     return {
       id: pid,
       exposure: exposureValue(i, metric),
       response: endpointValue(i, endpoint),
       displayY: continuous ? endpointValue(i, endpoint) : endpointValue(i, endpoint) + seededJitter(pid),
-      groupId: dose,
-      label: `${exposureLabel(metric)} ${exposureValue(i, metric).toFixed(1)} · ${endpoint.toUpperCase()} ${endpointValue(i, endpoint)} · ${dose}${studySuffix}`,
+      groupId: ds.doseLabel(i),
+      label: scatterPointHoverLabel(i, metric, endpoint),
       selected: active.has(pid)
     };
   });
@@ -1910,7 +2151,7 @@ function renderScatterPanel(
       points,
       curve,
       projected,
-      xMax,
+      xDomain,
       metric,
       endpoint,
       width,
@@ -1925,7 +2166,7 @@ function renderScatterPanel(
       state.showPoints ? points : [],
       [{ curve, projected }],
       DOSE_COLORS(),
-      xMax,
+      xDomain,
       exposureLabel(metric),
       endpoint.toUpperCase(),
       width,
@@ -1967,22 +2208,19 @@ function paintRegularScatterIntoWrap(
 ): void {
   const ds = requireDataset();
   const { fit, xs, ys } = fitFor(metric, endpoint);
-  const xMax = exposureXMax(metric);
-  const curve = curveFor(fit, xs, ys, xMax);
+  const xDomain = exposureXDomain(metric);
+  const curve = curveFor(fit, xs, ys, xDomain);
   const continuous = isContinuousEndpoint(endpoint);
 
   const points: ScatterPoint[] = recordsWithEndpoint(endpoint).map((i) => {
     const pid = ds.patientId(i);
-    const dose = ds.doseLabel(i);
-    const study = ds.studyLabel(i);
-    const studySuffix = study ? ` · Study ${study}` : "";
     return {
       id: pid,
       exposure: exposureValue(i, metric),
       response: endpointValue(i, endpoint),
       displayY: continuous ? endpointValue(i, endpoint) : endpointValue(i, endpoint) + seededJitter(pid),
-      groupId: dose,
-      label: `${exposureLabel(metric)} ${exposureValue(i, metric).toFixed(1)} · ${endpoint.toUpperCase()} ${endpointValue(i, endpoint)} · ${dose}${studySuffix}`,
+      groupId: ds.doseLabel(i),
+      label: scatterPointHoverLabel(i, metric, endpoint),
       selected: active.has(pid)
     };
   });
@@ -2040,7 +2278,7 @@ function paintRegularScatterIntoWrap(
       points,
       curve,
       projected,
-      xMax,
+      xDomain,
       metric,
       endpoint,
       width,
@@ -2056,7 +2294,7 @@ function paintRegularScatterIntoWrap(
       state.showPoints ? points : [],
       [{ curve, projected }],
       DOSE_COLORS(),
-      xMax,
+      xDomain,
       exposureLabel(metric),
       endpoint.toUpperCase(),
       width,
@@ -2086,15 +2324,12 @@ function paintCompareScatterIntoWrap(
   height: number
 ): void {
   const ds = requireDataset();
-  const xMax = exposureXMax(metric);
+  const xDomain = exposureXDomain(metric);
   const referenceLines = computeDisplayReferenceLines(metric);
 
   const pointsFor = (endpoint: Endpoint): ScatterPoint[] =>
     recordsWithEndpoint(endpoint).map((i) => {
       const pid = ds.patientId(i);
-      const dose = ds.doseLabel(i);
-      const study = ds.studyLabel(i);
-      const studySuffix = study ? ` · Study ${study}` : "";
       const raw = endpointValue(i, endpoint);
       const linear = usesLinearModel(endpoint);
       const yDisplay = linear ? normCompareValue(raw, endpoint) + seededJitter(pid, 0.04) : raw + seededJitter(pid);
@@ -2104,14 +2339,14 @@ function paintCompareScatterIntoWrap(
         response: raw,
         displayY: yDisplay,
         groupId: endpoint,
-        label: `${exposureLabel(metric)} ${exposureValue(i, metric).toFixed(1)} · ${ds.endpointLabel(endpoint)} ${linear ? raw.toFixed(1) : String(raw)} · ${dose}${studySuffix}`,
+        label: scatterPointHoverLabel(i, metric, endpoint, ds.endpointLabel(endpoint)),
         selected: active.has(pid)
       };
     });
 
   const fits = endpoints.map((endpoint) => {
     const { fit, xs, ys } = fitFor(metric, endpoint);
-    const rawCurve = curveFor(fit, xs, ys, xMax);
+    const rawCurve = curveFor(fit, xs, ys, xDomain);
     const linear = usesLinearModel(endpoint);
     const { min, max, valid } = getCompareNormBounds(endpoint);
     const curve = linear && valid ? mapCurveToCompareScale(rawCurve, min, max) : rawCurve;
@@ -2151,7 +2386,7 @@ function paintCompareScatterIntoWrap(
     allPoints,
     curves,
     pointColors,
-    xMax,
+    xDomain,
     exposureLabel(metric),
     yLabel,
     width,
@@ -2195,8 +2430,8 @@ function buildDistributionGroups(
   metric: ExposureMetric,
   splitByEndpoints?: Endpoint[]
 ): DistributionRawGroup[] {
-  const xMax = exposureXMax(metric);
-  const xDomain: [number, number] = [0, xMax];
+  const xDomain = exposureXDomain(metric);
+  const pkLike = exposureIsPkMetric(metric);
 
   const selectionAccent = doseSelectionAccentForDistribution();
 
@@ -2211,7 +2446,8 @@ function buildDistributionGroups(
         }
         return splitByEndpoints.map((ep, i) => {
           const rows = rowIndicesForDose(dose).filter((r) => Number.isFinite(endpointValue(r, ep)));
-          const values = isPlacebo ? [] : rows.map((r) => exposureValue(r, metric)).filter(Number.isFinite);
+          const values =
+            isPlacebo && pkLike ? [] : rows.map((r) => exposureValue(r, metric)).filter((v) => Number.isFinite(v));
           return {
             groupId: dose,
             label: i === 0 ? dose : "",
@@ -2220,11 +2456,11 @@ function buildDistributionGroups(
             n: rows.length,
             selected: state.selectedDoses.has(dose),
             selectionColor: selectionAccent,
-            skipShape: isPlacebo,
+            skipShape: isPlacebo && pkLike,
             splitAnnotations:
-              !isPlacebo && state.splitAnnotationMode !== "off"
-                ? computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
-                : undefined
+              (isPlacebo && pkLike) || state.splitAnnotationMode === "off"
+                ? undefined
+                : computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
           };
         });
       });
@@ -2236,7 +2472,8 @@ function buildDistributionGroups(
     .map((dose) => {
       const isPlacebo = isPlaceboDose(dose);
       const rows = rowIndicesForDose(dose);
-      const values = isPlacebo ? [] : rows.map((i) => exposureValue(i, metric));
+      const values =
+        isPlacebo && pkLike ? [] : rows.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
       return {
         groupId: dose,
         label: dose,
@@ -2245,9 +2482,11 @@ function buildDistributionGroups(
         n: rows.length,
         selected: state.selectedDoses.has(dose),
         selectionColor: selectionAccent,
-        skipShape: isPlacebo,
+        skipShape: isPlacebo && pkLike,
         splitAnnotations:
-          isPlacebo || state.splitAnnotationMode === "off" ? undefined : computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
+          (isPlacebo && pkLike) || state.splitAnnotationMode === "off"
+            ? undefined
+            : computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
       };
     })
     .filter((g) => g.n > 0);
@@ -2266,11 +2505,11 @@ function paintDistributionChart(
   readoutEndpoints?: Endpoint[],
   opts?: { showReadout?: boolean; omitEndpointFit?: boolean }
 ): void {
-  const xMax = exposureXMax(metric);
+  const xDomain = exposureXDomain(metric);
   const distGroups = buildDistributionGroups(metric, splitByEndpoints);
   const distResult = renderDistributionViaRenderer(
     distGroups,
-    [0, xMax],
+    xDomain,
     state.distributionMode,
     computeDisplayReferenceLines(metric),
     exposureLabel(metric),
@@ -2320,7 +2559,7 @@ interface DistributionRawGroup {
  * `SVGRenderer.render()` below, since `computeDistributionGroupData` needs the same
  * `boxHalfHeightPx` the `DistributionLayer` will independently (re-)compute from `plotRect.height`
  * - both sides derive it from the same `band = plotHeight / groups.length` formula. */
-const DISTRIBUTION_MARGIN = { top: 22, right: 20, bottom: 56, left: 96 };
+const DISTRIBUTION_MARGIN = { top: 22, right: 44, bottom: 56, left: 96 };
 
 /** The x-sample grid a group's KDE/box shape is traced over: an even base grid across the whole
  * domain, plus the group's own distribution breakpoints so box edges land exactly on
@@ -2694,13 +2933,24 @@ function updateReadout(
   applyReadoutChrome(readoutEl);
 }
 
-function attachScatterInteractivity(chartWrap: HTMLDivElement, tip: HTMLDivElement, metric: ExposureMetric, endpoint: Endpoint, meta: ScatterMeta): void {
+function attachScatterInteractivity(chartWrap: HTMLDivElement, tip: HTMLDivElement, metric: ExposureMetric, endpoint: Endpoint, _meta: ScatterMeta): void {
   const svg = chartWrap.querySelector("svg");
   if (!svg) return;
-  const x = scaleLinear(meta.xScale.domain, meta.xScale.range);
-  const y = scaleLinear(meta.yScale.domain, meta.yScale.range);
 
   svg.addEventListener("pointermove", (ev) => {
+    const markerHit = (ev.target as Element).closest(".er-marker-hit");
+    if (markerHit) {
+      const rectBounds = chartWrap.getBoundingClientRect();
+      tip.style.left = `${ev.clientX - rectBounds.left}px`;
+      tip.style.top = `${ev.clientY - rectBounds.top}px`;
+      tip.style.opacity = "1";
+      const raw = markerHit.getAttribute("data-er-marker-tip") ?? "";
+      tip.innerHTML = raw
+        .split("\n")
+        .map((line) => escapeHtml(line))
+        .join("<br>");
+      return;
+    }
     const target = (ev.target as Element).closest("circle[data-id]") as SVGCircleElement | null;
     if (!target) {
       tip.style.opacity = "0";
@@ -2710,81 +2960,20 @@ function attachScatterInteractivity(chartWrap: HTMLDivElement, tip: HTMLDivEleme
     tip.style.left = `${ev.clientX - rectBounds.left}px`;
     tip.style.top = `${ev.clientY - rectBounds.top}px`;
     tip.style.opacity = "1";
+    const tipText = target.getAttribute("data-tip");
+    if (tipText) {
+      tip.innerHTML = tipText
+        .split(" · ")
+        .map((line) => escapeHtml(line))
+        .join("<br>");
+      return;
+    }
     const exposure = target.getAttribute("data-exposure");
     const response = target.getAttribute("data-response");
     const group = target.getAttribute("data-group");
-    tip.innerHTML = `${exposureLabel(metric)}: ${Number(exposure).toFixed(1)}<br>${endpoint.toUpperCase()}: ${response}<br>Dose: ${group}`;
+    tip.innerHTML = `${escapeHtml(exposureLabel(metric))}: ${Number(exposure).toFixed(1)}<br>${escapeHtml(endpoint.toUpperCase())}: ${escapeHtml(response ?? "")}<br>Dose: ${escapeHtml(group ?? "")}`;
   });
   svg.addEventListener("pointerleave", () => (tip.style.opacity = "0"));
-
-  const viewBox = svg.viewBox.baseVal;
-  const overlay = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-  overlay.setAttribute("x", String(meta.plot.left));
-  overlay.setAttribute("y", String(meta.plot.top));
-  overlay.setAttribute("width", String(meta.plot.width));
-  overlay.setAttribute("height", String(meta.plot.height));
-  overlay.setAttribute("fill", "transparent");
-  overlay.setAttribute("cursor", "crosshair");
-  svg.appendChild(overlay);
-
-  let drag: { x0: number; y0: number; x1: number; y1: number } | null = null;
-  let brushRectEl: SVGRectElement | null = null;
-
-  const toSvgPoint = (ev: PointerEvent): { sx: number; sy: number } => {
-    const bounds = svg.getBoundingClientRect();
-    const sx = ((ev.clientX - bounds.left) / bounds.width) * viewBox.width;
-    const sy = ((ev.clientY - bounds.top) / bounds.height) * viewBox.height;
-    return { sx, sy };
-  };
-
-  overlay.addEventListener("pointerdown", (ev) => {
-    const { sx, sy } = toSvgPoint(ev as PointerEvent);
-    drag = { x0: sx, y0: sy, x1: sx, y1: sy };
-    overlay.setPointerCapture((ev as PointerEvent).pointerId);
-  });
-  overlay.addEventListener("pointermove", (ev) => {
-    if (!drag) return;
-    const { sx, sy } = toSvgPoint(ev as PointerEvent);
-    drag.x1 = sx;
-    drag.y1 = sy;
-    if (brushRectEl) brushRectEl.remove();
-    brushRectEl = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    brushRectEl.setAttribute("x", String(Math.min(drag.x0, drag.x1)));
-    brushRectEl.setAttribute("y", String(Math.min(drag.y0, drag.y1)));
-    brushRectEl.setAttribute("width", String(Math.abs(drag.x1 - drag.x0)));
-    brushRectEl.setAttribute("height", String(Math.abs(drag.y1 - drag.y0)));
-    brushRectEl.setAttribute("fill", "rgba(37,99,235,0.10)");
-    brushRectEl.setAttribute("stroke", "rgba(37,99,235,0.85)");
-    brushRectEl.setAttribute("stroke-dasharray", "5 4");
-    svg.appendChild(brushRectEl);
-  });
-  overlay.addEventListener("pointerup", () => {
-    if (!drag) return;
-    const dx = Math.abs(drag.x1 - drag.x0);
-    const dy = Math.abs(drag.y1 - drag.y0);
-    if (dx < 4 && dy < 4) {
-      state.brushedIds = null;
-      drag = null;
-      if (brushRectEl) brushRectEl.remove();
-      render();
-      return;
-    }
-    const minExposure = x.invert(Math.min(drag.x0, drag.x1));
-    const maxExposure = x.invert(Math.max(drag.x0, drag.x1));
-    const minY = y.invert(Math.max(drag.y0, drag.y1));
-    const maxY = y.invert(Math.min(drag.y0, drag.y1));
-    const continuous = isContinuousEndpoint(endpoint);
-    const ds = requireDataset();
-    const selected = ds.allRowIndices().filter((i) => {
-      const ex = exposureValue(i, metric);
-      const pid = ds.patientId(i);
-      const disp = continuous ? endpointValue(i, endpoint) : endpointValue(i, endpoint) + seededJitter(pid);
-      return ex >= minExposure && ex <= maxExposure && disp >= minY && disp <= maxY;
-    });
-    state.brushedIds = new Set(selected.map((i) => ds.patientId(i)));
-    drag = null;
-    render();
-  });
 }
 
 function attachDistributionInteractivity(
@@ -3176,19 +3365,34 @@ function syncMetricEndpointControls(): void {
   if (!state.endpoints.size || ![...state.endpoints].some((e) => endpoints.includes(e))) {
     state.endpoints = new Set(endpoints.slice(0, 1));
   }
-  exposureGroupEl.innerHTML = metrics
-    .map(
-      (m) =>
-        `<label><input type="checkbox" value="${escapeAttr(m)}" ${state.exposureMetrics.has(m) ? "checked" : ""} /> ${escapeHtml(ds.exposureLabel(m))}</label>`
-    )
-    .join("");
-  endpointGroupEl.innerHTML = endpoints
-    .map(
-      (e) =>
-        `<label><input type="checkbox" value="${escapeAttr(e)}" ${state.endpoints.has(e) ? "checked" : ""} /> ${escapeHtml(ds.endpointLabel(e))}</label>`
-    )
-    .join("");
-  installExposureEndpointListeners();
+
+  mountSortableFieldList(
+    exposureGroupEl,
+    metrics,
+    state.exposureMetrics,
+    (m) => ds.exposureLabel(m),
+    (nextOrder, nextSelected) => {
+      state.exposureColumnOrder = nextOrder;
+      state.exposureMetrics = nextSelected;
+      state.brushedIds = null;
+      render();
+    }
+  );
+
+  mountSortableFieldList(
+    endpointGroupEl,
+    endpoints,
+    state.endpoints,
+    (e) => ds.endpointLabel(e),
+    (nextOrder, nextSelected) => {
+      state.endpointColumnOrder = nextOrder;
+      state.endpoints = nextSelected;
+      state.brushedIds = null;
+      syncCompareNormUi([...nextSelected], state.compareEndpoints && nextSelected.size > 1);
+      render();
+    }
+  );
+
   syncEndpointModelsUi();
 }
 
@@ -3200,39 +3404,64 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 }
 
-function installExposureEndpointListeners(): void {
-  exposureGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {
-    cb.onchange = () => {
-      const checked = new Set(
-        [...exposureGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked")].map((el) => el.value as ExposureMetric)
-      );
-      if (checked.size === 0) {
-        cb.checked = true;
-        return;
-      }
-      state.exposureMetrics = checked;
-      state.brushedIds = null;
-      render();
-    };
-  });
-  endpointGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach((cb) => {
-    cb.onchange = () => {
-      const checked = new Set(
-        [...endpointGroupEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]:checked")].map((el) => el.value as Endpoint)
-      );
-      if (checked.size === 0) {
-        cb.checked = true;
-        return;
-      }
-      state.endpoints = checked;
-      state.brushedIds = null;
-      render();
-    };
-  });
+
+function syncOverlayControlsFromState(): void {
+  setRefLineRadio(state.referenceLineKind);
+  splitAnnotationModeEl.value = state.splitAnnotationMode;
+  showObservedRespEl.checked = state.showObservedResponders;
+  showReferenceFitEl.checked = state.showReferenceFit;
+  showFittedAtObservedBinEl.checked = state.showFittedAtObservedBin;
+  showSplitValueEl.checked = state.showSplitValue;
+  showDoseObservedEl.checked = state.showDoseObserved;
+  showDistReadoutEl.checked = state.showDistReadout;
+  expandDistReadoutEl.checked = state.distReadoutExpanded;
+}
+
+/** Richer default overlays when loading the bundled effICGI walkthrough. */
+function applyExampleExploreDefaults(ds: DatasetContext): void {
+  state.exposureMetrics = new Set(["auc", "cmax"]);
+  state.endpoints = new Set(["icgi"]);
+  state.exposureColumnOrder = mergeColumnOrder(["cmax", "auc"], ds.exposureOrder());
+  state.endpointColumnOrder = [...ds.endpointOrder()];
+  state.referenceLineKind = "tertiles";
+  state.splitAnnotationMode = "n_pct";
+  state.showObservedResponders = true;
+  state.showSplitValue = true;
+  state.showDoseObserved = true;
+  state.showReferenceFit = false;
+  state.distributionMode = "boxplot";
+  syncOverlayControlsFromState();
+  setDistModeButtonsActive(state.distributionMode);
+  syncMetricEndpointControls();
+  ensureEndpointAnalysisDefaults();
+}
+
+function syncColumnRolesSummary(): void {
+  if (!dataset) {
+    columnRolesSummaryEl.hidden = true;
+    referenceArmFieldEl.hidden = true;
+    return;
+  }
+  const ds = dataset;
+  const items = ds.loaded.variableOrder
+    .map((col) => {
+      const role = ds.columnRoles[col] ?? "ignore";
+      if (role === "ignore") return "";
+      return `<li><span class="col-name">${escapeHtml(col)}</span><span class="col-role">${escapeHtml(role)}</span></li>`;
+    })
+    .filter(Boolean);
+  columnRolesListEl.innerHTML = items.length
+    ? items.join("")
+    : `<li><span class="col-name muted">No mapped columns</span></li>`;
+  columnRolesSummaryEl.hidden = false;
+  referenceArmFieldEl.hidden = false;
+  syncReferenceArmUi();
 }
 
 function activateDataset(next: DatasetContext, statusMessage?: string, options?: { focusPlot?: boolean }): void {
   dataset = next;
+  state.exposureColumnOrder = [...next.exposureOrder()];
+  state.endpointColumnOrder = [...next.endpointOrder()];
   state.brushedIds = null;
   state.selectedDoses.clear();
   ensureEndpointAnalysisDefaults();
@@ -3240,16 +3469,23 @@ function activateDataset(next: DatasetContext, statusMessage?: string, options?:
   syncFiltersUi();
   mappingPanelEl.style.display = "none";
   pendingCsvRows = null;
+  pendingDatasetMeta = null;
   dataStatusEl.textContent = statusMessage ?? `${dataset.datasetName} — ${dataset.rowCount} rows`;
+  syncColumnRolesSummary();
   saveSessionBtn.disabled = false;
   setPlotWorkspaceVisible(true);
   if (options?.focusPlot !== false) setShellRail("plot");
   render();
 }
 
-function showMappingUi(rows: Array<Record<string, import("@er-explorer/data").RawCellValue>>, roles: Record<string, DemoColumnRole>): void {
+function showMappingUi(
+  rows: Array<Record<string, import("@er-explorer/data").RawCellValue>>,
+  roles: Record<string, DemoColumnRole>,
+  meta: PendingDatasetMeta
+): void {
   pendingCsvRows = rows;
   pendingColumnRoles = roles;
+  pendingDatasetMeta = meta;
   const { loaded, inferred } = buildPendingContext(rows, roles);
   mappingTableBody.innerHTML = loaded.variableOrder
     .map((colId: string) => {
@@ -3278,21 +3514,47 @@ function showMappingUi(rows: Array<Record<string, import("@er-explorer/data").Ra
 }
 
 function applyPendingMapping(): void {
-  if (!pendingCsvRows) return;
+  if (!pendingCsvRows || !pendingDatasetMeta) return;
   mappingErrorsEl.textContent = "";
   try {
     const next = DatasetContext.fromRows(pendingCsvRows, pendingColumnRoles, {
-      datasetId: `upload-${Date.now()}`,
-      datasetName: "Uploaded CSV"
+      datasetId: pendingDatasetMeta.datasetId,
+      datasetName: pendingDatasetMeta.datasetName
     });
-    activateDataset(next, `Loaded uploaded CSV — ${next.rowCount} rows`);
+    activateDataset(next, `${pendingDatasetMeta.datasetName} — ${next.rowCount} rows loaded`);
+    if (pendingDatasetMeta.applyExampleDefaults) {
+      applyExampleExploreDefaults(next);
+      render();
+    }
   } catch (err) {
     mappingErrorsEl.textContent = err instanceof Error ? err.message : "Could not apply mapping.";
   }
 }
 
+function prepareBundledMapping(): void {
+  const rows = DatasetContext.bundledRowsFromRecords(RECORDS);
+  showMappingUi(rows, { ...EFFICGI_DEFAULT_ROLES }, {
+    datasetId: "effICGI-demo-v1",
+    datasetName: "Bundled effICGI",
+    applyExampleDefaults: true
+  });
+  setShellRail("data", { force: true });
+  dataStatusEl.textContent = `Example effICGI — ${rows.length} rows. Review column roles (same as CSV upload), then Apply mapping & load.`;
+}
+
+function openMappingForCurrentDataset(): void {
+  if (!dataset) return;
+  const rows = rowsFromLoaded(dataset.loaded);
+  showMappingUi(rows, { ...dataset.columnRoles }, {
+    datasetId: dataset.datasetId,
+    datasetName: dataset.datasetName
+  });
+  setShellRail("data", { force: true });
+  dataStatusEl.textContent = `Remap columns for ${dataset.datasetName} (${dataset.rowCount} rows) — no need to re-upload the file.`;
+}
+
 function reloadBundledDataset(): void {
-  activateDataset(DatasetContext.fromRecords(RECORDS), "Bundled effICGI loaded");
+  prepareBundledMapping();
 }
 
 /* ---------------------------------------------------------------------- *
@@ -3314,8 +3576,7 @@ function buildSessionState(): SessionState {
     }${endpoints.length > 1 ? ` (+${endpoints.length - 1} more endpoint row(s))` : ""}`
   );
   const { fit, xs, ys } = fitFor(primaryMetric, primaryEndpoint);
-  const xMax = Math.max(...xs);
-  const curve = curveFor(fit, xs, ys, xMax);
+  const curve = curveFor(fit, xs, ys, exposureXDomain(primaryMetric));
   const visualization = createVisualizationSpec(`${ds.datasetId}-scatter`, model, curve, {
     title: "Exposure vs response",
     xAxisLabel: exposureLabel(primaryMetric),
@@ -3342,6 +3603,7 @@ function buildSessionState(): SessionState {
       splitAnnotationMode: state.splitAnnotationMode,
       showObservedResponders: state.showObservedResponders,
       showReferenceFit: state.showReferenceFit,
+      showFittedAtObservedBin: state.showFittedAtObservedBin,
       showSplitValue: state.showSplitValue,
       showDoseObserved: state.showDoseObserved,
       compareEndpoints: state.compareEndpoints,
@@ -3357,6 +3619,9 @@ function buildSessionState(): SessionState {
       metricStackHeightPx: state.metricStackHeightPx,
       showDistReadout: state.showDistReadout,
       distReadoutExpanded: state.distReadoutExpanded,
+      exposureColumnOrder: state.exposureColumnOrder,
+      endpointColumnOrder: state.endpointColumnOrder,
+      referenceArmDoses: [...state.referenceArmDoses],
       byod
     }
   );
@@ -3421,6 +3686,27 @@ function loadSessionFromFile(file: File): void {
       setPlotWorkspaceVisible(true);
       saveSessionBtn.disabled = false;
 
+      state.exposureColumnOrder = [...dataset!.exposureOrder()];
+      state.endpointColumnOrder = [...dataset!.endpointOrder()];
+      const expOrdSaved = session.settings["exposureColumnOrder"];
+      if (Array.isArray(expOrdSaved)) {
+        state.exposureColumnOrder = mergeColumnOrder(
+          expOrdSaved.filter((m): m is string => typeof m === "string"),
+          dataset!.exposureOrder()
+        );
+      }
+      const epOrdSaved = session.settings["endpointColumnOrder"];
+      if (Array.isArray(epOrdSaved)) {
+        state.endpointColumnOrder = mergeColumnOrder(
+          epOrdSaved.filter((e): e is string => typeof e === "string"),
+          dataset!.endpointOrder()
+        );
+      }
+      const refArmsSaved = session.settings["referenceArmDoses"];
+      if (Array.isArray(refArmsSaved)) {
+        state.referenceArmDoses = refArmsSaved.filter((d): d is string => typeof d === "string");
+      }
+
       const ci = session.settings["ciMethod"];
       const metricsRaw = session.settings["exposureMetrics"];
       const legacyMetric = session.settings["exposureMetric"];
@@ -3472,6 +3758,7 @@ function loadSessionFromFile(file: File): void {
       }
       state.showObservedResponders = session.settings["showObservedResponders"] === true;
       state.showReferenceFit = session.settings["showReferenceFit"] === true;
+      state.showFittedAtObservedBin = session.settings["showFittedAtObservedBin"] === true;
       state.showSplitValue = session.settings["showSplitValue"] === true;
       // default true (matches the app's default) so older session files without this key still
       // show the dose-observed marker rather than silently hiding it
@@ -3529,6 +3816,7 @@ function loadSessionFromFile(file: File): void {
       splitAnnotationModeEl.value = state.splitAnnotationMode;
       showObservedRespEl.checked = state.showObservedResponders;
       showReferenceFitEl.checked = state.showReferenceFit;
+      showFittedAtObservedBinEl.checked = state.showFittedAtObservedBin;
       showSplitValueEl.checked = state.showSplitValue;
       showDoseObservedEl.checked = state.showDoseObserved;
       if (typeof session.settings["showDistReadout"] === "boolean") {
@@ -3577,13 +3865,21 @@ initAppShell((rail) => {
   if (titleEl && titles[rail]) titleEl.textContent = titles[rail];
 });
 
-document.getElementById("openDataDrawerBtn")?.addEventListener("click", () => setShellRail("data"));
+document.getElementById("openDataDrawerBtn")?.addEventListener("click", () => setShellRail("data", { force: true }));
 
 setPlotWorkspaceVisible(false);
 saveSessionBtn.disabled = true;
 dataStatusEl.textContent = "No dataset loaded.";
 
 reloadBundledBtn.addEventListener("click", reloadBundledDataset);
+editMappingBtn.addEventListener("click", openMappingForCurrentDataset);
+referenceArmDosesEl.addEventListener("change", () => {
+  state.referenceArmDoses = referenceArmDosesEl.value
+    .split(/[,;]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  render();
+});
 loadCsvBtn.addEventListener("click", () => csvFileInput.click());
 csvFileInput.addEventListener("change", () => {
   const file = csvFileInput.files?.[0];
@@ -3599,8 +3895,11 @@ csvFileInput.addEventListener("change", () => {
       }
       const loaded = loadDataset(rows);
       const roles = inferRolesForColumns(loaded, {});
-      showMappingUi(rows, roles);
-      setShellRail("data");
+      showMappingUi(rows, roles, {
+        datasetId: `upload-${Date.now()}`,
+        datasetName: "Uploaded CSV"
+      });
+      setShellRail("data", { force: true });
       dataStatusEl.textContent = `Parsed ${rows.length} rows — map columns and apply.`;
     } catch (err) {
       dataStatusEl.textContent = err instanceof Error ? err.message : "Could not parse CSV.";
@@ -3627,6 +3926,10 @@ showObservedRespEl.addEventListener("change", () => {
 });
 showReferenceFitEl.addEventListener("change", () => {
   state.showReferenceFit = showReferenceFitEl.checked;
+  render();
+});
+showFittedAtObservedBinEl.addEventListener("change", () => {
+  state.showFittedAtObservedBin = showFittedAtObservedBinEl.checked;
   render();
 });
 showSplitValueEl.addEventListener("change", () => {

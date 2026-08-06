@@ -22,6 +22,8 @@ export interface ScatterLayerOptions {
   defaultColor?: string;
   defaultRadius?: number;
   defaultOpacity?: number;
+  /** When false, omit native `<title>` tooltips (caller supplies its own hover UI). */
+  nativeTitle?: boolean;
   /** Register an inert hit-region per point (docs/RENDERER_ARCHITECTURE.md §3/§5/§6). Off by
    * default - nothing consumes hit-regions yet; `InteractionController` arrives in Phase 5. */
   registerHitRegions?: boolean;
@@ -42,7 +44,14 @@ export class ScatterLayer implements Layer {
 
   render(ctx: DrawContext): void {
     const { xScale, yScale, target, interactions } = ctx;
-    const { points, defaultColor = DEFAULT_COLOR, defaultRadius = 3.1, defaultOpacity = 0.6, registerHitRegions } = this.options;
+    const {
+      points,
+      defaultColor = DEFAULT_COLOR,
+      defaultRadius = 3.1,
+      defaultOpacity = 0.6,
+      nativeTitle = true,
+      registerHitRegions
+    } = this.options;
 
     target.group({ class: `er-points ${this.id}` }, () => {
       for (const p of points) {
@@ -55,7 +64,7 @@ export class ScatterLayer implements Layer {
           stroke: p.stroke,
           strokeWidth: p.strokeWidth,
           attrs: p.data,
-          title: p.label
+          ...(nativeTitle && p.label ? { title: p.label } : {})
         });
         if (registerHitRegions) {
           interactions?.add({

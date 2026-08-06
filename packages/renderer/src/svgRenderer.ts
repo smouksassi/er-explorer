@@ -4,7 +4,7 @@ import { SvgDrawTarget } from "./svgDrawTarget";
 import type { DrawContext, HitRegion, LayerKind, MarkerCandidate, Renderer, RenderInput, RenderResult } from "./types";
 
 /** Matches `renderLogisticScatterChart`/`renderLinearScatterChart`'s shared `DEFAULT_MARGIN`. */
-const DEFAULT_MARGIN = { top: 22, right: 20, bottom: 56, left: 96 };
+const DEFAULT_MARGIN = { top: 22, right: 44, bottom: 56, left: 96 };
 
 /**
  * Fixed per-kind paint-order rank table (docs/RENDERER_ARCHITECTURE.md §6) - the Renderer, not

@@ -86,9 +86,9 @@ describe("SVGRenderer (Phase 1: core primitives + Axis/Grid/Scatter)", () => {
       yDomain: [-0.18, 1.18],
       layers: []
     });
-    expect(result.metadata.plotRect).toEqual({ x: 96, y: 22, width: 1200 - 96 - 20, height: 420 - 22 - 56 });
+    expect(result.metadata.plotRect).toEqual({ x: 96, y: 22, width: 1200 - 96 - 44, height: 420 - 22 - 56 });
     expect(result.metadata.xScale(0)).toBeCloseTo(96);
-    expect(result.metadata.xScale(300)).toBeCloseTo(96 + (1200 - 96 - 20));
+    expect(result.metadata.xScale(300)).toBeCloseTo(96 + (1200 - 96 - 44));
   });
 
   it("respects a caller-supplied partial margin override", () => {

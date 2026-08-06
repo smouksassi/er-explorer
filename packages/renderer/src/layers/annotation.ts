@@ -19,7 +19,7 @@ export interface ReferenceLineSpec {
    * each value itself (e.g. via `interpolateCurveSample`); `AnnotationLayer` never samples a
    * curve on its own.
    */
-  markerValues?: Array<{ estimate: number; lower: number; upper: number; lines?: [string, string]; color?: string }>;
+  markerValues?: Array<{ estimate: number; lower: number; upper: number; lines?: [string, string]; color?: string; tooltip?: string }>;
 }
 
 export interface AnnotationLayerOptions {
@@ -106,7 +106,7 @@ export class AnnotationLayer implements Layer {
         (ref.markerValues ?? []).forEach((mv, i) => {
           const hasCI = Number.isFinite(mv.lower) && Number.isFinite(mv.upper);
           const [line1, line2] = mv.lines ?? [
-            `Fit ${mv.estimate.toFixed(2)}`,
+            mv.estimate.toFixed(2),
             hasCI ? `[${mv.lower.toFixed(2)}-${mv.upper.toFixed(2)}]` : ""
           ];
           ctx.markers.add({
@@ -120,7 +120,8 @@ export class AnnotationLayer implements Layer {
             ...(hasCI ? { yLow: yScale(mv.lower), yHigh: yScale(mv.upper) } : {}),
             color: mv.color ?? markerColor ?? DEFAULT_VALUE_COLOR,
             lines: [line1, line2],
-            kind: "reference-fit"
+            kind: "reference-fit",
+            tooltip: mv.tooltip
           });
         });
       }

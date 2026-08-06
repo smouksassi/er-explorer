@@ -20,6 +20,8 @@ export interface ObservedStatBin {
   color?: string;
   /** Dashed border on the label box (matches endpoint curve dash in compare mode). */
   strokeDash?: string;
+  /** Plain-text hover tooltip forwarded to the laid-out marker. */
+  tooltip?: string;
 }
 
 export interface ObservedStatLayerOptions {
@@ -60,7 +62,8 @@ export class ObservedStatLayer implements Layer {
         color: bin.color ?? defaultColor,
         lines: [primary, secondary],
         kind: "observed-stat",
-        strokeDash: bin.strokeDash
+        strokeDash: bin.strokeDash,
+        tooltip: bin.tooltip
       });
     });
   }

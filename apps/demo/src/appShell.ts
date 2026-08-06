@@ -2,6 +2,8 @@ export type ShellRail = "data" | "filters" | "analysis" | "overlays" | "style" |
 
 const RAILS: ShellRail[] = ["data", "filters", "analysis", "overlays", "style", "plot", "session"];
 
+let goToRail: (rail: ShellRail, opts?: { force?: boolean }) => void = () => {};
+
 export function initAppShell(onRailChange?: (rail: ShellRail) => void): void {
   const drawer = document.getElementById("appDrawer");
   const railButtons = document.querySelectorAll<HTMLButtonElement>("[data-rail]");
@@ -19,7 +21,13 @@ export function initAppShell(onRailChange?: (rail: ShellRail) => void): void {
   });
   updateThemeToggleLabel(themeToggle);
 
-  function selectRail(rail: ShellRail): void {
+  let activeRail: ShellRail = "data";
+
+  function selectRail(rail: ShellRail, opts?: { force?: boolean }): void {
+    if (!opts?.force && rail === activeRail && rail !== "plot") {
+      rail = "plot";
+    }
+    activeRail = rail;
     for (const id of RAILS) {
       const panel = document.getElementById(`drawer-${id}`);
       if (panel) panel.hidden = id !== rail;
@@ -36,6 +44,8 @@ export function initAppShell(onRailChange?: (rail: ShellRail) => void): void {
     onRailChange?.(rail);
   }
 
+  goToRail = selectRail;
+
   railButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
       const rail = btn.dataset.rail as ShellRail | undefined;
@@ -47,7 +57,7 @@ export function initAppShell(onRailChange?: (rail: ShellRail) => void): void {
     selectRail("plot");
   });
 
-  selectRail("data");
+  selectRail("data", { force: true });
 
   window.addEventListener("resize", () => {
     const active = document.querySelector<HTMLButtonElement>("[data-rail].active")?.dataset.rail as ShellRail | undefined;
@@ -57,8 +67,8 @@ export function initAppShell(onRailChange?: (rail: ShellRail) => void): void {
   });
 }
 
-export function setShellRail(rail: ShellRail): void {
-  document.querySelector<HTMLButtonElement>(`[data-rail="${rail}"]`)?.click();
+export function setShellRail(rail: ShellRail, opts?: { force?: boolean }): void {
+  goToRail(rail, opts);
 }
 
 function updateThemeToggleLabel(btn: HTMLButtonElement | null): void {
@@ -71,7 +81,9 @@ function updateThemeToggleLabel(btn: HTMLButtonElement | null): void {
 export function setPlotWorkspaceVisible(visible: boolean): void {
   const hint = document.getElementById("plotEmptyHint");
   const content = document.getElementById("plotContent");
+  const editMappingBtn = document.getElementById("editMappingBtn");
   if (hint) hint.hidden = visible;
   if (content) content.hidden = !visible;
+  if (editMappingBtn) editMappingBtn.hidden = !visible;
   document.body.classList.toggle("has-dataset", visible);
 }

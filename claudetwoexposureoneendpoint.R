@@ -36,14 +36,17 @@ ggresponseexpdist(data = effICGI |>
                   exposure_metrics = c("AUC","CMAX"),
                   exposure_distribution_percent =  "N (%)",
                   exposure_distribution_Ntotal = "right",
-                  exposure_distribution ="none",
+                  exposure_distribution ="boxplots",
+                  mean_obs_byexptile_group = "SEX",
+                  
                   proj_bydose = TRUE,
                   yproj = TRUE,
                   mean_obs_bydose = TRUE,
                   mean_obs_byexptile = FALSE,
                   exposure_metric_split =  "tertile",
                   model_type = "logistic")+
-  facet_grid(Endpoint~expname,scales="free_x")
+  facet_wrap2(Endpoint~SEX+expname,scales="free_x",ncol=4,
+              strip = strip_nested())
 
 
 ggresponseexpdist(data = effICGI |>
@@ -94,3 +97,31 @@ ggresponseexpdist(data = effICGI |>
                   yproj_dodge = 20
 )
 
+
+lung_long$auc <- lung_long$ph.karno
+lung_long$cmax <- lung_long$pat.karno
+lung_long$sex <- ifelse(lung_long$sex==1,"Male","Female")
+ggkmrisktable(data = lung_long, time = "time", status = "DV",
+              exposure_metrics =c("auc","cmax","age"),
+              exposure_metric_split = "tertile",
+              color_fill = "exptile",
+              linetype = "exptile",
+              groupvar1 = "Endpoint",
+              groupvar2 = "expname",
+              groupvar3= "sex",
+              
+              xlab = "Time of follow_up",
+              ylab ="Overall survival probability",
+              nrisk_table_variables = c("n.event","n.risk"),
+              # km_trans = "event",
+              km_median = "table",
+              km_median_table_pos = "right",
+              show_exptile_values = TRUE,
+              
+              km_logrank_pvalue = FALSE,
+              km_logrank_pvalue_cutoff = 0.0001,
+              km_logrank_pvalue_digits = 3,
+              km_band = TRUE,
+              nrisk_table_breaktimeby = 200,
+              facet_ncol = 3,
+              facet_formula = sex~expname)

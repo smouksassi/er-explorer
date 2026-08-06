@@ -13,6 +13,7 @@ import type { StudyDataset } from "@er-explorer/domain";
 import {
   type DemoColumnRole,
   EFFICGI_DEFAULT_ROLES,
+  guessColumnRole,
   roleHintForDemoRole,
   validateColumnMapping
 } from "./columnMapping";
@@ -25,7 +26,7 @@ export type EndpointId = string;
 const DOSE_PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f"];
 
 export const DEFAULT_EXPOSURE_ORDER: MetricId[] = ["auc", "cmax"];
-export const DEFAULT_ENDPOINT_ORDER: EndpointId[] = ["icgi", "icgi2", "icgi3", "brls", "prls"];
+export const DEFAULT_ENDPOINT_ORDER: EndpointId[] = ["icgi", "icgi7", "icgi2", "icgi3", "brls", "prls"];
 
 const LEGACY_CONTINUOUS_ENDPOINTS = new Set<string>(["brls", "prls"]);
 
@@ -81,21 +82,35 @@ export class DatasetContext {
     });
   }
 
-  static fromRecords(records: ExposureResponseRecord[], datasetId = "effICGI-demo-v1"): DatasetContext {
-    const rows: Array<Record<string, RawCellValue>> = records.map((r) => ({
+  static bundledRowsFromRecords(records: ExposureResponseRecord[]): Array<Record<string, RawCellValue>> {
+    return records.map((r) => ({
       id: r.id,
       study: r.study,
       dose: r.dose,
       doseNumeric: r.doseNumeric,
+      sex: r.sex,
+      age: r.age,
+      wt: r.wt,
+      race: r.race,
+      crcl: r.crcl,
+      gbds: r.gbds,
       auc: r.auc,
       cmax: r.cmax,
       icgi: r.icgi,
+      icgi7: r.icgi7,
       icgi2: r.icgi2,
       icgi3: r.icgi3,
       brls: r.brls,
       prls: r.prls
     }));
-    return DatasetContext.fromRows(rows, EFFICGI_DEFAULT_ROLES, { datasetId, datasetName: "Bundled effICGI" });
+  }
+
+  static fromRecords(records: ExposureResponseRecord[], datasetId = "effICGI-demo-v1"): DatasetContext {
+    return DatasetContext.fromRows(
+      DatasetContext.bundledRowsFromRecords(records),
+      EFFICGI_DEFAULT_ROLES,
+      { datasetId, datasetName: "Bundled effICGI" }
+    );
   }
 
   static fromRows(
@@ -213,7 +228,10 @@ export class DatasetContext {
   }
 
   isPlaceboDose(dose: string): boolean {
-    return dose === "Placebo" || dose === "0" || dose.toLowerCase() === "placebo";
+    const lower = dose.toLowerCase().trim();
+    if (lower === "placebo" || lower === "0" || lower === "control") return true;
+    if (lower.includes("placebo") || lower.includes("standard of care") || lower === "soc") return true;
+    return dose === "Placebo";
   }
 
   /** Optional study/pool id for tooltips (covariate column named study, else first covariate). */
@@ -223,6 +241,20 @@ export class DatasetContext {
     if (!studyCol) return "";
     const raw = getColumn(this.loaded, studyCol)[rowIndex];
     return raw === null || raw === undefined ? "" : String(raw);
+  }
+
+  covariateColumnIds(): string[] {
+    return columnsWithRole(this.columnRoles, "covariate");
+  }
+
+  /** `columnId: value` strings for scatter hover — every mapped covariate, including explicit missing. */
+  covariateHoverParts(rowIndex: number): string[] {
+    return this.covariateColumnIds().map((col) => {
+      const raw = getColumn(this.loaded, col)[rowIndex];
+      if (isMissing(raw)) return `${col}: missing`;
+      const text = typeof raw === "number" ? (Number.isInteger(raw) ? String(raw) : raw.toFixed(2)) : String(raw).trim();
+      return `${col}: ${text || "missing"}`;
+    });
   }
 
   toSnapshot(): DatasetSnapshot {
@@ -259,7 +291,8 @@ function parseDoseNumeric(label: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
-function rowsFromLoaded(loaded: LoadedDataset): Array<Record<string, RawCellValue>> {
+/** Row objects for the mapping UI (re-apply roles without re-uploading CSV). */
+export function rowsFromLoaded(loaded: LoadedDataset): Array<Record<string, RawCellValue>> {
   const rows: Array<Record<string, RawCellValue>> = [];
   for (let i = 0; i < loaded.rowCount; i++) {
     const row: Record<string, RawCellValue> = {};
@@ -280,19 +313,9 @@ export function inferRolesForColumns(
     if (roles[id]) continue;
     const values = getColumn(loaded, id);
     const meta = inferVariableMetadata(id, values);
-    roles[id] = guessColumnRoleFromMeta(id, meta.distinctCount);
+    roles[id] = guessColumnRole(id, meta.distinctCount);
   }
   return roles;
-}
-
-function guessColumnRoleFromMeta(columnId: string, distinctCount: number): DemoColumnRole {
-  const lower = columnId.toLowerCase();
-  if (lower === "id" || lower.endsWith("_id") || lower === "usubjid") return "identifier";
-  if (lower.includes("dose")) return "dose";
-  if (lower === "auc" || lower === "cmax") return "exposure";
-  if (lower.startsWith("icgi") || lower === "brls" || lower === "prls") return "endpoint";
-  if (distinctCount <= 6 && distinctCount >= 2) return "covariate";
-  return "ignore";
 }
 
 export function buildPendingContext(

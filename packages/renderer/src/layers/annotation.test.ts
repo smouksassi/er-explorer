@@ -72,7 +72,7 @@ describe("AnnotationLayer", () => {
       ]
     });
     expect(result.metadata.markers).toHaveLength(1);
-    expect(result.metadata.markers[0].lines).toEqual(["Fit 0.74", "[0.65-0.82]"]);
+    expect(result.metadata.markers[0].lines).toEqual(["0.74", "[0.65-0.82]"]);
   });
 
   it("omits yLow/yHigh (rather than NaN) for a markerValue with non-finite lower/upper (CI method 'none')", () => {
@@ -93,7 +93,7 @@ describe("AnnotationLayer", () => {
     const marker = result.metadata.markers[0];
     expect(marker.yLow).toBeUndefined();
     expect(marker.yHigh).toBeUndefined();
-    expect(marker.lines).toEqual(["Fit 0.74", ""]);
+    expect(marker.lines).toEqual(["0.74", ""]);
     const svg = result.content as string;
     expect(svg).not.toContain("NaN");
   });

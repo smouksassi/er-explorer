@@ -57,7 +57,7 @@
   .nav-btn:hover { background: var(--chip); color: var(--text); }
   .nav-btn.active { background: var(--accent-soft); border-color: var(--stroke); color: var(--accent); }
   .drawer {
-    width: min(320px, 88vw); flex-shrink: 0; background: var(--chrome); border-right: 1px solid var(--stroke);
+    width: min(440px, 94vw); flex-shrink: 0; background: var(--chrome); border-right: 1px solid var(--stroke);
     overflow: auto; padding: 16px 14px 24px; -webkit-overflow-scrolling: touch;
   }
   .drawer.hidden { display: none; }
@@ -128,13 +128,35 @@
   }
   .checkbox-group label:has(input:checked) { background: var(--accent-soft); color: var(--accent); }
   .checkbox-group input { accent-color: var(--accent); }
+  .checkbox-group.sortable-field-list {
+    flex-direction: column; flex-wrap: nowrap; gap: 2px; padding: 6px; list-style: none; margin: 0;
+  }
+  .sortable-field-item {
+    display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 8px;
+  }
+  .sortable-field-item.sortable-dragging { opacity: 0.45; }
+  .sortable-field-item.sortable-drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
+  .sortable-drag-handle {
+    cursor: grab; color: var(--muted); font-size: 11px; line-height: 1; user-select: none; padding: 4px 2px;
+  }
+  .sortable-field-item label { flex: 1; margin: 0; }
+  .field-hint { font-size: 11px; color: var(--muted); font-weight: 500; margin: -2px 0 6px; line-height: 1.35; }
   button.toggle { padding: 6px 9px; border: none; border-radius: 8px; background: transparent; cursor: pointer; font-weight: 600; font-size: 12px; }
   button.toggle.active { background: var(--accent); color: #fff; }
   button.toggle:disabled { cursor: wait; opacity: 0.7; }
   .mapping-table-wrap { overflow-x: auto; margin: 10px 0; border: 1px solid var(--stroke); border-radius: 10px; }
   .mapping-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  .mapping-table th, .mapping-table td { padding: 6px 8px; border-bottom: 1px solid var(--stroke); text-align: left; }
+  .mapping-table th, .mapping-table td { padding: 6px 8px; border-bottom: 1px solid var(--stroke); text-align: left; vertical-align: middle; }
   .mapping-table th { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+  .mapping-table td:last-child { min-width: 128px; }
+  .mapping-table select { min-width: 120px; width: 100%; max-width: 160px; }
+  .column-roles-summary { margin-top: 12px; border: 1px solid var(--stroke); border-radius: 10px; padding: 10px 12px; background: var(--elevated); }
+  .column-roles-summary .summary-title { font-size: 10px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 8px; }
+  .column-roles-list { list-style: none; margin: 0; padding: 0; font-size: 12px; max-height: 240px; overflow-y: auto; }
+  .column-roles-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--stroke); }
+  .column-roles-list li:last-child { border-bottom: none; }
+  .column-roles-list .col-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  .column-roles-list .col-role { color: var(--accent); font-weight: 700; font-size: 10px; text-transform: uppercase; white-space: nowrap; }
   .endpoint-model-list, .compare-norm-list { display: flex; flex-direction: column; gap: 8px; }
   .endpoint-model-row, .compare-norm-row {
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(88px, 110px); gap: 8px; align-items: center;
@@ -253,6 +275,7 @@
   .responder-compact .row-mini { padding: 3px 0; border-top: 1px dashed var(--stroke); }
   .responder-compact .row-mini:first-child { border-top: none; }
   svg { width: 100%; height: 100%; overflow: visible; display: block; }
+  .chart svg .er-marker-hit { cursor: help; }
   .tooltip {
     position: absolute; pointer-events: none; background: rgba(17, 24, 39, 0.95); color: #fff;
     border-radius: 10px; padding: 8px 10px; font-size: 12px; z-index: 5; opacity: 0; transition: opacity 0.08s;
@@ -322,12 +345,23 @@
     </div>
 
     <div class="drawer-panel" id="drawer-data">
-      <p class="hint">Start by loading the bundled effICGI example or uploading your own wide CSV. Map columns, then explore exposure–response in the plot view.</p>
+      <p class="hint">Load the bundled effICGI example or upload a wide CSV. Both paths show the column mapping table below — adjust roles, then apply. You can reopen mapping anytime without re-uploading.</p>
       <div class="drawer-section">
         <button type="button" class="btn primary" id="reloadBundledBtn" style="width:100%; margin-bottom:8px;">Use example effICGI data</button>
         <button type="button" class="btn" id="loadCsvBtn" style="width:100%;">Upload CSV…</button>
         <input type="file" id="csvFileInput" accept=".csv,text/csv" />
         <span id="dataStatus" class="session-status"></span>
+        <button type="button" class="btn" id="editMappingBtn" hidden style="width:100%; margin-top:10px;">Edit column mapping…</button>
+      </div>
+      <div id="columnRolesSummary" class="column-roles-summary" hidden>
+        <p class="summary-title">Mapped columns (current roles)</p>
+        <ul id="columnRolesList" class="column-roles-list"></ul>
+        <p class="hint" style="margin:8px 0 0">Covariates mapped here appear on scatter hover (value or “missing”). Covariate role does not drop rows from E–R plots unless you filter them.</p>
+      </div>
+      <div class="field" id="referenceArmField" hidden>
+        <label for="referenceArmDoses">Reference arm dose label(s)</label>
+        <input type="text" id="referenceArmDoses" placeholder="Placebo, Control" autocomplete="off" />
+        <p class="hint" style="margin:6px 0 0">Comma-separated dose levels with no active drug (placebo/SOC). PK-like exposure names (AUC, Cmax, Cmin, CAVE, Css, …) treat reference arm as ~0; other x variables (wt, age) show all arms.</p>
       </div>
       <div id="mappingPanel" style="display: none;">
         <div class="mapping-table-wrap">
@@ -354,8 +388,12 @@
 
     <div class="drawer-panel" id="drawer-analysis" hidden>
       <p class="hint">Choose exposure metrics and endpoints. Set each endpoint’s analysis model; compare view can mix binary and linear (linear scores use the scale below).</p>
-      <div class="field"><span class="field-label">Exposure</span><div class="checkbox-group" id="exposureGroup"></div></div>
-      <div class="field"><span class="field-label">Endpoint</span><div class="checkbox-group" id="endpointGroup"></div></div>
+      <div class="field"><span class="field-label">Exposure</span>
+        <p class="field-hint">Drag ⋮⋮ to reorder columns in the plot grid.</p>
+        <ul class="checkbox-group" id="exposureGroup"></ul></div>
+      <div class="field"><span class="field-label">Endpoint</span>
+        <p class="field-hint">Drag ⋮⋮ to reorder rows in the plot grid.</p>
+        <ul class="checkbox-group" id="endpointGroup"></ul></div>
       <div class="field">
         <span class="field-label">Endpoint models</span>
         <div id="endpointModelsList" class="endpoint-model-list"></div>
@@ -376,7 +414,7 @@
     </div>
 
     <div class="drawer-panel" id="drawer-overlays" hidden>
-      <p class="hint">Reference splits, observed vs fitted markers, and dose-click readouts.</p>
+      <p class="hint">Reference splits, observed vs fitted markers, and dose-click readouts. Hover any %/N or fit callout for exposure at that point and fitted value when Fitted + CI is on.</p>
       <div class="field"><span class="field-label">Group exposures by</span>
         <div class="checkbox-group" id="refLineGroup">
           <label><input type="radio" name="refLine" value="none" checked /> None</label>
@@ -387,7 +425,8 @@
       </div>
       <div class="field"><div class="checkbox-group" id="splitAnnotationGroup">
         <label><input type="checkbox" id="showObservedResp" disabled /> Observed (%/N)</label>
-        <label><input type="checkbox" id="showReferenceFit" disabled /> Fitted + CI</label>
+        <label><input type="checkbox" id="showReferenceFit" disabled /> Fitted + CI at splits</label>
+        <label><input type="checkbox" id="showFittedAtObservedBin" disabled /> Fitted + CI at bin (mean exposure)</label>
         <label><input type="checkbox" id="showSplitValue" disabled /> Split value</label>
       </div></div>
       <div class="field"><span class="field-label">On dose click</span>
@@ -399,7 +438,7 @@
           <label><input type="checkbox" id="expandDistReadout" /> Expand readout</label>
         </div>
       </div>
-      <p class="hint" id="refLineNote" style="display:none;">Reference lines exclude placebo from cut points; placebo still appears at zero exposure when observed markers are on.</p>
+      <p class="hint" id="refLineNote" style="display:none;">Reference lines exclude the reference arm from cut points when exposure is PK-like (AUC/Cmax or ~0 in reference arm). Non-PK exposures (e.g. wt) include all dose groups in splits and distributions.</p>
       <div class="field"><span class="field-label">Exposure distribution</span>
         <div class="checkbox-group" id="distModeGroup">
           <button type="button" class="toggle" data-mode="lineranges">Lineranges</button>
@@ -465,7 +504,7 @@
       </div>
     </header>
     <p class="panel-note" id="scatterNote" style="display:none; padding:0 4px 8px; max-width:900px;">
-      Drag a box on a scatter panel to brush patients (linked across panels). Click a dose row in the distribution strip to project fits. Upload data from the Data menu when starting fresh.
+      Click a dose row in the distribution strip to project fits. Hover any callout for exposure and fitted details. Upload data from the Data menu when starting fresh.
     </p>
 
     <div class="plot-stage">

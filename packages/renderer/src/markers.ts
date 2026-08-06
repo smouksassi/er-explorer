@@ -145,4 +145,13 @@ export function renderLaidOutMarker(target: DrawTarget, marker: LaidOutMarker): 
   target.drawCircle(x, y, 4.6, { fill: color, stroke: "#fff", strokeWidth: 1.4 });
   target.drawText(x, labelTop + 14, line1, { textAnchor: "middle", fill: color, fontSize: 12, fontWeight: 800 });
   target.drawText(x, labelTop + 26, line2, { textAnchor: "middle", fill: color, fontSize: 10.5 });
+
+  if (marker.tooltip) {
+    const hitAttrs = { class: "er-marker-hit", "data-er-marker-tip": marker.tooltip, "pointer-events": "all" };
+    target.drawCircle(x, y, 18, { fill: "transparent", stroke: "none", opacity: 0, attrs: hitAttrs });
+    target.drawRect(
+      { x: x - labelBoxWidth / 2, y: labelTop, width: labelBoxWidth, height: LABEL_HEIGHT },
+      { fill: "transparent", opacity: 0, attrs: hitAttrs }
+    );
+  }
 }

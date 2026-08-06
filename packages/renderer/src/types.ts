@@ -81,6 +81,8 @@ export interface MarkerCandidate {
   kind: string;
   /** Optional dash for label box border (e.g. endpoint line style in compare overlay). */
   strokeDash?: string;
+  /** Plain-text tooltip (newlines ok) for marker hover in the demo shell. */
+  tooltip?: string;
 }
 
 /** A `MarkerCandidate` after collision-avoidant layout - `labelTop` is the resolved pixel y for
