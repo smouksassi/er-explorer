@@ -57,9 +57,10 @@ jobs:
       - name: Build packages/data
         run: node_modules/.bin/tsc -p packages/data/tsconfig.build.json
 
+      # vitest is a devDependency of @er-explorer/data only (not hoisted to repo root).
       - name: Test packages/data (layout enumeration)
         working-directory: packages/data
-        run: ../../node_modules/.bin/vitest run
+        run: ./node_modules/.bin/vitest run
 
       - name: Build packages/renderer
         run: node_modules/.bin/tsc -p packages/renderer/tsconfig.build.json
