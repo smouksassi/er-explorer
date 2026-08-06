@@ -59,3 +59,18 @@ export type { AnalysisVisualizationConfig, Analysis } from "./analysis";
 export type { NoteEntry, ExportRecord, WorkspaceMetadata, Workspace } from "./workspace";
 
 export type { ReproducibilityInfo, Session } from "./session";
+
+export type {
+  LayoutDimension,
+  ColorEncoding,
+  VariableColorBinning,
+  DistributionLinkage,
+  DistributionLayoutSpec,
+  ViewLayoutSpec,
+  FacetKey,
+  ScatterPanelSpec,
+  DistPanelSpec,
+  GroupKey
+} from "./viewLayout";
+
+export { effectiveEndpointOverlay, layoutHasEndpointFacet } from "./viewLayout";

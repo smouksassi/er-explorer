@@ -60,3 +60,20 @@ export { type AnalysisView, createAnalysisView } from "./views";
 export { type LongViewRow, type LongViewQuery, queryLongView } from "./longView";
 
 export { type WideViewRow, type WideViewQuery, queryWideView } from "./wideView";
+
+export {
+  type ViewLayoutEnumerateInput,
+  enumerateScatterPanels,
+  enumerateDistPanels,
+  countPanelsForGuidedTopology,
+  facetKeyMatchesSubset
+} from "./viewLayoutEnumerate";
+
+export {
+  type VariableLevelModel,
+  buildVariableLevelModel,
+  levelForRow,
+  isNumericCovariateColumn,
+  binLabelsFor,
+  effectiveVariableBinning
+} from "./variableBins";

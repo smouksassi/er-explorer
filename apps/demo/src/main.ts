@@ -61,7 +61,9 @@ import {
   buildPendingContext,
   rowsFromLoaded
 } from "./datasetContext";
-import { loadDataset } from "@er-explorer/data";
+import { loadDataset, enumerateDistPanels, enumerateScatterPanels, getColumn } from "@er-explorer/data";
+import type { DistPanelSpec, ScatterPanelSpec, ViewLayoutSpec } from "@er-explorer/domain";
+import { effectiveEndpointOverlay, layoutHasEndpointFacet } from "@er-explorer/domain";
 import {
   type ByodSessionPayload,
   buildByodPayload,
@@ -88,6 +90,22 @@ import {
   describeActiveFilters
 } from "./dataFilters";
 import { applyMetricStackHeight, applyScatterPaneRatio, attachFacetBlockSplitter, attachMetricStackSplitter, attachPlotStackHeightResizer, loadMetricStackHeight, loadScatterPaneRatio, saveMetricStackHeight, saveScatterPaneRatio } from "./paneSplit";
+import { defaultAdvancedSpecFromGuided } from "./guidedViewLayout";
+import { buildColorBinModel, colorLevelForRow, type ColorBinModel } from "./colorVariableBins";
+import { mountViewLayoutGrid } from "./renderViewLayout";
+import {
+  applyAdvancedSpecToUi,
+  applyFacetSelectFromSpec,
+  linkageFromSelectValue,
+  populateFacetSelectOptions,
+  readAdvancedSpecFromUi
+} from "./advancedLayoutUi";
+import {
+  defaultAdvancedLayout,
+  layoutColorFacetConflict,
+  resolveViewLayoutSpec,
+  type LayoutMode
+} from "./viewLayoutState";
 
 /**
  * Chart-input data shapes formerly imported from the now-deleted
@@ -340,8 +358,9 @@ function exposureIsPkMetric(metric: ExposureMetric): boolean {
   return Math.max(...vals) <= 1e-6;
 }
 
-function exposureXDomain(metric: ExposureMetric): [number, number] {
-  const xs = dataFilteredRowIndices().map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
+function exposureXDomain(metric: ExposureMetric, rowIndices?: number[]): [number, number] {
+  const indices = rowIndices ?? dataFilteredRowIndices();
+  const xs = indices.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
   if (!xs.length) return [0, 1];
   const hi = Math.max(...xs);
   if (exposureIsPkMetric(metric)) return [0, hi];
@@ -462,6 +481,8 @@ interface DemoState {
   endpointColumnOrder: EndpointId[];
   /** Dose labels treated as reference arm (placebo/SOC). Empty = auto-detect from dataset. */
   referenceArmDoses: string[];
+  layoutMode: LayoutMode;
+  advancedViewLayout: ViewLayoutSpec | null;
 }
 
 const state: DemoState = {
@@ -495,7 +516,9 @@ const state: DemoState = {
   distReadoutExpanded: false,
   exposureColumnOrder: [],
   endpointColumnOrder: [],
-  referenceArmDoses: []
+  referenceArmDoses: [],
+  layoutMode: "guided",
+  advancedViewLayout: null
 };
 
 function resolveDoseColor(dose: string): string {
@@ -516,8 +539,19 @@ interface DistributionPanelHandle {
 }
 let distributionPanels: DistributionPanelHandle[] = [];
 let distributionAnimating = false;
+const scatterPanelById = new Map<string, ScatterPanelSpec>();
+const distPanelById = new Map<string, DistPanelSpec>();
+let activeViewLayoutSpec: ViewLayoutSpec | null = null;
 
-const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
+const $ = <T extends HTMLElement>(id: string): T => {
+  const el = document.getElementById(id);
+  if (!el) {
+    throw new Error(
+      `Demo UI element #${id} not found. Run "node apps/demo/scripts/verify-build.mjs" from the repo root, then open apps/demo/dist/index.html or apps/demo/index.html (requires apps/demo/bundle.js).`
+    );
+  }
+  return el as T;
+};
 const scatterPanelsEl = $<HTMLDivElement>("scatterPanels");
 const legendEl = $<HTMLDivElement>("legend");
 const statusEl = $<HTMLDivElement>("status");
@@ -573,6 +607,223 @@ const endpointColorSchemeSelect = $<HTMLSelectElement>("endpointColorScheme");
 const endpointModelsListEl = $<HTMLDivElement>("endpointModelsList");
 const compareNormSectionEl = $<HTMLDivElement>("compareNormSection");
 const compareNormListEl = $<HTMLDivElement>("compareNormList");
+const advancedLayoutSectionEl = $<HTMLDivElement>("advancedLayoutSection");
+const advancedRowFacetsEl = $<HTMLSelectElement>("advancedRowFacets");
+const advancedColFacetsEl = $<HTMLSelectElement>("advancedColFacets");
+const advancedColorByEl = $<HTMLSelectElement>("advancedColorBy");
+const advancedColorBinningEl = $<HTMLSelectElement>("advancedColorBinning");
+const advancedFitByColorEl = $<HTMLInputElement>("advancedFitByColor");
+const advancedEndpointOverlayEl = $<HTMLInputElement>("advancedEndpointOverlay");
+const advancedDistLinkageEl = $<HTMLSelectElement>("advancedDistLinkage");
+const advancedColorDistShapesEl = $<HTMLInputElement>("advancedColorDistShapes");
+const resetAdvancedToGuidedBtn = $<HTMLButtonElement>("resetAdvancedToGuidedBtn");
+const advancedLayoutStatusEl = $<HTMLParagraphElement>("advancedLayoutStatus");
+const guidedLayoutHintEl = $<HTMLDivElement>("guidedLayoutHint");
+
+function refreshAdvancedColorOptions(): void {
+  if (!dataset) return;
+  const keep = advancedColorByEl.value;
+  advancedColorByEl.innerHTML =
+    '<option value="dose">Dose</option><option value="endpoints">Endpoints</option>';
+  for (const col of filterColumnOptions()) {
+    const opt = document.createElement("option");
+    opt.value = col.id;
+    opt.textContent = col.label;
+    advancedColorByEl.appendChild(opt);
+  }
+  if ([...advancedColorByEl.options].some((o) => o.value === keep)) advancedColorByEl.value = keep;
+}
+
+function colorBinModelForSpec(spec: ViewLayoutSpec | null | undefined, cohortRowIndices: number[]): ColorBinModel | null {
+  if (!spec || spec.color.kind !== "variable" || !dataset) return null;
+  const binning = spec.continuousBinning ?? spec.color.binning;
+  return buildColorBinModel(dataset.loaded, spec.color.variableId, cohortRowIndices, binning);
+}
+
+function refreshAdvancedFacetOptions(): void {
+  if (!dataset) return;
+  const covariates = filterColumnOptions();
+  populateFacetSelectOptions(advancedRowFacetsEl, covariates);
+  populateFacetSelectOptions(advancedColFacetsEl, covariates);
+}
+
+function layoutAnalysisContext(): {
+  endpointIds: string[];
+  endpointOrder: string[];
+  xMetricIds: string[];
+  xMetricOrder: string[];
+} {
+  return {
+    endpointIds: selectedEndpoints(),
+    endpointOrder: endpointOrder(),
+    xMetricIds: selectedExposureMetrics(),
+    xMetricOrder: exposureOrder()
+  };
+}
+
+function pullAdvancedSpecFromUi(): ViewLayoutSpec {
+  return readAdvancedSpecFromUi(
+    selectedEndpoints(),
+    selectedExposureMetrics(),
+    advancedRowFacetsEl,
+    advancedColFacetsEl,
+    advancedColorByEl.value,
+    advancedColorBinningEl.value,
+    advancedFitByColorEl.checked,
+    linkageFromSelectValue(advancedDistLinkageEl.value),
+    advancedColorDistShapesEl.checked,
+    advancedEndpointOverlayEl.checked
+  );
+}
+
+function resolveActiveViewLayoutSpec(): ViewLayoutSpec {
+  const ctx = layoutAnalysisContext();
+  return resolveViewLayoutSpec(state.layoutMode, guidedLayoutInput(), state.advancedViewLayout, ctx);
+}
+
+function syncAdvancedFacetSelectsFromSpec(spec: ViewLayoutSpec): void {
+  applyFacetSelectFromSpec(advancedRowFacetsEl, spec.rowDimensions);
+  applyFacetSelectFromSpec(advancedColFacetsEl, spec.colDimensions);
+}
+
+function syncAdvancedFitByColorUi(spec: ViewLayoutSpec | null): void {
+  const allowed = spec?.color.kind === "variable";
+  advancedFitByColorEl.disabled = !allowed;
+  if (!allowed) advancedFitByColorEl.checked = false;
+  const epFacet = spec ? layoutHasEndpointFacet(spec) : false;
+  advancedEndpointOverlayEl.disabled = epFacet;
+  if (epFacet) advancedEndpointOverlayEl.checked = false;
+}
+
+function updateAdvancedLayoutStatus(spec: ViewLayoutSpec | null): void {
+  if (state.layoutMode !== "advanced") {
+    advancedLayoutStatusEl.textContent = "";
+    return;
+  }
+  const conflict = spec ? layoutColorFacetConflict(spec) : null;
+  const doseFitNote =
+    spec?.color.kind === "dose" && advancedFitByColorEl.checked
+      ? "Separate fits by dose are not supported (dose is the ER x-axis grouping for projections)."
+      : "";
+  const base =
+    "Advanced layout follows Analysis exposure/endpoint selections. Use “Copy current Guided layout” only when you want Guided’s facet recipe.";
+  advancedLayoutStatusEl.textContent = [conflict, doseFitNote].filter(Boolean).join(" ") || base;
+}
+
+function syncLayoutModeUi(options?: { refreshAdvancedControls?: boolean }): void {
+  const advanced = state.layoutMode === "advanced";
+  advancedLayoutSectionEl.hidden = !advanced;
+  guidedLayoutHintEl.hidden = advanced;
+  gridLayoutSelect.disabled = advanced;
+  if (advanced) {
+    if (options?.refreshAdvancedControls) {
+      refreshAdvancedFacetOptions();
+      const spec =
+        state.advancedViewLayout ??
+        defaultAdvancedLayout(
+          selectedEndpoints(),
+          endpointOrder(),
+          selectedExposureMetrics(),
+          exposureOrder()
+        );
+      applyAdvancedSpecToUi(
+        spec,
+        advancedRowFacetsEl,
+        advancedColFacetsEl,
+        advancedColorByEl,
+        advancedColorBinningEl,
+        advancedFitByColorEl,
+        advancedDistLinkageEl,
+        advancedColorDistShapesEl,
+        advancedEndpointOverlayEl
+      );
+    }
+    syncAdvancedFitByColorUi(state.advancedViewLayout ?? activeViewLayoutSpec);
+    updateAdvancedLayoutStatus(state.advancedViewLayout ?? activeViewLayoutSpec);
+  } else {
+    advancedLayoutStatusEl.textContent = "";
+  }
+  document.querySelectorAll<HTMLInputElement>('input[name="layoutMode"]').forEach((rb) => {
+    rb.checked = rb.value === state.layoutMode;
+  });
+}
+
+function covariateLabel(variableId: string): string {
+  return filterColumnOptions().find((c) => c.id === variableId)?.label ?? variableId;
+}
+
+function facetDimensionValueLabel(
+  dim: import("@er-explorer/domain").LayoutDimension,
+  panel: ScatterPanelSpec,
+  facetKey: ScatterPanelSpec["facetKey"]
+): string {
+  const ds = requireDataset();
+  if (dim.kind === "endpoints") return ds.endpointLabel(panel.endpointId);
+  if (dim.kind === "xMetrics") return exposureLabel(panel.xVariableId);
+  const raw = facetKey[dim.variableId];
+  const name = covariateLabel(dim.variableId);
+  return raw != null && String(raw).length ? `${name}: ${raw}` : name;
+}
+
+function columnTitleForPanel(panel: ScatterPanelSpec, spec: ViewLayoutSpec): string {
+  if (!spec.colDimensions.length) {
+    return exposureLabel(panel.xVariableId);
+  }
+  return spec.colDimensions.map((dim) => facetDimensionValueLabel(dim, panel, panel.facetKey)).join(" · ");
+}
+
+function rowStripLabelForPanels(panels: ScatterPanelSpec[], spec: ViewLayoutSpec): string {
+  if (!panels.length) return "";
+  const panel = panels[0]!;
+  if (!spec.rowDimensions.length) return "";
+  return spec.rowDimensions.map((dim) => facetDimensionValueLabel(dim, panel, panel.facetKey)).join(" · ");
+}
+
+function appendLegendTitle(container: HTMLElement, title: string): void {
+  const el = document.createElement("div");
+  el.className = "legend-title";
+  el.textContent = title;
+  container.appendChild(el);
+}
+
+function renderLayoutColorLegend(spec: ViewLayoutSpec): void {
+  const ds = requireDataset();
+  legendEl.innerHTML = "";
+  if (spec.color.kind === "dose") {
+    appendLegendTitle(legendEl, "Dose");
+    for (const dose of DOSE_ORDER()) {
+      const item = document.createElement("div");
+      item.className = "dotKey";
+      item.innerHTML = `<span class="swatch" style="background:${resolveDoseColor(dose)}"></span> ${escapeHtml(dose)}`;
+      legendEl.appendChild(item);
+    }
+    return;
+  }
+  if (spec.color.kind === "endpoints") {
+    appendLegendTitle(legendEl, "Endpoint");
+    for (const endpoint of selectedEndpoints()) {
+      const item = document.createElement("div");
+      item.className = "dotKey";
+      item.innerHTML = `<span class="swatch" style="background:${endpointColor(endpoint)}"></span> ${escapeHtml(ds.endpointLabel(endpoint))}`;
+      legendEl.appendChild(item);
+    }
+    return;
+  }
+  const variableId = spec.color.variableId;
+  appendLegendTitle(legendEl, covariateLabel(variableId));
+  const model = colorBinModelForSpec(spec, dataFilteredRowIndices());
+  const levels = model?.levels ?? distinctVariableLevels(variableId, dataFilteredRowIndices());
+  for (const level of levels) {
+    const item = document.createElement("div");
+    item.className = "dotKey";
+    item.innerHTML = `<span class="swatch" style="background:${variableColorForLevel(variableId, level, levels)}"></span> ${escapeHtml(level)}`;
+    legendEl.appendChild(item);
+  }
+}
+
+function renderVariableColorLegend(variableId: string): void {
+  renderLayoutColorLegend({ mode: "advanced", rowDimensions: [], colDimensions: [], color: { kind: "variable", variableId }, fitByColor: false, distribution: { linkage: "shared_by_x_column", colorDistShapes: false } });
+}
 
 let pendingCsvRows: Array<Record<string, import("@er-explorer/data").RawCellValue>> | null = null;
 let pendingColumnRoles: Record<string, DemoColumnRole> = {};
@@ -652,7 +903,15 @@ function panelWidth(): number {
 type EndpointFit = { kind: "logistic"; model: LogisticModel } | { kind: "linear"; model: LinearParams };
 
 function fitFor(metric: ExposureMetric, endpoint: Endpoint): { fit: EndpointFit; xs: number[]; ys: number[] } {
-  const indices = recordsWithEndpoint(endpoint);
+  return fitForCohort(metric, endpoint, recordsWithEndpoint(endpoint));
+}
+
+function fitForCohort(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  cohortRowIndices: number[]
+): { fit: EndpointFit; xs: number[]; ys: number[] } {
+  const indices = cohortRowIndices.filter((i) => Number.isFinite(endpointValue(i, endpoint)));
   const xs = indices.map((i) => exposureValue(i, metric));
   const ys = indices.map((i) => endpointValue(i, endpoint));
   if (isContinuousEndpoint(endpoint)) {
@@ -663,6 +922,32 @@ function fitFor(metric: ExposureMetric, endpoint: Endpoint): { fit: EndpointFit;
   const model = fitLogisticModel(xs, ys);
   if (!model) throw new Error(`Unable to fit logistic model for ${metric}/${endpoint}`);
   return { fit: { kind: "logistic", model }, xs, ys };
+}
+
+function variableColorForLevel(variableId: string, level: string, levels: string[]): string {
+  const idx = levels.indexOf(level);
+  const palette = COLOR_SCHEME_PALETTES.tableau;
+  return palette[(idx >= 0 ? idx : 0) % palette.length]!;
+}
+
+function distinctVariableLevels(variableId: string, rowIndices: number[]): string[] {
+  const loaded = requireDataset().loaded;
+  const set = new Set<string>();
+  for (const i of rowIndices) {
+    const raw = getColumn(loaded, variableId)[i];
+    if (raw === null || raw === undefined) continue;
+    set.add(String(raw).trim());
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+function variableColorPaletteLevels(colorVarId: string, cohortRowIndices?: number[]): string[] {
+  return distinctVariableLevels(colorVarId, cohortRowIndices ?? dataFilteredRowIndices());
+}
+
+function cohortForPanel(panelId?: string): number[] | undefined {
+  if (!panelId) return undefined;
+  return scatterPanelById.get(panelId)?.rowIndices;
 }
 
 function curveFor(fit: EndpointFit, xs: number[], ys: number[], xDomain: [number, number]): PredictionResult {
@@ -1049,7 +1334,15 @@ function paintSyncedMetricStacks(active: Set<number>): void {
     if (kind === "scatter-only") {
       const endpoint = stack.dataset.endpoint as Endpoint;
       if (!endpoint || !scatterWrap) return;
-      paintRegularScatterIntoWrap(scatterWrap, metric, endpoint, active, width, scatterH);
+      paintRegularScatterIntoWrap(
+        scatterWrap,
+        metric,
+        endpoint,
+        active,
+        width,
+        scatterH,
+        stack.dataset.panelId
+      );
       pinChartSvgToContainer(scatterWrap, width, scatterH);
       return;
     }
@@ -1059,7 +1352,7 @@ function paintSyncedMetricStacks(active: Set<number>): void {
         .split("|")
         .filter(Boolean) as Endpoint[];
       if (!endpoints.length || !scatterWrap) return;
-      paintCompareScatterIntoWrap(scatterWrap, metric, endpoints, active, width, scatterH);
+      paintCompareScatterIntoWrap(scatterWrap, metric, endpoints, active, width, scatterH, stack.dataset.panelId);
       pinChartSvgToContainer(scatterWrap, width, scatterH);
       return;
     }
@@ -1079,7 +1372,7 @@ function paintSyncedMetricStacks(active: Set<number>): void {
         distH,
         ctx.splitByEndpoints,
         ctx.readoutEndpoints,
-        { showReadout: true, omitEndpointFit: ctx.omitEndpointFit }
+        { showReadout: true, omitEndpointFit: ctx.omitEndpointFit, panelId: stack.dataset.panelId }
       );
       return;
     }
@@ -1573,10 +1866,15 @@ function computeDisplayReferenceLines(metric: ExposureMetric): ReferenceLine[] {
  * just the count (no repeated "n=" prefix per bin); "n_pct" adds that bin's share of this
  * dose group's own patients, e.g. "139 (93%)".
  */
-function computeSplitAnnotations(metric: ExposureMetric, dose: string, xDomain: [number, number], mode: SplitAnnotationMode): DistributionSplitAnnotation[] {
+function computeSplitAnnotations(
+  metric: ExposureMetric,
+  xDomain: [number, number],
+  mode: SplitAnnotationMode,
+  rowIndices: number[]
+): DistributionSplitAnnotation[] {
   const cutpoints = computeReferenceLines(metric).map((r) => r.value);
-  if (!cutpoints.length) return [];
-  const vals = rowIndicesForDose(dose).map((i) => exposureValue(i, metric));
+  if (!cutpoints.length || !rowIndices.length) return [];
+  const vals = rowIndices.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
   if (!vals.length) return [];
 
   const binCount = cutpoints.length + 1;
@@ -1593,13 +1891,22 @@ function computeSplitAnnotations(metric: ExposureMetric, dose: string, xDomain: 
     const lower = i === 0 ? xDomain[0] : cutpoints[i - 1];
     const upper = i === cutpoints.length ? xDomain[1] : cutpoints[i];
     const pct = Math.round((counts[i] / vals.length) * 100);
-    // Lowercase "n=" - this is a per-bin sub-count of this dose's own N (see the boxplot row's
-    // own "N=" total label), not a second total, so it's deliberately labeled at the other end
-    // of the N/n convention.
     const label = mode === "n_pct" ? `n=${counts[i]} (${pct}%)` : `n=${counts[i]}`;
     out.push({ x: (lower + upper) / 2, label });
   }
   return out;
+}
+
+function splitAnnotationsForRows(
+  metric: ExposureMetric,
+  xDomain: [number, number],
+  mode: SplitAnnotationMode,
+  rowIndices: number[],
+  skip: boolean
+): DistributionSplitAnnotation[] | undefined {
+  if (skip || mode === "off" || !rowIndices.length) return undefined;
+  const ann = computeSplitAnnotations(metric, xDomain, mode, rowIndices);
+  return ann.length ? ann : undefined;
 }
 
 function rowIndicesDosed(): number[] {
@@ -1730,95 +2037,133 @@ interface ScatterMeta {
   yScale: { domain: [number, number]; range: [number, number] };
 }
 
-function renderRegularFacetGrid(metrics: ExposureMetric[], endpoints: Endpoint[], _active: Set<number>): void {
+function guidedLayoutInput(): import("./guidedViewLayout").GuidedLayoutInput {
+  return {
+    gridLayout: state.gridLayout,
+    compareEndpoints: state.compareEndpoints,
+    compareDistByEndpoint: state.compareDistByEndpoint,
+    exposureMetricIds: selectedExposureMetrics(),
+    exposureColumnOrder: state.exposureColumnOrder,
+    endpointIds: selectedEndpoints(),
+    endpointColumnOrder: state.endpointColumnOrder
+  };
+}
+
+function renderViewLayoutFacetGrid(metrics: ExposureMetric[], endpoints: Endpoint[]): void {
   const ds = requireDataset();
-  const compareOverlay = isEndpointComparisonActive();
+  const spec = activeViewLayoutSpec ?? resolveActiveViewLayoutSpec();
+  scatterPanelById.clear();
+  distPanelById.clear();
 
-  if (compareOverlay) {
-    const facet = createFacetLayoutShell();
-    const scatterBlock = facet.querySelector(".facet-scatter-block")!;
-    const distBlock = facet.querySelector(".facet-dist-block")!;
+  const scatterPanels = enumerateScatterPanels(
+    ds.loaded,
+    [],
+    spec,
+    { xMetricIds: metrics, endpointIds: endpoints },
+    dataFilteredRowIndices()
+  );
+  for (const p of scatterPanels) scatterPanelById.set(p.id, p);
 
-    const rowEl = document.createElement("div");
-    rowEl.className = "endpoint-row";
-    rowEl.innerHTML = `<div class="facet-row-label">Response · endpoints overlaid</div>`;
-    const rowGrid = document.createElement("div");
-    rowGrid.className = "panel-grid";
-    rowEl.appendChild(rowGrid);
-    scatterBlock.appendChild(rowEl);
-    for (const metric of metrics) {
-      appendCompareScatterOnlyCell(rowGrid, metric, endpoints);
-    }
+  const readoutEp = endpoints[0] ?? scatterPanels[0]?.endpointId ?? "";
+  const distPanels = enumerateDistPanels(
+    spec,
+    scatterPanels,
+    readoutEp,
+    effectiveEndpointOverlay(spec) ? endpoints : undefined
+  );
+  for (const p of distPanels) distPanelById.set(p.id, p);
 
-    const distGrid = document.createElement("div");
-    distGrid.className = "panel-grid facet-shared-dist-grid";
-    for (const metric of metrics) {
-      appendDistOnlyCell(distGrid, metric, endpoints[0]!, { compareEndpoints: endpoints });
-    }
-    distBlock.appendChild(distGrid);
+  mountViewLayoutGrid(scatterPanelsEl, spec, scatterPanels, distPanels, {
+    escapeHtml,
+    rowStripLabel: (panels) => rowStripLabelForPanels(panels, spec),
+    createFacetLayoutShell,
+    attachFacetLayoutSplitter,
+    appendScatterCell: (grid, panel) =>
+      panel.endpointIds && panel.endpointIds.length > 1
+        ? appendComparePanelCell(grid, panel)
+        : appendScatterPanelCell(grid, panel),
+    appendCompareScatterCell: (grid, panel) => appendComparePanelCell(grid, panel),
+    appendDistCell: (grid, panel) => appendDistPanelCell(grid, panel)
+  });
+}
 
-    attachFacetLayoutSplitter(facet);
-    scatterPanelsEl.appendChild(facet);
-    return;
+function appendScatterPanelCell(grid: HTMLElement, panel: ScatterPanelSpec): void {
+  const spec = activeViewLayoutSpec;
+  const cell = document.createElement("div");
+  cell.className = "panel-cell panel-cell-scatter";
+  const title = document.createElement("div");
+  title.className = "panel-cell-title";
+  title.textContent = spec ? columnTitleForPanel(panel, spec) : exposureLabel(panel.xVariableId);
+  cell.appendChild(title);
+  const stack = document.createElement("div");
+  stack.className = "metric-stack metric-stack-scatter-only";
+  stack.dataset.stackKind = "scatter-only";
+  stack.dataset.metric = panel.xVariableId;
+  stack.dataset.endpoint = panel.endpointId;
+  stack.dataset.panelId = panel.id;
+
+  const scatterPane = document.createElement("div");
+  scatterPane.className = "metric-stack-scatter";
+  const chartWrap = document.createElement("div");
+  chartWrap.className = "chart";
+  chartWrap.dataset.metric = panel.xVariableId;
+  scatterPane.appendChild(chartWrap);
+  stack.appendChild(scatterPane);
+  cell.appendChild(stack);
+  grid.appendChild(cell);
+}
+
+function appendComparePanelCell(grid: HTMLElement, panel: ScatterPanelSpec): void {
+  const endpoints = panel.endpointIds ?? [];
+  const cell = document.createElement("div");
+  cell.className = "panel-cell panel-cell-scatter";
+  const stack = document.createElement("div");
+  stack.className = "metric-stack metric-stack-scatter-only";
+  stack.dataset.stackKind = "scatter-compare";
+  stack.dataset.metric = panel.xVariableId;
+  stack.dataset.compareEndpoints = endpoints.join("|");
+  stack.dataset.panelId = panel.id;
+
+  const scatterPane = document.createElement("div");
+  scatterPane.className = "metric-stack-scatter";
+  const chartWrap = document.createElement("div");
+  chartWrap.className = "chart";
+  chartWrap.dataset.metric = panel.xVariableId;
+  scatterPane.appendChild(chartWrap);
+  stack.appendChild(scatterPane);
+  cell.appendChild(stack);
+  grid.appendChild(cell);
+}
+
+function appendDistPanelCell(grid: HTMLElement, panel: DistPanelSpec): void {
+  const spec = activeViewLayoutSpec;
+  const scatterPanel = panel.scatterPanelIds[0] ? scatterPanelById.get(panel.scatterPanelIds[0]) : undefined;
+  const cell = document.createElement("div");
+  cell.className = "panel-cell panel-cell-dist";
+  const title = document.createElement("div");
+  title.className = "panel-cell-title";
+  if (spec && scatterPanel) {
+    title.textContent = columnTitleForPanel(scatterPanel, spec);
+  } else {
+    title.textContent = exposureLabel(panel.xVariableId);
+  }
+  cell.appendChild(title);
+  const stack = document.createElement("div");
+  stack.className = "metric-stack metric-stack-dist-only";
+  stack.dataset.stackKind = "dist-only";
+  stack.dataset.metric = panel.xVariableId;
+  stack.dataset.endpoint = panel.readoutEndpointId;
+  stack.dataset.panelId = panel.id;
+  if (panel.readoutEndpointIds?.length) {
+    stack.dataset.compareEndpoints = panel.readoutEndpointIds.join("|");
   }
 
-  if (state.gridLayout === "exposure-rows") {
-    for (const metric of metrics) {
-      const facet = createFacetLayoutShell();
-      const scatterBlock = facet.querySelector(".facet-scatter-block")!;
-      const distBlock = facet.querySelector(".facet-dist-block")!;
-
-      const rowEl = document.createElement("div");
-      rowEl.className = "endpoint-row facet-metric-row";
-      const rowGrid = document.createElement("div");
-      rowGrid.className = "panel-grid";
-      rowEl.innerHTML = `<div class="facet-row-label">${escapeHtml(exposureLabel(metric))}</div>`;
-      rowEl.appendChild(rowGrid);
-      for (const endpoint of endpoints) {
-        appendScatterOnlyCell(rowGrid, metric, endpoint);
-      }
-      scatterBlock.appendChild(rowEl);
-
-      const distGrid = document.createElement("div");
-      distGrid.className = "panel-grid";
-      for (const endpoint of endpoints) {
-        appendDistOnlyCell(distGrid, metric, endpoint);
-      }
-      distBlock.appendChild(distGrid);
-
-      attachFacetLayoutSplitter(facet);
-      scatterPanelsEl.appendChild(facet);
-    }
-    return;
-  }
-
-  const facet = createFacetLayoutShell();
-  const scatterBlock = facet.querySelector(".facet-scatter-block")!;
-  const distBlock = facet.querySelector(".facet-dist-block")!;
-
-  for (const endpoint of endpoints) {
-    const rowEl = document.createElement("div");
-    rowEl.className = "endpoint-row";
-    rowEl.innerHTML = `<div class="facet-row-label">${escapeHtml(ds.endpointLabel(endpoint))}</div>`;
-    const rowGrid = document.createElement("div");
-    rowGrid.className = "panel-grid";
-    rowEl.appendChild(rowGrid);
-    scatterBlock.appendChild(rowEl);
-    for (const metric of metrics) {
-      appendScatterOnlyCell(rowGrid, metric, endpoint);
-    }
-  }
-
-  const distGrid = document.createElement("div");
-  distGrid.className = "panel-grid facet-shared-dist-grid";
-  const readoutAnchor = endpoints[0]!;
-  for (const metric of metrics) {
-    appendDistOnlyCell(distGrid, metric, readoutAnchor);
-  }
-  distBlock.appendChild(distGrid);
-
-  attachFacetLayoutSplitter(facet);
-  scatterPanelsEl.appendChild(facet);
+  const distPane = document.createElement("div");
+  distPane.className = "metric-stack-dist";
+  stack.appendChild(distPane);
+  cell.appendChild(stack);
+  grid.appendChild(cell);
+  ensureDistShell(distPane, { showReadout: true });
 }
 
 function appendScatterOnlyCell(grid: HTMLElement, metric: ExposureMetric, endpoint: Endpoint): void {
@@ -1905,6 +2250,12 @@ function render(): void {
   const endpoints = selectedEndpoints();
   const active = activeSet();
 
+  activeViewLayoutSpec = resolveActiveViewLayoutSpec();
+  if (state.layoutMode === "advanced") {
+    state.advancedViewLayout = activeViewLayoutSpec;
+    syncAdvancedFacetSelectsFromSpec(activeViewLayoutSpec);
+  }
+
   resetMetricStackObservers();
   scatterPanelsEl.innerHTML = "";
   distributionPanels = [];
@@ -1923,17 +2274,22 @@ function render(): void {
     state.compareEndpoints && comparisonEligible && endpoints.some((e) => usesLinearModel(e));
   syncCompareNormUi(endpoints, compareHasLinear);
 
-  if (state.compareEndpoints && comparisonEligible) {
+  if ((state.compareEndpoints && comparisonEligible) || (activeViewLayoutSpec && effectiveEndpointOverlay(activeViewLayoutSpec) && comparisonEligible)) {
     renderEndpointLegend(endpoints);
     endpointLegendEl.style.display = "flex";
     legendEl.style.display = "none";
     legendEl.innerHTML = "";
+  } else if (state.layoutMode === "advanced" && activeViewLayoutSpec) {
+    renderLayoutColorLegend(activeViewLayoutSpec);
+    legendEl.style.display = "flex";
+    endpointLegendEl.style.display = "none";
+    endpointLegendEl.innerHTML = "";
   } else {
     legendEl.style.display = "flex";
     endpointLegendEl.style.display = "none";
     renderLegend();
   }
-  renderRegularFacetGrid(metrics, endpoints, active);
+  renderViewLayoutFacetGrid(metrics, endpoints);
   updateStatus(active.size);
   updateKpis(active.size, endpoints);
   refLineNoteEl.style.display = state.referenceLineKind ? "block" : "none";
@@ -1948,6 +2304,7 @@ function render(): void {
   observeMetricStacks();
   schedulePaintSyncedMetricStacks(active);
   applyReadoutChrome();
+  syncLayoutModeUi();
 }
 
 interface BinaryDoseGroupStats {
@@ -1967,11 +2324,19 @@ interface BinaryDoseGroupStats {
  * projection onto the fitted curve is built from. Shared by the regular per-endpoint grid
  * (`renderScatterPanel`) and the "Compare endpoints" overlay (`renderEndpointComparisonRow`), so
  * clicking a dose row projects consistently in both views. */
-function computeBinaryDoseGroupStats(metric: ExposureMetric, endpoint: Endpoint, active: Set<number>): Record<string, BinaryDoseGroupStats> {
+function computeBinaryDoseGroupStats(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  active: Set<number>,
+  cohortRowIndices?: number[]
+): Record<string, BinaryDoseGroupStats> {
   const ds = requireDataset();
+  const cohortSet = cohortRowIndices ? new Set(cohortRowIndices) : null;
   const groupStats: Record<string, BinaryDoseGroupStats> = {};
   for (const dose of DOSE_ORDER()) {
-    const doseRecords = rowIndicesForDose(dose).filter((i) => active.has(ds.patientId(i)));
+    const doseRecords = rowIndicesForDose(dose).filter(
+      (i) => active.has(ds.patientId(i)) && (!cohortSet || cohortSet.has(i))
+    );
     const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
     if (!vals.length) continue;
     const s = summarizeDistribution(vals);
@@ -2056,15 +2421,27 @@ function projectedLinearGroupsFor(
  * distinction on that single curve); `colorOverride` lets "Compare endpoints" mode color every
  * dose's projection by the endpoint's own color instead, so the projection reads as "this curve's
  * highlight" rather than blending into the dose-colored points/legend of a different endpoint. */
-function projectedGroupsFor(groupStats: Record<string, BinaryDoseGroupStats>, colorOverride?: string): ProjectedGroup[] {
-  const ds = requireDataset();
+function doseProjectionAccent(endpoint: Endpoint): string | undefined {
+  const spec = activeViewLayoutSpec;
+  if (!spec) return undefined;
+  if (spec.color.kind === "dose") return undefined;
+  if (spec.color.kind === "endpoints") return endpointColor(endpoint);
+  return "#475569";
+}
+
+function projectedGroupsFor(
+  groupStats: Record<string, BinaryDoseGroupStats>,
+  endpoint: Endpoint,
+  colorOverride?: string
+): ProjectedGroup[] {
   return [...state.selectedDoses]
     .filter((dose) => groupStats[dose])
     .map((dose) => {
       const { observed, ...rest } = groupStats[dose]!;
+      const color = colorOverride ?? doseProjectionAccent(endpoint) ?? resolveDoseColor(dose);
       return {
         groupId: dose,
-        color: colorOverride ?? resolveDoseColor(dose),
+        color,
         ...rest,
         observed: state.showDoseObserved ? observed : undefined
       };
@@ -2160,7 +2537,7 @@ function renderScatterPanel(
     );
   } else {
     const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
-    const projected = projectedGroupsFor(groupStats);
+    const projected = projectedGroupsFor(groupStats, endpoint);
 
     scatterResult = renderBinaryScatterOverlay(
       state.showPoints ? points : [],
@@ -2204,22 +2581,34 @@ function paintRegularScatterIntoWrap(
   endpoint: Endpoint,
   active: Set<number>,
   width: number,
-  height: number
+  height: number,
+  panelId?: string
 ): void {
   const ds = requireDataset();
-  const { fit, xs, ys } = fitFor(metric, endpoint);
-  const xDomain = exposureXDomain(metric);
-  const curve = curveFor(fit, xs, ys, xDomain);
+  const spec = activeViewLayoutSpec;
+  const cohort = cohortForPanel(panelId) ?? dataFilteredRowIndices();
+  const recordRows = cohort.filter((i) => Number.isFinite(endpointValue(i, endpoint)));
+  const xDomain = exposureXDomain(metric, cohort);
   const continuous = isContinuousEndpoint(endpoint);
+  const colorSpec = spec?.color;
+  const colorVarId = colorSpec?.kind === "variable" ? colorSpec.variableId : undefined;
+  const colorByVariable = state.layoutMode === "advanced" && !!colorVarId;
+  const colorModel = colorByVariable ? colorBinModelForSpec(spec, cohort) : null;
 
-  const points: ScatterPoint[] = recordsWithEndpoint(endpoint).map((i) => {
+  const points: ScatterPoint[] = recordRows.map((i) => {
     const pid = ds.patientId(i);
+    let groupId: string | number = ds.doseLabel(i);
+    if (colorByVariable && colorVarId && colorModel) {
+      groupId = colorLevelForRow(i, colorModel, ds.loaded, colorVarId);
+    } else if (colorByVariable && colorVarId) {
+      groupId = String(getColumn(ds.loaded, colorVarId)[i] ?? "").trim();
+    }
     return {
       id: pid,
       exposure: exposureValue(i, metric),
       response: endpointValue(i, endpoint),
       displayY: continuous ? endpointValue(i, endpoint) : endpointValue(i, endpoint) + seededJitter(pid),
-      groupId: ds.doseLabel(i),
+      groupId,
       label: scatterPointHoverLabel(i, metric, endpoint),
       selected: active.has(pid)
     };
@@ -2228,6 +2617,8 @@ function paintRegularScatterIntoWrap(
   let scatterResult: { content: string; metadata: unknown };
 
   if (continuous) {
+    const { fit, xs, ys } = fitForCohort(metric, endpoint, recordRows);
+    const curve = curveFor(fit, xs, ys, xDomain);
     const groupStats: Record<
       string,
       {
@@ -2287,21 +2678,70 @@ function paintRegularScatterIntoWrap(
       height
     );
   } else {
-    const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
-    const projected = projectedGroupsFor(groupStats);
+    const refLines = computeDisplayReferenceLines(metric);
+    if (colorByVariable && colorVarId && colorModel) {
+      const paletteLevels = colorModel.levels;
+      const levels = [...new Set(recordRows.map((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId)).filter(Boolean))];
+      const pointColors: Record<string | number, string> = {};
+      for (const level of levels) pointColors[level] = variableColorForLevel(colorVarId, level, paletteLevels);
 
-    scatterResult = renderBinaryScatterOverlay(
-      state.showPoints ? points : [],
-      [{ curve, projected }],
-      DOSE_COLORS(),
-      xDomain,
-      exposureLabel(metric),
-      endpoint.toUpperCase(),
-      width,
-      computeDisplayReferenceLines(metric),
-      computeObservedResponseBins(metric, endpoint),
-      height
-    );
+      const doseProjected = projectedGroupsFor(computeBinaryDoseGroupStats(metric, endpoint, active, cohort), endpoint);
+
+      const fitSeparate = !!spec?.fitByColor && levels.length > 1;
+      let curves: BinaryCurveOverlay[];
+      if (fitSeparate) {
+        curves = levels.map((level) => {
+          const sub = recordRows.filter((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === level);
+          const { fit, xs, ys } = fitForCohort(metric, endpoint, sub);
+          const curve = curveFor(fit, xs, ys, xDomain);
+          return {
+            curve,
+            color: variableColorForLevel(colorVarId, level, paletteLevels),
+            dash: "",
+            projected: doseProjected
+          };
+        });
+      } else {
+        const { fit, xs, ys } = fitForCohort(metric, endpoint, recordRows);
+        const curve = curveFor(fit, xs, ys, xDomain);
+        const curveColor =
+          levels.length === 1
+            ? variableColorForLevel(colorVarId, levels[0]!, paletteLevels)
+            : "#334155";
+        curves = [{ curve, color: curveColor, dash: "", projected: doseProjected }];
+      }
+
+      scatterResult = renderBinaryScatterOverlay(
+        state.showPoints ? points : [],
+        curves,
+        pointColors,
+        xDomain,
+        exposureLabel(metric),
+        ds.endpointLabel(endpoint),
+        width,
+        refLines,
+        computeObservedResponseBins(metric, endpoint),
+        height
+      );
+    } else {
+      const { fit, xs, ys } = fitForCohort(metric, endpoint, recordRows);
+      const curve = curveFor(fit, xs, ys, xDomain);
+      const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active, cohort);
+      const projected = projectedGroupsFor(groupStats, endpoint);
+
+      scatterResult = renderBinaryScatterOverlay(
+        state.showPoints ? points : [],
+        [{ curve, projected }],
+        DOSE_COLORS(),
+        xDomain,
+        exposureLabel(metric),
+        endpoint.toUpperCase(),
+        width,
+        refLines,
+        computeObservedResponseBins(metric, endpoint),
+        height
+      );
+    }
   }
 
   chartWrap.innerHTML = scatterResult.content;
@@ -2321,14 +2761,17 @@ function paintCompareScatterIntoWrap(
   endpoints: Endpoint[],
   active: Set<number>,
   width: number,
-  height: number
+  height: number,
+  panelId?: string
 ): void {
   const ds = requireDataset();
-  const xDomain = exposureXDomain(metric);
+  const cohort = cohortForPanel(panelId) ?? dataFilteredRowIndices();
+  const xDomain = exposureXDomain(metric, cohort);
   const referenceLines = computeDisplayReferenceLines(metric);
 
-  const pointsFor = (endpoint: Endpoint): ScatterPoint[] =>
-    recordsWithEndpoint(endpoint).map((i) => {
+  const pointsFor = (endpoint: Endpoint): ScatterPoint[] => {
+    const rows = recordsWithEndpoint(endpoint).filter((i) => !cohort || cohort.includes(i));
+    return rows.map((i) => {
       const pid = ds.patientId(i);
       const raw = endpointValue(i, endpoint);
       const linear = usesLinearModel(endpoint);
@@ -2343,9 +2786,11 @@ function paintCompareScatterIntoWrap(
         selected: active.has(pid)
       };
     });
+  };
 
   const fits = endpoints.map((endpoint) => {
-    const { fit, xs, ys } = fitFor(metric, endpoint);
+    const rows = recordsWithEndpoint(endpoint).filter((i) => !cohort || cohort.includes(i));
+    const { fit, xs, ys } = fitForCohort(metric, endpoint, rows);
     const rawCurve = curveFor(fit, xs, ys, xDomain);
     const linear = usesLinearModel(endpoint);
     const { min, max, valid } = getCompareNormBounds(endpoint);
@@ -2357,7 +2802,7 @@ function paintCompareScatterIntoWrap(
       projected = projectedLinearGroupsFor(linearStats, DOSE_SELECTION_NEUTRAL, endpoint);
     } else {
       const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
-      projected = projectedGroupsFor(groupStats, DOSE_SELECTION_NEUTRAL);
+      projected = projectedGroupsFor(groupStats, endpoints[0]!, DOSE_SELECTION_NEUTRAL);
     }
     return {
       endpoint,
@@ -2428,12 +2873,57 @@ function ensureDistShell(
 
 function buildDistributionGroups(
   metric: ExposureMetric,
-  splitByEndpoints?: Endpoint[]
+  splitByEndpoints?: Endpoint[],
+  opts?: { cohortRowIndices?: number[]; splitByColorVariable?: string }
 ): DistributionRawGroup[] {
-  const xDomain = exposureXDomain(metric);
+  const cohort = opts?.cohortRowIndices ?? dataFilteredRowIndices();
+  const xDomain = exposureXDomain(metric, cohort);
   const pkLike = exposureIsPkMetric(metric);
+  const cohortSet = new Set(cohort);
+  const inCohort = (i: number) => cohortSet.has(i);
 
   const selectionAccent = doseSelectionAccentForDistribution();
+
+  const colorVar = opts?.splitByColorVariable;
+  if (colorVar && activeViewLayoutSpec?.distribution.colorDistShapes) {
+    const loaded = requireDataset().loaded;
+    const binning =
+      activeViewLayoutSpec?.continuousBinning ??
+      (activeViewLayoutSpec?.color.kind === "variable" ? activeViewLayoutSpec.color.binning : undefined);
+    const colorModel = buildColorBinModel(loaded, colorVar, cohort, binning);
+    const levels = colorModel.levels;
+    return DOSE_ORDER()
+      .slice()
+      .reverse()
+      .flatMap((dose) => {
+        const isPlacebo = isPlaceboDose(dose);
+        return levels.map((level, li) => {
+          const rows = rowIndicesForDose(dose).filter(
+            (i) => inCohort(i) && colorLevelForRow(i, colorModel, loaded, colorVar) === level
+          );
+          const values =
+            isPlacebo && pkLike ? [] : rows.map((r) => exposureValue(r, metric)).filter((v) => Number.isFinite(v));
+          return {
+            groupId: `${dose}|${level}`,
+            label: li === 0 ? dose : "",
+            color: variableColorForLevel(colorVar, level, levels),
+            values,
+            n: rows.length,
+            selected: state.selectedDoses.has(dose),
+            selectionColor: selectionAccent,
+            skipShape: isPlacebo && pkLike,
+            splitAnnotations: splitAnnotationsForRows(
+              metric,
+              xDomain,
+              state.splitAnnotationMode,
+              rows,
+              isPlacebo && pkLike
+            )
+          };
+        });
+      })
+      .filter((g) => g.n > 0);
+  }
 
   if (splitByEndpoints && splitByEndpoints.length > 1) {
     return DOSE_ORDER()
@@ -2441,11 +2931,11 @@ function buildDistributionGroups(
       .reverse()
       .flatMap((dose) => {
         const isPlacebo = isPlaceboDose(dose);
-        if (!splitByEndpoints.some((ep) => rowIndicesForDose(dose).some((i) => Number.isFinite(endpointValue(i, ep))))) {
+        if (!splitByEndpoints.some((ep) => rowIndicesForDose(dose).some((i) => inCohort(i) && Number.isFinite(endpointValue(i, ep))))) {
           return [];
         }
         return splitByEndpoints.map((ep, i) => {
-          const rows = rowIndicesForDose(dose).filter((r) => Number.isFinite(endpointValue(r, ep)));
+          const rows = rowIndicesForDose(dose).filter((r) => inCohort(r) && Number.isFinite(endpointValue(r, ep)));
           const values =
             isPlacebo && pkLike ? [] : rows.map((r) => exposureValue(r, metric)).filter((v) => Number.isFinite(v));
           return {
@@ -2457,10 +2947,13 @@ function buildDistributionGroups(
             selected: state.selectedDoses.has(dose),
             selectionColor: selectionAccent,
             skipShape: isPlacebo && pkLike,
-            splitAnnotations:
-              (isPlacebo && pkLike) || state.splitAnnotationMode === "off"
-                ? undefined
-                : computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
+            splitAnnotations: splitAnnotationsForRows(
+              metric,
+              xDomain,
+              state.splitAnnotationMode,
+              rows,
+              isPlacebo && pkLike
+            )
           };
         });
       });
@@ -2471,7 +2964,7 @@ function buildDistributionGroups(
     .reverse()
     .map((dose) => {
       const isPlacebo = isPlaceboDose(dose);
-      const rows = rowIndicesForDose(dose);
+      const rows = rowIndicesForDose(dose).filter((i) => inCohort(i));
       const values =
         isPlacebo && pkLike ? [] : rows.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
       return {
@@ -2483,10 +2976,13 @@ function buildDistributionGroups(
         selected: state.selectedDoses.has(dose),
         selectionColor: selectionAccent,
         skipShape: isPlacebo && pkLike,
-        splitAnnotations:
-          (isPlacebo && pkLike) || state.splitAnnotationMode === "off"
-            ? undefined
-            : computeSplitAnnotations(metric, dose, xDomain, state.splitAnnotationMode)
+        splitAnnotations: splitAnnotationsForRows(
+          metric,
+          xDomain,
+          state.splitAnnotationMode,
+          rows,
+          isPlacebo && pkLike
+        )
       };
     })
     .filter((g) => g.n > 0);
@@ -2503,10 +2999,19 @@ function paintDistributionChart(
   height: number,
   splitByEndpoints?: Endpoint[],
   readoutEndpoints?: Endpoint[],
-  opts?: { showReadout?: boolean; omitEndpointFit?: boolean }
+  opts?: { showReadout?: boolean; omitEndpointFit?: boolean; panelId?: string }
 ): void {
-  const xDomain = exposureXDomain(metric);
-  const distGroups = buildDistributionGroups(metric, splitByEndpoints);
+  const distPanel = opts?.panelId ? distPanelById.get(opts.panelId) : undefined;
+  const cohortRowIndices = distPanel?.rowIndices ?? dataFilteredRowIndices();
+  const xDomain = exposureXDomain(metric, cohortRowIndices);
+  const colorVar =
+    state.layoutMode === "advanced" && activeViewLayoutSpec?.color.kind === "variable"
+      ? activeViewLayoutSpec.color.variableId
+      : undefined;
+  const distGroups = buildDistributionGroups(metric, splitByEndpoints, {
+    cohortRowIndices,
+    splitByColorVariable: activeViewLayoutSpec?.distribution.colorDistShapes ? colorVar : undefined
+  });
   const distResult = renderDistributionViaRenderer(
     distGroups,
     xDomain,
@@ -2784,9 +3289,7 @@ function renderLegend(): void {
  * near that view, since a dose no longer maps to a single color there (it's split by endpoint). */
 function isEndpointComparisonActive(): boolean {
   const endpoints = selectedEndpoints();
-  // Mirrors comparisonEligible in render() - Compare endpoints now works with any number of
-  // exposure metrics (each gets its own overlaid "(all)" column), so this must not require
-  // exactly one metric to be selected the way it used to before that redesign.
+  if (activeViewLayoutSpec && effectiveEndpointOverlay(activeViewLayoutSpec) && endpoints.length > 1) return true;
   return state.compareEndpoints && endpoints.length > 1;
 }
 
@@ -2996,8 +3499,9 @@ function attachDistributionInteractivity(
     pathEls.push(g.querySelector<SVGPathElement>("path.er-ridge-shape"));
     capEls.push(g.querySelector<SVGGElement>("g.er-caps"));
     g.addEventListener("click", () => {
-      const dose = g.getAttribute("data-group");
-      if (!dose || distributionAnimating) return;
+      const raw = g.getAttribute("data-group");
+      if (!raw || distributionAnimating) return;
+      const dose = raw.includes("|") ? raw.split("|")[0]! : raw;
       if (state.selectedDoses.has(dose)) state.selectedDoses.delete(dose);
       else state.selectedDoses.add(dose);
       refreshSelectionVisuals();
@@ -3467,6 +3971,8 @@ function activateDataset(next: DatasetContext, statusMessage?: string, options?:
   ensureEndpointAnalysisDefaults();
   syncMetricEndpointControls();
   syncFiltersUi();
+  refreshAdvancedColorOptions();
+  refreshAdvancedFacetOptions();
   mappingPanelEl.style.display = "none";
   pendingCsvRows = null;
   pendingDatasetMeta = null;
@@ -3505,6 +4011,7 @@ function showMappingUi(
     .join("");
   mappingPanelEl.style.display = "block";
   mappingErrorsEl.textContent = "";
+  mappingPanelEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
   mappingTableBody.querySelectorAll<HTMLSelectElement>("select[data-col]").forEach((sel) => {
     sel.onchange = () => {
       const col = sel.dataset.col;
@@ -3622,6 +4129,8 @@ function buildSessionState(): SessionState {
       exposureColumnOrder: state.exposureColumnOrder,
       endpointColumnOrder: state.endpointColumnOrder,
       referenceArmDoses: [...state.referenceArmDoses],
+      layoutMode: state.layoutMode,
+      advancedViewLayout: state.advancedViewLayout,
       byod
     }
   );
@@ -3705,6 +4214,14 @@ function loadSessionFromFile(file: File): void {
       const refArmsSaved = session.settings["referenceArmDoses"];
       if (Array.isArray(refArmsSaved)) {
         state.referenceArmDoses = refArmsSaved.filter((d): d is string => typeof d === "string");
+      }
+      const layoutModeSaved = session.settings["layoutMode"];
+      if (layoutModeSaved === "guided" || layoutModeSaved === "advanced") {
+        state.layoutMode = layoutModeSaved;
+      }
+      const advSaved = session.settings["advancedViewLayout"];
+      if (advSaved && typeof advSaved === "object") {
+        state.advancedViewLayout = advSaved as ViewLayoutSpec;
       }
 
       const ci = session.settings["ciMethod"];
@@ -3985,6 +4502,50 @@ gridLayoutSelect.addEventListener("change", () => {
   state.gridLayout = val === "exposure-rows" ? "exposure-rows" : "endpoint-rows";
   render();
 });
+
+document.querySelectorAll<HTMLInputElement>('input[name="layoutMode"]').forEach((rb) => {
+  rb.addEventListener("change", () => {
+    if (!rb.checked) return;
+    state.layoutMode = rb.value === "advanced" ? "advanced" : "guided";
+    if (state.layoutMode === "advanced" && !state.advancedViewLayout) {
+      state.advancedViewLayout = defaultAdvancedLayout(
+        selectedEndpoints(),
+        endpointOrder(),
+        selectedExposureMetrics(),
+        exposureOrder()
+      );
+    }
+    syncLayoutModeUi({ refreshAdvancedControls: state.layoutMode === "advanced" });
+    render();
+  });
+});
+
+resetAdvancedToGuidedBtn.addEventListener("click", () => {
+  state.advancedViewLayout = defaultAdvancedSpecFromGuided(guidedLayoutInput());
+  syncLayoutModeUi({ refreshAdvancedControls: true });
+  render();
+});
+
+function bindAdvancedLayoutInput(el: HTMLElement): void {
+  el.addEventListener("change", () => {
+    if (state.layoutMode !== "advanced") return;
+    state.advancedViewLayout = pullAdvancedSpecFromUi();
+    syncAdvancedFitByColorUi(state.advancedViewLayout);
+    updateAdvancedLayoutStatus(state.advancedViewLayout);
+    render();
+  });
+}
+[
+  advancedRowFacetsEl,
+  advancedColFacetsEl,
+  advancedColorByEl,
+  advancedColorBinningEl,
+  advancedFitByColorEl,
+  advancedEndpointOverlayEl,
+  advancedDistLinkageEl,
+  advancedColorDistShapesEl
+].forEach(bindAdvancedLayoutInput);
+
 doseColorSchemeSelect.addEventListener("change", () => {
   const val = doseColorSchemeSelect.value;
   if (val === "default" || val === "tableau" || val === "set2" || val === "dark") {

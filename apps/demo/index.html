@@ -187,6 +187,7 @@
   .facet-dist-block {
     flex: var(--dist-fr) 1 0; min-height: 88px; display: flex; flex-direction: column; overflow: hidden;
   }
+  .facet-dist-block .panel-grid + .panel-grid { margin-top: 6px; padding-top: 2px; border-top: 1px dashed var(--stroke); }
   .facet-block-splitter {
     flex: 0 0 6px; cursor: row-resize; background: var(--stroke); border-radius: 4px; margin: 0 8px;
     touch-action: none;
@@ -203,6 +204,7 @@
   }
   .metric-stack-dist-only .metric-stack-dist { flex: 1; min-height: 0; }
   .legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; padding: 6px 10px 4px; }
+  .legend-title { font-weight: 800; font-size: 12px; color: var(--muted); margin-right: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
   .dotKey { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
   .swatch { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
   .endpoint-rows { display: flex; flex-direction: column; gap: 2px; }
@@ -232,6 +234,12 @@
   .plot-stack-height-handle:hover { background: var(--accent); opacity: 0.5; }
   .plot-stack-height-handle[hidden] { display: none !important; }
   .metric-stack-scatter { flex: var(--scatter-fr) 1 0; min-height: 140px; overflow: hidden; display: flex; flex-direction: column; width: 100%; }
+  .metric-stack-scatter .chart, .metric-stack-dist .chart.dist-inline-chart {
+    overflow: hidden; flex: 1; min-height: 0; position: relative; isolation: isolate;
+  }
+  .facet-scatter-block { z-index: 0; }
+  .facet-dist-block { z-index: 1; background: var(--panel); }
+  .dist-inline { display: flex; flex-direction: column; min-height: 0; flex: 1; overflow: hidden; }
   .metric-stack-scatter .chart { flex: 1; min-height: 120px; height: auto !important; width: 100% !important; }
   .metric-stack-dist { flex: var(--dist-fr) 1 0; min-height: 88px; overflow: hidden; width: 100%; display: flex; flex-direction: column; }
   .metric-stack-dist .dist-inline { flex: 1; display: flex; flex-direction: column; min-height: 0; width: 100%; }
@@ -274,7 +282,7 @@
   .responder-compact { font-size: 11px; line-height: 1.4; max-width: 100%; }
   .responder-compact .row-mini { padding: 3px 0; border-top: 1px dashed var(--stroke); }
   .responder-compact .row-mini:first-child { border-top: none; }
-  svg { width: 100%; height: 100%; overflow: visible; display: block; }
+  svg { width: 100%; height: 100%; overflow: hidden; display: block; }
   .chart svg .er-marker-hit { cursor: help; }
   .tooltip {
     position: absolute; pointer-events: none; background: rgba(17, 24, 39, 0.95); color: #fff;
@@ -348,6 +356,7 @@
       <p class="hint">Load the bundled effICGI example or upload a wide CSV. Both paths show the column mapping table below — adjust roles, then apply. You can reopen mapping anytime without re-uploading.</p>
       <div class="drawer-section">
         <button type="button" class="btn primary" id="reloadBundledBtn" style="width:100%; margin-bottom:8px;">Use example effICGI data</button>
+        <p class="field-hint" style="margin:-4px 0 8px">Shows column mapping below — click <strong>Apply mapping &amp; load</strong> to draw charts.</p>
         <button type="button" class="btn" id="loadCsvBtn" style="width:100%;">Upload CSV…</button>
         <input type="file" id="csvFileInput" accept=".csv,text/csv" />
         <span id="dataStatus" class="session-status"></span>
@@ -465,6 +474,57 @@
           <option value="exposure-rows">Exposures as rows · endpoints as columns</option>
         </select>
       </div>
+      <div class="field" id="guidedLayoutHint">
+        <p class="hint" style="margin:0">Guided mode uses the plot grid below. Enable Advanced for custom facets (study, sex) and distribution mirroring.</p>
+      </div>
+      <div class="field">
+        <span class="field-label">Layout mode</span>
+        <div class="checkbox-group">
+          <label><input type="radio" name="layoutMode" value="guided" checked /> Guided</label>
+          <label><input type="radio" name="layoutMode" value="advanced" /> Advanced</label>
+        </div>
+        <button type="button" class="btn" id="resetAdvancedToGuidedBtn" style="margin-top:8px;width:100%;">Copy current Guided layout</button>
+      </div>
+      <div id="advancedLayoutSection" hidden>
+        <div class="field">
+          <label for="advancedColorBinning">Continuous covariate bins</label>
+          <select id="advancedColorBinning">
+            <option value="median">Median split (2 groups)</option>
+            <option value="tertiles">Tertiles (3 groups)</option>
+            <option value="quartiles">Quartiles (4 groups)</option>
+          </select>
+          <p class="field-hint">Used when <strong>coloring</strong> or <strong>faceting</strong> a numeric covariate (e.g. wt): ≤ median vs &gt; median, tertiles, or quartiles. Set this before choosing row/column facets.</p>
+        </div>
+        <div class="field"><label for="advancedRowFacets">Facet rows</label>
+          <select id="advancedRowFacets" multiple size="5"></select>
+          <p class="field-hint">Hold Ctrl (Windows) or ⌘ (Mac) to select multiple. Order follows the list top-to-bottom. Typical: <strong>Endpoints</strong> on rows, <strong>Exposure metrics</strong> on columns; add <strong>wt</strong> here to split above/below median weight.</p>
+        </div>
+        <div class="field"><label for="advancedColFacets">Facet columns</label>
+          <select id="advancedColFacets" multiple size="5"></select>
+        </div>
+        <div class="field"><label for="advancedColorBy">Color curves / dist</label>
+          <select id="advancedColorBy">
+            <option value="dose">Dose</option>
+            <option value="endpoints">Endpoints</option>
+          </select>
+        </div>
+        <div class="field"><label><input type="checkbox" id="advancedFitByColor" /> Fit separately per color group</label>
+          <p class="field-hint">Available when color is a covariate (e.g. sex, study). Dose and endpoint colors use a single pooled fit.</p>
+        </div>
+        <div class="field"><label><input type="checkbox" id="advancedEndpointOverlay" /> Overlay endpoints (compare)</label>
+          <p class="field-hint">Guided-style: multiple endpoints on the same axes. Disabled when <strong>Endpoints</strong> is already a row/column facet — use facets to put each endpoint in its own panel instead.</p>
+        </div>
+        <div class="field"><label for="advancedDistLinkage">Distribution layout</label>
+          <select id="advancedDistLinkage">
+            <option value="mirror_scatter_grid">Mirror scatter facets</option>
+            <option value="shared_by_x_column">Shared by exposure column (Guided default)</option>
+            <option value="single_pooled">Single pooled per exposure</option>
+            <option value="mirror_color_only">Color-split boxplots only</option>
+          </select>
+        </div>
+        <div class="field"><label><input type="checkbox" id="advancedColorDistShapes" /> Color-split boxplots within dose rows</label></div>
+        <p class="hint" id="advancedLayoutStatus"></p>
+      </div>
       <div class="field"><label for="doseColorScheme">Dose colors</label>
         <select id="doseColorScheme">
           <option value="default">Default (dataset)</option>
@@ -531,6 +591,6 @@
     </div>
   </main>
 </div>
-<script src="./bundle.js"></script>
+<script src="./bundle.js" onerror="document.body.insertAdjacentHTML('afterbegin','&lt;div style=&quot;padding:16px;background:#fee;border:1px solid #c00;margin:8px;font:14px sans-serif&quot;&gt;&lt;strong&gt;Demo failed to load.&lt;/strong&gt; Run &lt;code&gt;node apps/demo/scripts/verify-build.mjs&lt;/code&gt; from the repo root, then open &lt;code&gt;apps/demo/dist/index.html&lt;/code&gt; (or rebuild so &lt;code&gt;apps/demo/bundle.js&lt;/code&gt; exists).&lt;/div&gt;')"></script>
 </body>
 </html>

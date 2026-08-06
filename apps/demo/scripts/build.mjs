@@ -21,8 +21,13 @@ await esbuild.build({
 });
 
 const bundleJs = fs.readFileSync(path.join(distDir, "bundle.js"), "utf8");
+// Dev workflow: open apps/demo/index.html (script src="./bundle.js") after build.
+fs.writeFileSync(path.join(root, "bundle.js"), bundleJs);
 const shellHtml = fs.readFileSync(path.join(root, "index.html"), "utf8");
-const standalone = shellHtml.replace('<script src="./bundle.js"></script>', `<script>\n${bundleJs}\n</script>`);
+const standalone = shellHtml.replace(
+  /<script src="\.\/bundle\.js"[^>]*><\/script>/,
+  `<script>\n${bundleJs}\n</script>`
+);
 fs.writeFileSync(path.join(distDir, "index.html"), standalone);
 
 console.log(`Built self-contained demo: ${path.relative(process.cwd(), path.join(distDir, "index.html"))} (${(standalone.length / 1024).toFixed(0)} KB)`);

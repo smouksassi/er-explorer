@@ -45,6 +45,19 @@ node apps/demo/scripts/verify-build.mjs
 
 Runs the ordered `tsc` chain, regenerates demo data, typechecks the demo, and bundles `dist/index.html`.
 
+## GitHub Pages (live demo)
+
+Pushing to **`main`** triggers **Deploy demo to GitHub Pages** (see `.github/workflows/deploy-demo.yml`). Nothing under `apps/demo/dist/` needs to be in git — CI generates `data.generated.ts`, typechecks, and bundles a self-contained `index.html` on every deploy.
+
+Before you push, run locally:
+
+```powershell
+node apps/demo/scripts/verify-build.mjs
+pnpm --filter @er-explorer/data test
+```
+
+If the public URL still shows an old build, open the repo **Actions** tab, confirm the latest workflow on `main` succeeded, and use **Re-run workflow** if needed. Advanced layout notes and known gaps: [ADVANCED_LAYOUT.md](./ADVANCED_LAYOUT.md).
+
 ## Optional package tests
 
 ```powershell
