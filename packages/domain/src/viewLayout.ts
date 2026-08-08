@@ -87,5 +87,64 @@ export function effectiveEndpointOverlay(spec: ViewLayoutSpec): boolean {
   return !!spec.endpointOverlay && !layoutHasEndpointFacet(spec);
 }
 
+/** Column facets are exactly one xMetrics dimension (Guided compare default). */
+export function colDimensionsAreOnlyXMetrics(spec: ViewLayoutSpec): boolean {
+  return (
+    spec.colDimensions.length === 1 &&
+    spec.colDimensions[0]!.kind === "xMetrics" &&
+    spec.rowDimensions.length === 0
+  );
+}
+
+/**
+ * Guided “Compare endpoints”: one scatter row, columns = exposures only, endpoints distinguished by color.
+ * Advanced never uses the overlay mount shell — use facet grid + `endpointIds` per cell instead.
+ */
+export function isGuidedCompareTopology(spec: ViewLayoutSpec): boolean {
+  if (spec.mode !== "guided") return false;
+  if (layoutHasEndpointFacet(spec)) return false;
+  return effectiveEndpointOverlay(spec) && colDimensionsAreOnlyXMetrics(spec);
+}
+
+/** @deprecated Use {@link isGuidedCompareTopology} for mount overlay; Advanced uses facet grid only. */
+export function usesEndpointColorOverlay(spec: ViewLayoutSpec, _selectedEndpointCount: number): boolean {
+  return isGuidedCompareTopology(spec);
+}
+
+export type PanelEndpointMode = "single" | "multiColor";
+
+/** Whether this cell shows one endpoint or multiple curves colored by endpoint. */
+export function panelEndpointMode(
+  spec: ViewLayoutSpec,
+  facetKey: FacetKey,
+  selectedEndpointCount: number
+): PanelEndpointMode {
+  if (selectedEndpointCount <= 1) return "single";
+  if (facetKey.endpoint) return "single";
+  if (layoutHasEndpointFacet(spec)) return "single";
+  if (spec.color.kind === "endpoints") return "multiColor";
+  return "single";
+}
+
+/** Side-by-side endpoint boxplots within each dose row (compare / color=endpoints + colorDistShapes). */
+export function distEndpointColorSplit(spec: ViewLayoutSpec, selectedEndpointCount: number): boolean {
+  if (selectedEndpointCount < 2 || layoutHasEndpointFacet(spec)) return false;
+  return spec.color.kind === "endpoints" && spec.distribution.colorDistShapes;
+}
+
+function dimensionFacetKey(dim: LayoutDimension): string {
+  return dim.kind === "variable" ? `var:${dim.variableId}` : dim.kind;
+}
+
+/**
+ * A dimension cannot facet both rows and columns (e.g. endpoints on both axes). Column facets win;
+ * duplicates are removed from rows.
+ */
+export function dedupeFacetDimensions(spec: ViewLayoutSpec): ViewLayoutSpec {
+  const colKeys = new Set(spec.colDimensions.map(dimensionFacetKey));
+  const rowDimensions = spec.rowDimensions.filter((d) => !colKeys.has(dimensionFacetKey(d)));
+  return rowDimensions.length === spec.rowDimensions.length ? spec : { ...spec, rowDimensions };
+}
+
 /** Open grouping key for stats shared between scatter and distribution. */
 export type GroupKey = Record<string, string | number>;

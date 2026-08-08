@@ -73,4 +73,26 @@ export type {
   GroupKey
 } from "./viewLayout";
 
-export { effectiveEndpointOverlay, layoutHasEndpointFacet } from "./viewLayout";
+export {
+  colDimensionsAreOnlyXMetrics,
+  dedupeFacetDimensions,
+  distEndpointColorSplit,
+  effectiveEndpointOverlay,
+  isGuidedCompareTopology,
+  layoutHasEndpointFacet,
+  panelEndpointMode,
+  usesEndpointColorOverlay
+} from "./viewLayout";
+export type { PanelEndpointMode } from "./viewLayout";
+export type {
+  DistSplitMode,
+  DistVisualContext,
+  DistVisualContextInput,
+  PanelVisualPolicy,
+  ScatterPointColorSource
+} from "./panelVisualPolicy";
+export {
+  resolveDistVisualContext,
+  resolveLegendShowsEndpoints,
+  resolvePanelVisualPolicy
+} from "./panelVisualPolicy";

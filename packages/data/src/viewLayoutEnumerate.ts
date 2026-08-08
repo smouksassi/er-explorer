@@ -7,7 +7,7 @@ import type {
   ScatterPanelSpec,
   ViewLayoutSpec
 } from "@er-explorer/domain";
-import { effectiveEndpointOverlay } from "@er-explorer/domain";
+import { distEndpointColorSplit, isGuidedCompareTopology, panelEndpointMode } from "@er-explorer/domain";
 import { getColumn, type LoadedDataset } from "./loadedDataset";
 import { isMissing } from "./rawValue";
 import { selectRecordIndices } from "./filters";
@@ -110,6 +110,21 @@ function stablePanelId(prefix: string, facetKey: FacetKey, extra?: string): stri
   return [prefix, ...parts, extra].filter(Boolean).join("|");
 }
 
+function attachMultiEndpointIds(
+  panels: ScatterPanelSpec[],
+  spec: ViewLayoutSpec,
+  input: ViewLayoutEnumerateInput
+): ScatterPanelSpec[] {
+  return panels.map((p) => {
+    if (panelEndpointMode(spec, p.facetKey, input.endpointIds.length) !== "multiColor") return p;
+    return {
+      ...p,
+      endpointIds: input.endpointIds,
+      endpointId: input.endpointIds[0] ?? p.endpointId
+    };
+  });
+}
+
 /**
  * Build scatter panel specs from layout spec and filtered row indices.
  */
@@ -122,7 +137,7 @@ export function enumerateScatterPanels(
 ): ScatterPanelSpec[] {
   const baseIndices = baseRowIndices ?? [...selectRecordIndices(loaded, filters)];
 
-  if (effectiveEndpointOverlay(spec)) {
+  if (isGuidedCompareTopology(spec)) {
     const colBranches = cartesianFacetBranches(loaded, baseIndices, spec.colDimensions, input, spec);
     const rowBranches =
       spec.rowDimensions.length > 0
@@ -158,15 +173,16 @@ export function enumerateScatterPanels(
   if (!allDims.length) {
     const xId = input.xMetricIds[0] ?? "";
     const epId = input.endpointIds[0] ?? "";
-    return [
-      {
-        id: stablePanelId("scatter", { endpoint: epId, xMetric: xId }),
-        facetKey: { endpoint: epId, xMetric: xId },
-        xVariableId: xId,
-        endpointId: epId,
-        rowIndices: baseIndices
-      }
-    ];
+    const facetKey: FacetKey = { xMetric: xId };
+    if (input.endpointIds.length === 1) facetKey.endpoint = epId;
+    const panel: ScatterPanelSpec = {
+      id: stablePanelId("scatter", facetKey),
+      facetKey,
+      xVariableId: xId,
+      endpointId: epId,
+      rowIndices: baseIndices
+    };
+    return attachMultiEndpointIds([panel], spec, input);
   }
 
   const rowBranches = spec.rowDimensions.length
@@ -206,7 +222,7 @@ export function enumerateScatterPanels(
     }
   }
 
-  return panels;
+  return attachMultiEndpointIds(panels, spec, input);
 }
 
 function facetKeyMatchesSubset(full: FacetKey, subset: FacetKey): boolean {
@@ -243,7 +259,8 @@ export function enumerateDistPanels(
   spec: ViewLayoutSpec,
   scatterPanels: ScatterPanelSpec[],
   readoutEndpointId: string,
-  readoutEndpointIds?: string[]
+  readoutEndpointIds?: string[],
+  selectedEndpointCount?: number
 ): DistPanelSpec[] {
   const linkage = spec.distribution.linkage;
   const groups = new Map<
@@ -282,7 +299,9 @@ export function enumerateDistPanels(
     existing.scatterPanelIds.push(panel.id);
   }
 
-  const overlay = effectiveEndpointOverlay(spec);
+  const epCount = selectedEndpointCount ?? readoutEndpointIds?.length ?? 1;
+  const splitReadouts =
+    isGuidedCompareTopology(spec) || distEndpointColorSplit(spec, epCount) ? readoutEndpointIds : undefined;
   const distPanels: DistPanelSpec[] = [];
   for (const [key, g] of groups) {
     distPanels.push({
@@ -290,7 +309,7 @@ export function enumerateDistPanels(
       facetKey: g.facetKey,
       xVariableId: g.xVariableId,
       readoutEndpointId: g.readoutEndpointId || readoutEndpointId,
-      readoutEndpointIds: overlay ? readoutEndpointIds : undefined,
+      readoutEndpointIds: splitReadouts,
       rowIndices: g.rowIndices,
       scatterPanelIds: g.scatterPanelIds
     });

@@ -67,3 +67,41 @@ the exposure-by-dose distribution strip (Phase 6) - with
 `packages/visualization-engine` kept working throughout, and the old
 package deleted only once every call site had moved (Phase 7). See
 `docs/RENDERER_ARCHITECTURE.md` for the full design record.
+
+ADR-0010 Layout visual encoding and selection (2026-08-07).
+
+Guided and Advanced share one serializable `ViewLayoutSpec`. Guided
+controls are **presets** that write spec fields; they are not a parallel
+rendering mode.
+
+**Grouping:** Endpoint is a normal layout dimension (`LayoutDimension`
+endpoints) and a normal color encoding (`ColorEncoding` kind `endpoints`).
+Users may facet, color, and (future) style lines by endpoint or covariate;
+invalid combinations are warned in UI, not silently rewritten.
+
+**Multi-curve cells:** When `color.kind === "endpoints"`, two or more
+endpoints are selected, and the panel has no endpoint facet key,
+`ScatterPanelSpec.endpointIds` lists curves in one cell (`panelEndpointMode`
+`multiColor`). When endpoints are faceted, each cell is single-endpoint;
+`color.kind === "endpoints"` still tints that cell with that endpoint's
+color.
+
+**Distribution split:** Side-by-side shapes within a dose row follow
+`distribution.colorDistShapes` and the same color encoding: split by
+endpoint ids when coloring by endpoints in a multi-curve cell; split by
+levels when coloring by a variable. There is no separate long-term
+"compare dist" flag — Guided "Split distribution by endpoint" preset sets
+`colorDistShapes` (and linkage as today).
+
+**Visual policy:** Pure functions in `@er-explorer/domain`
+(`resolvePanelVisualPolicy`, `resolveDistVisualContext`) derive scatter
+point source, dist split mode, projection accent rules, and readout flags
+from spec + panel. The demo maps policy to palette (`apps/demo/src/layout/
+resolvePanelStyle.ts`). Paint paths must not branch on ad hoc
+`compareEndpoints` booleans when spec is available.
+
+**Selection (phase 2):** Dist row clicks will serialize as
+`dose` or `dose|suffix` where suffix is an endpoint id or covariate level;
+one resolver feeds readout, projections, and cohort highlight.
+
+See `.ai/LAYOUT_AND_ENCODING.md` and `.ai/ARCHITECTURE_REVIEW.md`.

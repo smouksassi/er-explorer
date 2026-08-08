@@ -8,16 +8,12 @@ ER Explorer is a pnpm/turborepo workbench for exposure–response analysis. **Do
 2. [ARCHITECTURE.md](./ARCHITECTURE.md) — package boundaries and data flow
 3. [REPRODUCIBILITY.md](./REPRODUCIBILITY.md) — session / `.erx` intent
 4. [ROADMAP.md](./ROADMAP.md) — backlog
+5. [../.ai/README.md](../.ai/README.md) — architecture stabilization review, layout/encoding debt, implementation rules
+6. [../.ai/CONTINUE_HERE.md](../.ai/CONTINUE_HERE.md) — **latest agent handoff (2026-08-07): Phase 0+1 + demo UX**
 
-## Active work (2026-08-04)
+## Active work (2026-08)
 
-**Demo BYOD** is implemented: wide CSV, column mapping, session save/load with embedded dataset.
-
-**Compare endpoints** supports mixed binary + linear endpoints, neutral dose selection styling,
-endpoint-colored points, filter summary in the status bar, facet stack + axis sync, and
-callout labels anchored near each curve (`packages/renderer/src/markers.ts`).
-
-See [SESSION_HANDOFF.md](./SESSION_HANDOFF.md) for the full feature list and smoke checklist.
+**Layout stabilization (Phase 0+1 done):** domain visual policy + demo wiring. **Next:** Phase 2 selection model + Guided→spec presets — see `.ai/CONTINUE_HERE.md`.
 
 - Data engine: `@er-explorer/data`; demo adapter: `apps/demo/src/datasetContext.ts`
 - Build: [BUILD.md](./BUILD.md) — `node apps/demo/scripts/verify-build.mjs`

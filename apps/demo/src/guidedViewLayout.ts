@@ -76,7 +76,7 @@ export function guidedToViewLayoutSpec(input: GuidedLayoutInput): ViewLayoutSpec
 }
 
 export function defaultAdvancedSpecFromGuided(input: GuidedLayoutInput): ViewLayoutSpec {
-  return { ...guidedToViewLayoutSpec(input), mode: "advanced" };
+  return { ...guidedToViewLayoutSpec(input), mode: "advanced", endpointOverlay: false };
 }
 
 export function distLinkageLabel(linkage: DistributionLinkage): string {

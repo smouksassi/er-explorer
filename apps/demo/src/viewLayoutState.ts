@@ -1,4 +1,5 @@
 import type { LayoutDimension, ViewLayoutSpec } from "@er-explorer/domain";
+import { dedupeFacetDimensions } from "@er-explorer/domain";
 import { defaultAdvancedSpecFromGuided, guidedToViewLayoutSpec, type GuidedLayoutInput } from "./guidedViewLayout";
 
 export type LayoutMode = "guided" | "advanced";
@@ -21,7 +22,7 @@ function mergeSelectedIds(selected: string[], order: string[]): string[] {
   return out;
 }
 
-/** Keep endpoint/x-metric facets aligned with Analysis checkboxes (order preserved). */
+/** Refresh endpoint/x-metric id lists on existing facet dimensions only (never inject axes). */
 export function syncAdvancedSpecWithAnalysis(
   spec: ViewLayoutSpec,
   endpointIds: string[],
@@ -41,23 +42,13 @@ export function syncAdvancedSpecWithAnalysis(
     return dim;
   };
 
-  let rowDimensions = spec.rowDimensions.map(syncDim);
-  let colDimensions = spec.colDimensions.map(syncDim);
-
-  const dims = [...rowDimensions, ...colDimensions];
-  const hasX = dims.some((d) => d.kind === "xMetrics");
-  const hasEp = dims.some((d) => d.kind === "endpoints") || spec.endpointOverlay;
-
-  if (!hasX && xMetricIds.length) {
-    const order = mergeSelectedIds(xMetricIds, xMetricOrder);
-    colDimensions = [...colDimensions, { kind: "xMetrics", ids: order, order }];
-  }
-  if (!hasEp && endpointIds.length) {
-    const order = mergeSelectedIds(endpointIds, endpointOrder);
-    rowDimensions = [{ kind: "endpoints", ids: order, order }, ...rowDimensions];
-  }
-
-  return { ...spec, rowDimensions, colDimensions };
+  const synced: ViewLayoutSpec = {
+    ...spec,
+    rowDimensions: spec.rowDimensions.map(syncDim),
+    colDimensions: spec.colDimensions.map(syncDim),
+    endpointOverlay: spec.mode === "advanced" ? false : spec.endpointOverlay
+  };
+  return dedupeFacetDimensions(synced);
 }
 
 function normalizeAdvancedColorFit(spec: ViewLayoutSpec): ViewLayoutSpec {
@@ -93,22 +84,21 @@ export function resolveViewLayoutSpec(
   return guidedToViewLayoutSpec(guidedInput);
 }
 
+/** Blank Advanced canvas: user adds row/column facets and color in Style (Analysis only filters ids). */
 export function defaultAdvancedLayout(
-  endpointIds: string[],
-  endpointOrder: string[],
-  xMetricIds: string[],
-  xMetricOrder: string[]
+  _endpointIds: string[],
+  _endpointOrder: string[],
+  _xMetricIds: string[],
+  _xMetricOrder: string[]
 ): ViewLayoutSpec {
-  const ep = mergeSelectedIds(endpointIds, endpointOrder);
-  const xm = mergeSelectedIds(xMetricIds, xMetricOrder);
   return {
     mode: "advanced",
-    rowDimensions: ep.length ? [{ kind: "endpoints", ids: ep, order: ep }] : [],
-    colDimensions: xm.length ? [{ kind: "xMetrics", ids: xm, order: xm }] : [],
+    rowDimensions: [],
+    colDimensions: [],
     color: { kind: "dose" },
     fitByColor: false,
     continuousBinning: "median",
-    distribution: { linkage: "shared_by_x_column", colorDistShapes: false }
+    distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
   };
 }
 
@@ -123,7 +113,7 @@ export function layoutColorFacetConflict(spec: ViewLayoutSpec): string | null {
   const inRow = spec.rowDimensions.some((d) => d.kind === "variable" && d.variableId === v);
   const inCol = spec.colDimensions.some((d) => d.kind === "variable" && d.variableId === v);
   if (inRow || inCol) {
-    return `Color is "${v}" and "${v}" is also a row/column facet — each panel shows one ${v} level (separate rows/columns). Points and curves use that level’s color; turn on “Fit separately per color group” only when several ${v} levels appear in the same panel.`;
+    return `Color is "${v}" and "${v}" is also a row/column facet — each panel is one ${v} level, so curves/points use dose colors here. Pick Dose or Endpoints for color, or remove "${v}" from facets to color by ${v} within a panel.`;
   }
   return null;
 }

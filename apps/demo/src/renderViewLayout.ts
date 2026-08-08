@@ -1,5 +1,5 @@
 import type { DistPanelSpec, ScatterPanelSpec, ViewLayoutSpec } from "@er-explorer/domain";
-import { effectiveEndpointOverlay } from "@er-explorer/domain";
+import { isGuidedCompareTopology } from "@er-explorer/domain";
 
 export interface FacetGridMountOptions {
   escapeHtml: (s: string) => string;
@@ -13,7 +13,7 @@ export interface FacetGridMountOptions {
 }
 
 function usesStackedFacetShells(spec: ViewLayoutSpec): boolean {
-  if (effectiveEndpointOverlay(spec)) return false;
+  if (isGuidedCompareTopology(spec)) return false;
   const rowX =
     spec.rowDimensions.length === 1 &&
     spec.rowDimensions[0]!.kind === "xMetrics" &&
@@ -116,7 +116,7 @@ function sortDistPanelsByScatterColumns(
 }
 
 function distUsesSharedGridClass(spec: ViewLayoutSpec): boolean {
-  return spec.distribution.linkage === "shared_by_x_column" && !effectiveEndpointOverlay(spec);
+  return spec.distribution.linkage === "shared_by_x_column" && !isGuidedCompareTopology(spec);
 }
 
 /**
@@ -131,7 +131,7 @@ export function mountViewLayoutGrid(
 ): void {
   container.innerHTML = "";
 
-  if (effectiveEndpointOverlay(spec)) {
+  if (isGuidedCompareTopology(spec)) {
     const facet = opts.createFacetLayoutShell();
     const scatterBlock = facet.querySelector(".facet-scatter-block") as HTMLElement;
     const distBlock = facet.querySelector(".facet-dist-block") as HTMLElement;

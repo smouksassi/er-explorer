@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ViewLayoutSpec } from "@er-explorer/domain";
-import { effectiveEndpointOverlay, layoutHasEndpointFacet } from "@er-explorer/domain";
+import {
+  dedupeFacetDimensions,
+  distEndpointColorSplit,
+  effectiveEndpointOverlay,
+  isGuidedCompareTopology,
+  layoutHasEndpointFacet,
+  panelEndpointMode,
+  usesEndpointColorOverlay
+} from "@er-explorer/domain";
 import { loadDataset } from "./loadedDataset";
 import {
   countPanelsForGuidedTopology,
@@ -50,10 +58,12 @@ describe("viewLayoutEnumerate", () => {
       endpointOverlay: true,
       distribution: { linkage: "mirror_scatter_grid", colorDistShapes: true }
     };
+    expect(isGuidedCompareTopology(spec)).toBe(true);
     const scatter = enumerateScatterPanels(loaded, [], spec, input);
     expect(scatter).toHaveLength(2);
-    const dist = enumerateDistPanels(spec, scatter, "icgi", ["icgi", "icgi2"]);
+    const dist = enumerateDistPanels(spec, scatter, "icgi", ["icgi", "icgi2"], 2);
     expect(dist).toHaveLength(2);
+    expect(dist.every((d) => (d.readoutEndpointIds?.length ?? 0) === 2)).toBe(true);
   });
 
   it("snapshot-style Endpoint × sex × x on columns", () => {
@@ -102,30 +112,108 @@ describe("viewLayoutEnumerate", () => {
     };
     expect(layoutHasEndpointFacet(spec)).toBe(true);
     expect(effectiveEndpointOverlay(spec)).toBe(false);
+    expect(isGuidedCompareTopology(spec)).toBe(false);
     const scatter = enumerateScatterPanels(loaded, [], spec, input);
     expect(scatter).toHaveLength(4);
     expect(scatter.every((p) => !p.endpointIds || p.endpointIds.length <= 1)).toBe(true);
     const byEp = new Set(scatter.map((p) => p.endpointId));
     expect(byEp).toEqual(new Set(["icgi", "icgi2"]));
-    const dist = enumerateDistPanels(spec, scatter, "icgi", ["icgi", "icgi2"]);
+    const dist = enumerateDistPanels(spec, scatter, "icgi", ["icgi", "icgi2"], 2);
     expect(dist).toHaveLength(4);
     expect(new Set(dist.map((d) => d.readoutEndpointId))).toEqual(new Set(["icgi", "icgi2"]));
   });
 
-  it("overlay without endpoint facet yields compare cells", () => {
+  it("advanced color endpoints cols=x only uses facet grid with multi-curve cells", () => {
     const spec: ViewLayoutSpec = {
       mode: "advanced",
       rowDimensions: [],
       colDimensions: [{ kind: "xMetrics", ids: ["auc", "cmax"], order: ["auc", "cmax"] }],
       color: { kind: "endpoints" },
       fitByColor: false,
-      endpointOverlay: true,
-      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
+      endpointOverlay: false,
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: true }
     };
-    expect(effectiveEndpointOverlay(spec)).toBe(true);
+    expect(isGuidedCompareTopology(spec)).toBe(false);
+    expect(usesEndpointColorOverlay(spec, 2)).toBe(false);
+    expect(distEndpointColorSplit(spec, 2)).toBe(true);
     const scatter = enumerateScatterPanels(loaded, [], spec, input);
     expect(scatter).toHaveLength(2);
     expect(scatter.every((p) => (p.endpointIds?.length ?? 0) === 2)).toBe(true);
+    expect(panelEndpointMode(spec, scatter[0]!.facetKey, 2)).toBe("multiColor");
+    const dist = enumerateDistPanels(spec, scatter, "icgi", ["icgi", "icgi2"], 2);
+    expect(dist).toHaveLength(2);
+    expect(dist.every((d) => (d.readoutEndpointIds?.length ?? 0) === 2)).toBe(true);
+  });
+
+  it("advanced study row × x col × color endpoints yields multi-curve per cell", () => {
+    const loadedStudy = wide({
+      id: [1, 2, 3, 4],
+      study: ["52", "81", "52", "81"],
+      sex: ["F", "M", "F", "M"],
+      dose: ["Pbo", "600", "Pbo", "600"],
+      auc: [0, 100, 0, 120],
+      cmax: [0, 10, 0, 12],
+      icgi: [0, 1, 1, 0],
+      icgi2: [0, 0, 1, 1]
+    });
+    const spec: ViewLayoutSpec = {
+      mode: "advanced",
+      rowDimensions: [{ kind: "variable", variableId: "study" }],
+      colDimensions: [{ kind: "xMetrics", ids: ["auc"], order: ["auc"] }],
+      color: { kind: "endpoints" },
+      fitByColor: false,
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: true }
+    };
+    expect(isGuidedCompareTopology(spec)).toBe(false);
+    const scatter = enumerateScatterPanels(loadedStudy, [], spec, {
+      xMetricIds: ["auc"],
+      endpointIds: ["icgi", "icgi2"]
+    });
+    expect(scatter).toHaveLength(2);
+    expect(scatter.every((p) => (p.endpointIds?.length ?? 0) === 2)).toBe(true);
+    expect(scatter.some((p) => p.facetKey.study === "52")).toBe(true);
+    expect(scatter.some((p) => p.facetKey.study === "81")).toBe(true);
+  });
+
+  it("advanced study row × endpoint col yields single endpoint per panel", () => {
+    const loadedStudy = wide({
+      id: [1, 2, 3, 4],
+      study: ["52", "81", "52", "81"],
+      dose: ["Pbo", "600", "Pbo", "600"],
+      auc: [0, 100, 0, 120],
+      icgi: [0, 1, 1, 0],
+      icgi2: [0, 0, 1, 1]
+    });
+    const spec: ViewLayoutSpec = {
+      mode: "advanced",
+      rowDimensions: [{ kind: "variable", variableId: "study" }],
+      colDimensions: [{ kind: "endpoints", ids: ["icgi", "icgi2"], order: ["icgi", "icgi2"] }],
+      color: { kind: "dose" },
+      fitByColor: false,
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
+    };
+    const scatter = enumerateScatterPanels(loadedStudy, [], spec, {
+      xMetricIds: ["auc"],
+      endpointIds: ["icgi", "icgi2"]
+    });
+    expect(scatter).toHaveLength(4);
+    expect(scatter.every((p) => !p.endpointIds || p.endpointIds.length <= 1)).toBe(true);
+  });
+
+  it("dedupeFacetDimensions removes row duplicate when also on columns", () => {
+    const spec: ViewLayoutSpec = {
+      mode: "advanced",
+      rowDimensions: [{ kind: "variable", variableId: "study" }],
+      colDimensions: [
+        { kind: "variable", variableId: "study" },
+        { kind: "xMetrics", ids: ["auc"], order: ["auc"] }
+      ],
+      color: { kind: "dose" },
+      fitByColor: false,
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
+    };
+    const deduped = dedupeFacetDimensions(spec);
+    expect(deduped.rowDimensions).toHaveLength(0);
   });
 
   it("sex row × study col × endpoint color produces distinct panel cohorts", () => {

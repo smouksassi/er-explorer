@@ -1,4 +1,5 @@
 import type { DistributionLinkage, LayoutDimension, VariableColorBinning, ViewLayoutSpec } from "@er-explorer/domain";
+import { dedupeFacetDimensions } from "@er-explorer/domain";
 
 export function linkageFromSelectValue(value: string): DistributionLinkage {
   switch (value) {
@@ -88,11 +89,10 @@ export function readAdvancedSpecFromUi(
   fitByColor: boolean,
   distLinkage: DistributionLinkage,
   colorDistShapes: boolean,
-  endpointOverlay: boolean
+  _endpointOverlay: boolean
 ): ViewLayoutSpec {
   const rowDimensions = readFacetDimensionsFromSelect(rowSelect, endpoints, xMetrics);
   const colDimensions = readFacetDimensionsFromSelect(colSelect, endpoints, xMetrics);
-  const hasEndpointFacet = [...rowDimensions, ...colDimensions].some((d) => d.kind === "endpoints");
 
   let color: ViewLayoutSpec["color"];
   const binning =
@@ -107,17 +107,17 @@ export function readAdvancedSpecFromUi(
 
   const fitByColorAllowed = color.kind === "variable";
 
-  return {
+  return dedupeFacetDimensions({
     mode: "advanced",
     rowDimensions,
     colDimensions,
     color,
     continuousBinning: binning,
     fitByColor: fitByColorAllowed ? fitByColor : false,
-    endpointOverlay: hasEndpointFacet ? false : endpointOverlay,
+    endpointOverlay: false,
     distribution: { linkage: distLinkage, colorDistShapes },
     observedGroupVariableId: color.kind === "variable" ? color.variableId : undefined
-  };
+  });
 }
 
 export function applyAdvancedSpecToUi(

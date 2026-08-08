@@ -7,6 +7,7 @@ You are working on ER Explorer.
 
 Always:
 - read the docs before editing code (`docs/SESSION_HANDOFF.md`, `docs/ARCHITECTURE.md`, `docs/REPRODUCIBILITY.md`)
+- for stabilization work and layout/encoding debt, read [`.ai/README.md`](../.ai/README.md)
 - keep wide datasets canonical
 - derive long analysis views lazily (`@er-explorer/data`)
 - keep analysis separate from rendering (`@er-explorer/analysis` / plugins vs `@er-explorer/renderer`)

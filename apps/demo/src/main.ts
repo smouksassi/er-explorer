@@ -63,7 +63,8 @@ import {
 } from "./datasetContext";
 import { loadDataset, enumerateDistPanels, enumerateScatterPanels, getColumn } from "@er-explorer/data";
 import type { DistPanelSpec, ScatterPanelSpec, ViewLayoutSpec } from "@er-explorer/domain";
-import { effectiveEndpointOverlay, layoutHasEndpointFacet } from "@er-explorer/domain";
+import { dedupeFacetDimensions, distEndpointColorSplit, isGuidedCompareTopology, layoutHasEndpointFacet, resolveDistVisualContext, resolveLegendShowsEndpoints, resolvePanelVisualPolicy } from "@er-explorer/domain";
+import { policyForLayoutChrome } from "./layout/resolvePanelStyle";
 import {
   type ByodSessionPayload,
   buildByodPayload,
@@ -421,7 +422,10 @@ interface DemoState {
   bootstrapResamples: number;
   /** patient ids selected by brushing in any exposure panel; shared/linked across all panels */
   brushedIds: Set<number> | null;
+  /** Dose labels toggled by clicking distribution rows (shared across panels). */
   selectedDoses: Set<string>;
+  /** When distribution rows are split by endpoint (or color level), full group ids e.g. `600 mg|icgi`. */
+  selectedDistGroupIds: Set<string>;
   distributionMode: DistributionMode;
   /** Only one reference-line split can be active at a time (mirrors the R `exposure_metric_split`
    * parameter, which also takes a single value). */
@@ -493,6 +497,7 @@ const state: DemoState = {
   bootstrapResamples: 300,
   brushedIds: null,
   selectedDoses: new Set(),
+  selectedDistGroupIds: new Set(),
   distributionMode: "boxplot",
   referenceLineKind: null,
   splitAnnotationMode: "off",
@@ -620,18 +625,44 @@ const resetAdvancedToGuidedBtn = $<HTMLButtonElement>("resetAdvancedToGuidedBtn"
 const advancedLayoutStatusEl = $<HTMLParagraphElement>("advancedLayoutStatus");
 const guidedLayoutHintEl = $<HTMLDivElement>("guidedLayoutHint");
 
+function selectedAdvancedFacetVariableIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const sel of [advancedRowFacetsEl, advancedColFacetsEl]) {
+    for (const opt of sel.options) {
+      if (!opt.selected || !opt.value.startsWith("var:")) continue;
+      ids.add(opt.value.slice(4));
+    }
+  }
+  return ids;
+}
+
+function reconcileAdvancedColorWithFacets(): void {
+  const faceted = selectedAdvancedFacetVariableIds();
+  if (faceted.has(advancedColorByEl.value)) advancedColorByEl.value = "dose";
+}
+
 function refreshAdvancedColorOptions(): void {
   if (!dataset) return;
   const keep = advancedColorByEl.value;
+  const faceted = selectedAdvancedFacetVariableIds();
   advancedColorByEl.innerHTML =
     '<option value="dose">Dose</option><option value="endpoints">Endpoints</option>';
   for (const col of filterColumnOptions()) {
     const opt = document.createElement("option");
     opt.value = col.id;
-    opt.textContent = col.label;
+    const facetedHere = faceted.has(col.id);
+    opt.textContent = facetedHere ? `${col.label} (on facets)` : col.label;
+    opt.disabled = facetedHere;
     advancedColorByEl.appendChild(opt);
   }
-  if ([...advancedColorByEl.options].some((o) => o.value === keep)) advancedColorByEl.value = keep;
+  if ([...advancedColorByEl.options].some((o) => o.value === keep && !o.disabled)) advancedColorByEl.value = keep;
+  else if (faceted.has(keep)) advancedColorByEl.value = "dose";
+}
+
+function colorVariableFacetedOnPanel(panel: ScatterPanelSpec | undefined, colorVarId: string): boolean {
+  if (!panel) return false;
+  const v = panel.facetKey[colorVarId];
+  return v != null && String(v).length > 0;
 }
 
 function colorBinModelForSpec(spec: ViewLayoutSpec | null | undefined, cohortRowIndices: number[]): ColorBinModel | null {
@@ -645,6 +676,7 @@ function refreshAdvancedFacetOptions(): void {
   const covariates = filterColumnOptions();
   populateFacetSelectOptions(advancedRowFacetsEl, covariates);
   populateFacetSelectOptions(advancedColFacetsEl, covariates);
+  refreshAdvancedColorOptions();
 }
 
 function layoutAnalysisContext(): {
@@ -686,6 +718,42 @@ function syncAdvancedFacetSelectsFromSpec(spec: ViewLayoutSpec): void {
   applyFacetSelectFromSpec(advancedColFacetsEl, spec.colDimensions);
 }
 
+function syncAdvancedColorDistShapesUi(spec: ViewLayoutSpec | null): void {
+  if (!spec) {
+    advancedColorDistShapesEl.disabled = false;
+    return;
+  }
+  const label = advancedColorDistShapesEl.closest("label");
+  if (spec.color.kind === "dose") {
+    advancedColorDistShapesEl.disabled = true;
+    advancedColorDistShapesEl.checked = false;
+    if (label) label.title = "Not used when color is dose (boxplots follow dose palette).";
+    return;
+  }
+  if (spec.color.kind === "endpoints" && layoutHasEndpointFacet(spec)) {
+    advancedColorDistShapesEl.disabled = true;
+    advancedColorDistShapesEl.checked = false;
+    if (label) {
+      label.title =
+        "One endpoint per panel — boxplots use that endpoint’s color. Split rows apply when several endpoints share one panel (Color: Endpoints, no endpoint facets).";
+    }
+    if (state.layoutMode === "advanced" && state.advancedViewLayout?.distribution.colorDistShapes) {
+      state.advancedViewLayout = {
+        ...state.advancedViewLayout,
+        distribution: { ...state.advancedViewLayout.distribution, colorDistShapes: false }
+      };
+    }
+    return;
+  }
+  advancedColorDistShapesEl.disabled = false;
+  if (label) label.title = "";
+  if (spec.color.kind === "endpoints") {
+    if (label && !label.querySelector(".field-hint-inline")) {
+      // keep default label text from HTML
+    }
+  }
+}
+
 function syncAdvancedFitByColorUi(spec: ViewLayoutSpec | null): void {
   const allowed = spec?.color.kind === "variable";
   advancedFitByColorEl.disabled = !allowed;
@@ -693,6 +761,7 @@ function syncAdvancedFitByColorUi(spec: ViewLayoutSpec | null): void {
   const epFacet = spec ? layoutHasEndpointFacet(spec) : false;
   advancedEndpointOverlayEl.disabled = epFacet;
   if (epFacet) advancedEndpointOverlayEl.checked = false;
+  syncAdvancedColorDistShapesUi(spec);
 }
 
 function updateAdvancedLayoutStatus(spec: ViewLayoutSpec | null): void {
@@ -700,14 +769,55 @@ function updateAdvancedLayoutStatus(spec: ViewLayoutSpec | null): void {
     advancedLayoutStatusEl.textContent = "";
     return;
   }
+  const parts: string[] = [];
   const conflict = spec ? layoutColorFacetConflict(spec) : null;
-  const doseFitNote =
-    spec?.color.kind === "dose" && advancedFitByColorEl.checked
-      ? "Separate fits by dose are not supported (dose is the ER x-axis grouping for projections)."
-      : "";
-  const base =
-    "Advanced layout follows Analysis exposure/endpoint selections. Use “Copy current Guided layout” only when you want Guided’s facet recipe.";
-  advancedLayoutStatusEl.textContent = [conflict, doseFitNote].filter(Boolean).join(" ") || base;
+  if (conflict) parts.push(conflict);
+  if (spec?.color.kind === "dose" && advancedFitByColorEl.checked) {
+    parts.push("Separate fits by dose are not supported (dose is the ER x-axis grouping for projections).");
+  }
+  if (spec) {
+    const deduped = dedupeFacetDimensions(spec);
+    if (deduped.rowDimensions.length !== spec.rowDimensions.length) {
+      parts.push("A facet dimension was on both rows and columns — kept on columns only.");
+    }
+    const rowKinds = new Set(spec.rowDimensions.map((d) => (d.kind === "variable" ? d.variableId : d.kind)));
+    for (const d of spec.colDimensions) {
+      const k = d.kind === "variable" ? d.variableId : d.kind;
+      if (rowKinds.has(k)) {
+        parts.push(
+          `“${d.kind === "variable" ? covariateLabel(d.variableId) : d.kind}” is on both row and column facets — column facet kept.`
+        );
+      }
+    }
+    const xOnRow = spec.rowDimensions.some((d) => d.kind === "xMetrics");
+    const xOnCol = spec.colDimensions.some((d) => d.kind === "xMetrics");
+    if (xOnRow && xOnCol) {
+      parts.push("Exposure metrics on both rows and columns — usually put exposure metrics on columns only (x-axis).");
+    }
+    if (spec.color.kind === "endpoints" && layoutHasEndpointFacet(spec)) {
+      parts.push(
+        "Endpoints are faceted — each panel and its boxplot strip use that endpoint’s color. Use “Color-split boxplots” when multiple endpoints share one panel (no endpoint facets)."
+      );
+    }
+    const endpoints = selectedEndpoints();
+    const metrics = selectedExposureMetrics();
+    if (endpoints.length && metrics.length && dataset?.loaded) {
+      const scatter = enumerateScatterPanels(
+        dataset.loaded,
+        [],
+        deduped,
+        { xMetricIds: metrics, endpointIds: endpoints },
+        dataFilteredRowIndices()
+      );
+      parts.push(`Grid: ${scatter.length} scatter panel(s).`);
+    }
+  }
+  if (!parts.length) {
+    parts.push(
+      "Exposure metrics on columns = one column per exposure (x-axis). Endpoints on row or column = separate panel per endpoint. Color: Endpoints (without endpoint facets) = multiple curves per panel."
+    );
+  }
+  advancedLayoutStatusEl.textContent = parts.join(" ");
 }
 
 function syncLayoutModeUi(options?: { refreshAdvancedControls?: boolean }): void {
@@ -945,9 +1055,244 @@ function variableColorPaletteLevels(colorVarId: string, cohortRowIndices?: numbe
   return distinctVariableLevels(colorVarId, cohortRowIndices ?? dataFilteredRowIndices());
 }
 
+function endpointIdForDistPanel(panelId: string | undefined, fallback: Endpoint): Endpoint {
+  if (panelId) {
+    const dp = distPanelById.get(panelId);
+    if (dp?.readoutEndpointId) return dp.readoutEndpointId as Endpoint;
+    const sp = scatterPanelById.get(panelId);
+    if (sp?.facetKey.endpoint) return sp.facetKey.endpoint as Endpoint;
+    if (sp?.endpointId) return sp.endpointId as Endpoint;
+  }
+  return fallback;
+}
+
 function cohortForPanel(panelId?: string): number[] | undefined {
   if (!panelId) return undefined;
   return scatterPanelById.get(panelId)?.rowIndices;
+}
+
+/** Shared exposure x-axis domain for scatter + distribution in the same exposure column (all facet rows). */
+function xDomainForLinkedPanels(metric: ExposureMetric, panelId?: string): [number, number] {
+  const xMetric =
+    (panelId && scatterPanelById.get(panelId)?.xVariableId) ||
+    (panelId && distPanelById.get(panelId)?.xVariableId) ||
+    metric;
+
+  const merged = new Set<number>();
+  for (const p of scatterPanelById.values()) {
+    if (p.xVariableId === xMetric) p.rowIndices.forEach((i) => merged.add(i));
+  }
+  for (const d of distPanelById.values()) {
+    if (d.xVariableId === xMetric) {
+      d.rowIndices.forEach((i) => merged.add(i));
+      for (const sid of d.scatterPanelIds) {
+        scatterPanelById.get(sid)?.rowIndices.forEach((i) => merged.add(i));
+      }
+    }
+  }
+
+  if (!merged.size && panelId) {
+    scatterPanelById.get(panelId)?.rowIndices.forEach((i) => merged.add(i));
+    const dist = distPanelById.get(panelId);
+    if (dist) {
+      dist.rowIndices.forEach((i) => merged.add(i));
+      for (const sid of dist.scatterPanelIds) {
+        scatterPanelById.get(sid)?.rowIndices.forEach((i) => merged.add(i));
+      }
+    }
+  }
+
+  const indices = merged.size ? [...merged] : dataFilteredRowIndices();
+  return exposureXDomain(metric, indices);
+}
+
+function tryFitForCohort(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  cohortRowIndices: number[]
+): { fit: EndpointFit; xs: number[]; ys: number[] } | null {
+  const indices = cohortRowIndices.filter((i) => Number.isFinite(endpointValue(i, endpoint)));
+  if (indices.length < 3) return null;
+  try {
+    return fitForCohort(metric, endpoint, indices);
+  } catch {
+    return null;
+  }
+}
+
+function distSplitByEndpointActive(splitByEndpoints?: Endpoint[]): boolean {
+  if (!splitByEndpoints || splitByEndpoints.length <= 1) return false;
+  const spec = resolveActiveViewLayoutSpec();
+  if (!spec) return state.layoutMode === "guided" && state.compareDistByEndpoint;
+  const ctx = resolveDistVisualContext(
+    spec,
+    { compareEndpointIds: splitByEndpoints, fallbackEndpointId: splitByEndpoints[0]! },
+    selectedEndpoints()
+  );
+  return ctx.splitByEndpointIds.length > 1;
+}
+
+function layoutUsesNeutralDoseChrome(): boolean {
+  const chrome = policyForLayoutChrome(activeViewLayoutSpec ?? resolveActiveViewLayoutSpec(), selectedEndpoints());
+  if (chrome) return chrome.useNeutralDoseLabelsInChrome;
+  return !!(state.compareEndpoints && selectedEndpoints().length > 1);
+}
+
+function selectedDosesForEndpoint(endpoint: Endpoint): Set<string> {
+  if (!state.selectedDistGroupIds.size) return state.selectedDoses;
+  const endpointIds = new Set(selectedEndpoints());
+  const out = new Set<string>();
+  for (const gid of state.selectedDistGroupIds) {
+    const sep = gid.indexOf("|");
+    if (sep === -1) continue;
+    const dose = gid.slice(0, sep);
+    const suffix = gid.slice(sep + 1);
+    if (endpointIds.has(suffix as Endpoint)) {
+      if (suffix === endpoint) out.add(dose);
+    } else {
+      out.add(dose);
+    }
+  }
+  return out;
+}
+
+/** Dose labels currently selected via distribution rows (plain dose or `dose|level` splits). */
+function selectedDosesForReadout(): string[] {
+  if (state.selectedDistGroupIds.size) {
+    return [...new Set([...state.selectedDistGroupIds].map((gid) => (gid.includes("|") ? gid.split("|")[0]! : gid)))];
+  }
+  return [...state.selectedDoses];
+}
+
+function parseDistGroupId(gid: string): { dose: string; suffix?: string } {
+  const sep = gid.indexOf("|");
+  if (sep === -1) return { dose: gid };
+  return { dose: gid.slice(0, sep), suffix: gid.slice(sep + 1) };
+}
+
+/** Dist row ids to project (plain dose or `dose|endpoint` / `dose|colorLevel`). */
+function distGroupIdsForProjections(endpoint: Endpoint): string[] {
+  if (state.selectedDistGroupIds.size) {
+    return [...state.selectedDistGroupIds].filter((gid) => {
+      const { suffix } = parseDistGroupId(gid);
+      if (!suffix) return true;
+      if (selectedEndpoints().includes(suffix as Endpoint)) return suffix === endpoint;
+      return true;
+    });
+  }
+  if (state.selectedDoses.size) return [...state.selectedDoses];
+  return [];
+}
+
+function rowsForDistGroupId(
+  gid: string,
+  active: Set<number>,
+  cohortRowIndices: number[] | undefined,
+  endpoint: Endpoint,
+  colorContext?: { variableId: string; model: ColorBinModel }
+): number[] {
+  const ds = requireDataset();
+  const { dose, suffix } = parseDistGroupId(gid);
+  const cohortSet = cohortRowIndices ? new Set(cohortRowIndices) : null;
+  let rows = rowIndicesForDose(dose).filter(
+    (i) => active.has(ds.patientId(i)) && (!cohortSet || cohortSet.has(i))
+  );
+  if (!suffix) return rows;
+  if (selectedEndpoints().includes(suffix as Endpoint)) {
+    return rows.filter((i) => Number.isFinite(endpointValue(i, suffix as Endpoint)));
+  }
+  if (colorContext) {
+    const { variableId, model } = colorContext;
+    return rows.filter((i) => colorLevelForRow(i, model, ds.loaded, variableId) === suffix);
+  }
+  return rows;
+}
+
+function computeBinaryStatsFromRows(
+  rows: number[],
+  metric: ExposureMetric,
+  endpoint: Endpoint
+): BinaryDoseGroupStats | null {
+  const vals = rows.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (!vals.length) return null;
+  const s = summarizeDistribution(vals);
+  if (!s) return null;
+  const responders = rows.filter((i) => endpointValue(i, endpoint) === 1).length;
+  const ci = wilsonScoreInterval(responders, rows.length);
+  return {
+    q1: s.q1,
+    q3: s.q3,
+    median: s.median,
+    whiskerLow: s.whiskerLow,
+    whiskerHigh: s.whiskerHigh,
+    min: s.min,
+    max: s.max,
+    n: vals.length,
+    observed: { proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper, n: rows.length, responders }
+  };
+}
+
+function colorForDistGroupId(
+  gid: string,
+  endpoint: Endpoint,
+  spec: ViewLayoutSpec | null,
+  colorModel: ColorBinModel | null,
+  colorOverride?: string
+): string {
+  const { dose, suffix } = parseDistGroupId(gid);
+  if (colorOverride) return colorOverride;
+  if (suffix && spec?.color.kind === "variable" && colorModel) {
+    return variableColorForLevel(spec.color.variableId, suffix, colorModel.levels);
+  }
+  if (suffix && selectedEndpoints().includes(suffix as Endpoint)) return endpointColor(suffix as Endpoint);
+  if (spec?.color.kind === "endpoints") return endpointColor(endpoint);
+  return resolveDoseColor(dose);
+}
+
+function projectedGroupsForDistSelection(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  active: Set<number>,
+  cohortRowIndices?: number[],
+  opts?: { colorOverride?: string; spec?: ViewLayoutSpec | null }
+): ProjectedGroup[] {
+  const spec = opts?.spec ?? resolveActiveViewLayoutSpec();
+  const colorModel =
+    spec?.color.kind === "variable" && dataset
+      ? buildColorBinModel(
+          dataset.loaded,
+          spec.color.variableId,
+          cohortRowIndices ?? dataFilteredRowIndices(),
+          spec.continuousBinning ?? spec.color.binning
+        )
+      : null;
+  const colorCtx =
+    spec?.color.kind === "variable" && colorModel
+      ? { variableId: spec.color.variableId, model: colorModel }
+      : undefined;
+
+  const gids = distGroupIdsForProjections(endpoint);
+  const out: ProjectedGroup[] = [];
+  for (const gid of gids) {
+    const rows = rowsForDistGroupId(gid, active, cohortRowIndices, endpoint, colorCtx);
+    const stats = computeBinaryStatsFromRows(rows, metric, endpoint);
+    if (!stats) continue;
+    const { observed, ...rest } = stats;
+    out.push({
+      groupId: gid,
+      color: colorForDistGroupId(gid, endpoint, spec, colorModel, opts?.colorOverride),
+      ...rest,
+      observed: state.showDoseObserved ? observed : undefined
+    });
+  }
+  return out;
+}
+
+function pointColorsMonochromeForEndpoint(endpoint: Endpoint): Record<string, string> {
+  const c = endpointColor(endpoint);
+  const map: Record<string, string> = {};
+  for (const dose of DOSE_ORDER()) map[dose] = c;
+  return map;
 }
 
 function curveFor(fit: EndpointFit, xs: number[], ys: number[], xDomain: [number, number]): PredictionResult {
@@ -1124,7 +1469,8 @@ const NEUTRAL_COMPARE_COLOR = "#64748b";
 const DOSE_SELECTION_NEUTRAL = "#475569";
 
 function compareDistUsesNeutralShapes(): boolean {
-  return isEndpointComparisonActive() && !state.compareDistByEndpoint;
+  const chrome = policyForLayoutChrome(activeViewLayoutSpec ?? resolveActiveViewLayoutSpec(), selectedEndpoints());
+  return chrome?.useNeutralDistShapes ?? false;
 }
 
 function attachStackSplitter(stack: HTMLElement): void {
@@ -1168,15 +1514,32 @@ function distPaintContextForStack(
   readoutEndpoints: Endpoint[];
   omitEndpointFit: boolean;
 } {
+  const spec = resolveActiveViewLayoutSpec();
   const compareRaw = stack.dataset.compareEndpoints;
   if (compareRaw) {
     const eps = compareRaw.split("|").filter(Boolean) as Endpoint[];
     if (eps.length > 1) {
+      if (spec) {
+        const ctx = resolveDistVisualContext(
+          spec,
+          { compareEndpointIds: eps, fallbackEndpointId: eps[0]! },
+          selectedEndpoints()
+        );
+        const split =
+          ctx.splitByEndpointIds.length > 1 ? (ctx.splitByEndpointIds as Endpoint[]) : undefined;
+        return {
+          endpoint: eps[0]!,
+          splitByEndpoints: split,
+          readoutEndpoints: ctx.readoutEndpointIds as Endpoint[],
+          omitEndpointFit: ctx.omitPerEndpointFitInReadout
+        };
+      }
+      const split = distSplitByEndpointActive(eps);
       return {
         endpoint: eps[0]!,
-        splitByEndpoints: state.compareDistByEndpoint ? eps : undefined,
-        readoutEndpoints: state.compareDistByEndpoint ? eps : [eps[0]!],
-        omitEndpointFit: !state.compareDistByEndpoint
+        splitByEndpoints: split ? eps : undefined,
+        readoutEndpoints: split ? eps : [eps[0]!],
+        omitEndpointFit: !split
       };
     }
   }
@@ -2022,7 +2385,18 @@ function activeSet(): Set<number> {
   const ds = requireDataset();
   let ids = new Set(dataFilteredRowIndices().map((i) => ds.patientId(i)));
   if (state.brushedIds) ids = new Set([...ids].filter((id) => state.brushedIds!.has(id)));
-  if (state.selectedDoses.size) {
+  if (state.selectedDistGroupIds.size) {
+    const doses = new Set<string>();
+    for (const gid of state.selectedDistGroupIds) {
+      doses.add(gid.includes("|") ? gid.split("|")[0]! : gid);
+    }
+    ids = new Set(
+      [...ids].filter((id) => {
+        const dose = doseForPatientId(id);
+        return dose !== undefined && doses.has(dose);
+      })
+    );
+  } else if (state.selectedDoses.size) {
     ids = new Set([...ids].filter((id) => {
       const dose = doseForPatientId(id);
       return dose !== undefined && state.selectedDoses.has(dose);
@@ -2051,7 +2425,7 @@ function guidedLayoutInput(): import("./guidedViewLayout").GuidedLayoutInput {
 
 function renderViewLayoutFacetGrid(metrics: ExposureMetric[], endpoints: Endpoint[]): void {
   const ds = requireDataset();
-  const spec = activeViewLayoutSpec ?? resolveActiveViewLayoutSpec();
+  const spec = resolveActiveViewLayoutSpec();
   scatterPanelById.clear();
   distPanelById.clear();
 
@@ -2065,11 +2439,17 @@ function renderViewLayoutFacetGrid(metrics: ExposureMetric[], endpoints: Endpoin
   for (const p of scatterPanels) scatterPanelById.set(p.id, p);
 
   const readoutEp = endpoints[0] ?? scatterPanels[0]?.endpointId ?? "";
+  const distSplitEps =
+    endpoints.length > 1 &&
+    (isGuidedCompareTopology(spec) || distEndpointColorSplit(spec, endpoints.length))
+      ? endpoints
+      : undefined;
   const distPanels = enumerateDistPanels(
     spec,
     scatterPanels,
     readoutEp,
-    effectiveEndpointOverlay(spec) ? endpoints : undefined
+    distSplitEps,
+    endpoints.length
   );
   for (const p of distPanels) distPanelById.set(p.id, p);
 
@@ -2115,11 +2495,16 @@ function appendScatterPanelCell(grid: HTMLElement, panel: ScatterPanelSpec): voi
 
 function appendComparePanelCell(grid: HTMLElement, panel: ScatterPanelSpec): void {
   const endpoints = panel.endpointIds ?? [];
+  const spec = activeViewLayoutSpec;
   const cell = document.createElement("div");
   cell.className = "panel-cell panel-cell-scatter";
+  const title = document.createElement("div");
+  title.className = "panel-cell-title";
+  title.textContent = spec ? columnTitleForPanel(panel, spec) : exposureLabel(panel.xVariableId);
+  cell.appendChild(title);
   const stack = document.createElement("div");
   stack.className = "metric-stack metric-stack-scatter-only";
-  stack.dataset.stackKind = "scatter-compare";
+  stack.dataset.stackKind = endpoints.length > 1 ? "scatter-compare" : "scatter-only";
   stack.dataset.metric = panel.xVariableId;
   stack.dataset.compareEndpoints = endpoints.join("|");
   stack.dataset.panelId = panel.id;
@@ -2273,8 +2658,15 @@ function render(): void {
   const compareHasLinear =
     state.compareEndpoints && comparisonEligible && endpoints.some((e) => usesLinearModel(e));
   syncCompareNormUi(endpoints, compareHasLinear);
+  syncCompareDistUi(comparisonEligible);
 
-  if ((state.compareEndpoints && comparisonEligible) || (activeViewLayoutSpec && effectiveEndpointOverlay(activeViewLayoutSpec) && comparisonEligible)) {
+  const showEndpointLegend =
+    comparisonEligible &&
+    (activeViewLayoutSpec
+      ? resolveLegendShowsEndpoints(activeViewLayoutSpec, endpoints)
+      : state.compareEndpoints);
+
+  if (showEndpointLegend) {
     renderEndpointLegend(endpoints);
     endpointLegendEl.style.display = "flex";
     legendEl.style.display = "none";
@@ -2388,9 +2780,11 @@ function computeContinuousDoseGroupStats(metric: ExposureMetric, endpoint: Endpo
 function projectedLinearGroupsFor(
   groupStats: Record<string, ContinuousDoseGroupStats>,
   colorOverride?: string,
-  compareNormalizeEndpoint?: Endpoint
+  compareNormalizeEndpoint?: Endpoint,
+  endpointForSelection?: Endpoint
 ): ProjectedGroup[] {
-  return [...state.selectedDoses]
+  const doseFilter = endpointForSelection ? selectedDosesForEndpoint(endpointForSelection) : state.selectedDoses;
+  return [...doseFilter]
     .filter((dose) => groupStats[dose])
     .map((dose) => {
       const { observedMean: rawObservedMean, ...rest } = groupStats[dose]!;
@@ -2432,9 +2826,17 @@ function doseProjectionAccent(endpoint: Endpoint): string | undefined {
 function projectedGroupsFor(
   groupStats: Record<string, BinaryDoseGroupStats>,
   endpoint: Endpoint,
-  colorOverride?: string
+  colorOverride?: string,
+  opts?: { metric?: ExposureMetric; active?: Set<number>; cohortRowIndices?: number[]; spec?: ViewLayoutSpec | null }
 ): ProjectedGroup[] {
-  return [...state.selectedDoses]
+  if (opts?.metric && opts.active && state.selectedDistGroupIds.size) {
+    return projectedGroupsForDistSelection(opts.metric, endpoint, opts.active, opts.cohortRowIndices, {
+      colorOverride,
+      spec: opts.spec
+    });
+  }
+  const doseFilter = selectedDosesForEndpoint(endpoint);
+  return [...doseFilter]
     .filter((dose) => groupStats[dose])
     .map((dose) => {
       const { observed, ...rest } = groupStats[dose]!;
@@ -2585,14 +2987,29 @@ function paintRegularScatterIntoWrap(
   panelId?: string
 ): void {
   const ds = requireDataset();
-  const spec = activeViewLayoutSpec;
+  const spec = resolveActiveViewLayoutSpec();
   const cohort = cohortForPanel(panelId) ?? dataFilteredRowIndices();
   const recordRows = cohort.filter((i) => Number.isFinite(endpointValue(i, endpoint)));
-  const xDomain = exposureXDomain(metric, cohort);
+  const xDomain = xDomainForLinkedPanels(metric, panelId);
   const continuous = isContinuousEndpoint(endpoint);
   const colorSpec = spec?.color;
   const colorVarId = colorSpec?.kind === "variable" ? colorSpec.variableId : undefined;
-  const colorByVariable = state.layoutMode === "advanced" && !!colorVarId;
+  const panel = panelId ? scatterPanelById.get(panelId) : undefined;
+  const scatterPolicy =
+    spec && panel
+      ? resolvePanelVisualPolicy(spec, panel, selectedEndpoints())
+      : spec
+        ? resolvePanelVisualPolicy(
+            spec,
+            { facetKey: panel?.facetKey ?? {}, endpointId: endpoint },
+            selectedEndpoints()
+          )
+        : null;
+  const colorVarFaceted = !!colorVarId && colorVariableFacetedOnPanel(panel, colorVarId);
+  const colorByVariable =
+    (scatterPolicy?.scatterPointColorSource === "variable" ||
+      (!scatterPolicy && state.layoutMode === "advanced" && !!colorVarId)) &&
+    !colorVarFaceted;
   const colorModel = colorByVariable ? colorBinModelForSpec(spec, cohort) : null;
 
   const points: ScatterPoint[] = recordRows.map((i) => {
@@ -2653,13 +3070,15 @@ function paintRegularScatterIntoWrap(
       };
     }
 
-    const projected: LinearProjectedGroup[] = [...state.selectedDoses]
+    const projected: LinearProjectedGroup[] = [...selectedDosesForEndpoint(endpoint)]
       .filter((dose) => groupStats[dose])
       .map((dose) => {
         const { observedMean, ...rest } = groupStats[dose]!;
+        const accent =
+          spec?.color.kind === "endpoints" ? endpointColor(endpoint) : resolveDoseColor(dose);
         return {
           groupId: dose,
-          color: resolveDoseColor(dose),
+          color: accent,
           ...rest,
           observedMean: state.showDoseObserved ? observedMean : undefined
         };
@@ -2685,30 +3104,43 @@ function paintRegularScatterIntoWrap(
       const pointColors: Record<string | number, string> = {};
       for (const level of levels) pointColors[level] = variableColorForLevel(colorVarId, level, paletteLevels);
 
-      const doseProjected = projectedGroupsFor(computeBinaryDoseGroupStats(metric, endpoint, active, cohort), endpoint);
+      const doseProjected = projectedGroupsForDistSelection(metric, endpoint, active, cohort, { spec });
 
       const fitSeparate = !!spec?.fitByColor && levels.length > 1;
       let curves: BinaryCurveOverlay[];
       if (fitSeparate) {
-        curves = levels.map((level) => {
+        const built: BinaryCurveOverlay[] = [];
+        for (const level of levels) {
           const sub = recordRows.filter((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === level);
-          const { fit, xs, ys } = fitForCohort(metric, endpoint, sub);
-          const curve = curveFor(fit, xs, ys, xDomain);
-          return {
-            curve,
+          const fitResult = tryFitForCohort(metric, endpoint, sub);
+          if (!fitResult) continue;
+          built.push({
+            curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
             color: variableColorForLevel(colorVarId, level, paletteLevels),
             dash: "",
             projected: doseProjected
-          };
-        });
+          });
+        }
+        curves = built.length
+          ? built
+          : (() => {
+              const fitResult = tryFitForCohort(metric, endpoint, recordRows);
+              return fitResult
+                ? [{ curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain), color: "#334155", dash: "", projected: doseProjected }]
+                : [];
+            })();
       } else {
-        const { fit, xs, ys } = fitForCohort(metric, endpoint, recordRows);
-        const curve = curveFor(fit, xs, ys, xDomain);
-        const curveColor =
-          levels.length === 1
-            ? variableColorForLevel(colorVarId, levels[0]!, paletteLevels)
-            : "#334155";
-        curves = [{ curve, color: curveColor, dash: "", projected: doseProjected }];
+        const fitResult = tryFitForCohort(metric, endpoint, recordRows);
+        if (fitResult) {
+          const curve = curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain);
+          const curveColor =
+            levels.length === 1
+              ? variableColorForLevel(colorVarId, levels[0]!, paletteLevels)
+              : "#334155";
+          curves = [{ curve, color: curveColor, dash: "", projected: doseProjected }];
+        } else {
+          curves = [];
+        }
       }
 
       scatterResult = renderBinaryScatterOverlay(
@@ -2723,15 +3155,56 @@ function paintRegularScatterIntoWrap(
         computeObservedResponseBins(metric, endpoint),
         height
       );
-    } else {
-      const { fit, xs, ys } = fitForCohort(metric, endpoint, recordRows);
-      const curve = curveFor(fit, xs, ys, xDomain);
+    } else if (scatterPolicy?.scatterPointColorSource === "endpointMonochrome" || colorSpec?.kind === "endpoints") {
+      const epColor = endpointColor(endpoint);
+      const refLines = computeDisplayReferenceLines(metric);
       const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active, cohort);
-      const projected = projectedGroupsFor(groupStats, endpoint);
+      const projected = projectedGroupsFor(groupStats, endpoint, epColor, {
+        metric,
+        active,
+        cohortRowIndices: cohort,
+        spec
+      });
+      const fitResult = tryFitForCohort(metric, endpoint, recordRows);
+      const curves: BinaryCurveOverlay[] = fitResult
+        ? [
+            {
+              curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
+              color: epColor,
+              dash: endpointDash(endpoint),
+              projected
+            }
+          ]
+        : [];
 
       scatterResult = renderBinaryScatterOverlay(
         state.showPoints ? points : [],
-        [{ curve, projected }],
+        curves,
+        pointColorsMonochromeForEndpoint(endpoint),
+        xDomain,
+        exposureLabel(metric),
+        ds.endpointLabel(endpoint),
+        width,
+        refLines,
+        computeObservedResponseBins(metric, endpoint),
+        height
+      );
+    } else {
+      const fitResult = tryFitForCohort(metric, endpoint, recordRows);
+      const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active, cohort);
+      const projected = projectedGroupsFor(groupStats, endpoint, undefined, {
+        metric,
+        active,
+        cohortRowIndices: cohort,
+        spec
+      });
+      const curves: BinaryCurveOverlay[] = fitResult
+        ? [{ curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain), projected }]
+        : [];
+
+      scatterResult = renderBinaryScatterOverlay(
+        state.showPoints ? points : [],
+        curves,
         DOSE_COLORS(),
         xDomain,
         exposureLabel(metric),
@@ -2766,7 +3239,7 @@ function paintCompareScatterIntoWrap(
 ): void {
   const ds = requireDataset();
   const cohort = cohortForPanel(panelId) ?? dataFilteredRowIndices();
-  const xDomain = exposureXDomain(metric, cohort);
+  const xDomain = xDomainForLinkedPanels(metric, panelId);
   const referenceLines = computeDisplayReferenceLines(metric);
 
   const pointsFor = (endpoint: Endpoint): ScatterPoint[] => {
@@ -2788,6 +3261,14 @@ function paintCompareScatterIntoWrap(
     });
   };
 
+  const spec = resolveActiveViewLayoutSpec();
+  const panel = panelId ? scatterPanelById.get(panelId) : undefined;
+  const policy =
+    spec && panel ? resolvePanelVisualPolicy(spec, panel, endpoints) : null;
+  const endpointColoredCurves = policy?.useEndpointColorForProjections ?? true;
+  const projectionAccent = (endpoint: Endpoint) =>
+    endpointColoredCurves ? endpointColor(endpoint) : DOSE_SELECTION_NEUTRAL;
+
   const fits = endpoints.map((endpoint) => {
     const rows = recordsWithEndpoint(endpoint).filter((i) => !cohort || cohort.includes(i));
     const { fit, xs, ys } = fitForCohort(metric, endpoint, rows);
@@ -2799,10 +3280,14 @@ function paintCompareScatterIntoWrap(
     let projected: ProjectedGroup[] = [];
     if (linear) {
       const linearStats = computeContinuousDoseGroupStats(metric, endpoint, active);
-      projected = projectedLinearGroupsFor(linearStats, DOSE_SELECTION_NEUTRAL, endpoint);
+      projected = projectedLinearGroupsFor(linearStats, projectionAccent(endpoint), endpoint, endpoint);
     } else {
       const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
-      projected = projectedGroupsFor(groupStats, endpoints[0]!, DOSE_SELECTION_NEUTRAL);
+      projected = projectedGroupsFor(groupStats, endpoint, projectionAccent(endpoint), {
+        metric,
+        active,
+        spec: resolveActiveViewLayoutSpec()
+      });
     }
     return {
       endpoint,
@@ -2814,7 +3299,7 @@ function paintCompareScatterIntoWrap(
     };
   });
 
-  const neutralCurves = compareDistUsesNeutralShapes();
+  const neutralCurves = !endpointColoredCurves;
   const curves: BinaryCurveOverlay[] = fits.map((f) => ({
     curve: f.curve,
     rawCurve: f.rawCurve,
@@ -2841,6 +3326,10 @@ function paintCompareScatterIntoWrap(
   );
   chartWrap.innerHTML = result.content;
   pinChartSvgToContainer(chartWrap, width, height);
+  const tip = document.createElement("div");
+  tip.className = "tooltip";
+  chartWrap.appendChild(tip);
+  attachScatterInteractivity(chartWrap, tip, metric, endpoints[0]!, result.metadata as unknown as ScatterMeta);
 }
 
 function ensureDistShell(
@@ -2874,10 +3363,11 @@ function ensureDistShell(
 function buildDistributionGroups(
   metric: ExposureMetric,
   splitByEndpoints?: Endpoint[],
-  opts?: { cohortRowIndices?: number[]; splitByColorVariable?: string }
+  opts?: { cohortRowIndices?: number[]; splitByColorVariable?: string; panelId?: string; distEndpointId?: Endpoint }
 ): DistributionRawGroup[] {
+  const spec = resolveActiveViewLayoutSpec();
   const cohort = opts?.cohortRowIndices ?? dataFilteredRowIndices();
-  const xDomain = exposureXDomain(metric, cohort);
+  const xDomain = xDomainForLinkedPanels(metric, opts?.panelId);
   const pkLike = exposureIsPkMetric(metric);
   const cohortSet = new Set(cohort);
   const inCohort = (i: number) => cohortSet.has(i);
@@ -2885,11 +3375,11 @@ function buildDistributionGroups(
   const selectionAccent = doseSelectionAccentForDistribution();
 
   const colorVar = opts?.splitByColorVariable;
-  if (colorVar && activeViewLayoutSpec?.distribution.colorDistShapes) {
+  if (colorVar && spec?.distribution.colorDistShapes) {
     const loaded = requireDataset().loaded;
     const binning =
-      activeViewLayoutSpec?.continuousBinning ??
-      (activeViewLayoutSpec?.color.kind === "variable" ? activeViewLayoutSpec.color.binning : undefined);
+      spec?.continuousBinning ??
+      (spec?.color.kind === "variable" ? spec.color.binning : undefined);
     const colorModel = buildColorBinModel(loaded, colorVar, cohort, binning);
     const levels = colorModel.levels;
     return DOSE_ORDER()
@@ -2909,7 +3399,7 @@ function buildDistributionGroups(
             color: variableColorForLevel(colorVar, level, levels),
             values,
             n: rows.length,
-            selected: state.selectedDoses.has(dose),
+            selected: state.selectedDistGroupIds.has(`${dose}|${level}`),
             selectionColor: selectionAccent,
             skipShape: isPlacebo && pkLike,
             splitAnnotations: splitAnnotationsForRows(
@@ -2939,12 +3429,12 @@ function buildDistributionGroups(
           const values =
             isPlacebo && pkLike ? [] : rows.map((r) => exposureValue(r, metric)).filter((v) => Number.isFinite(v));
           return {
-            groupId: dose,
+            groupId: `${dose}|${ep}`,
             label: i === 0 ? dose : "",
             color: endpointColor(ep),
             values,
             n: rows.length,
-            selected: state.selectedDoses.has(dose),
+            selected: state.selectedDistGroupIds.has(`${dose}|${ep}`),
             selectionColor: selectionAccent,
             skipShape: isPlacebo && pkLike,
             splitAnnotations: splitAnnotationsForRows(
@@ -2967,10 +3457,13 @@ function buildDistributionGroups(
       const rows = rowIndicesForDose(dose).filter((i) => inCohort(i));
       const values =
         isPlacebo && pkLike ? [] : rows.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
+      const rowColor = opts?.distEndpointId
+        ? endpointColor(opts.distEndpointId)
+        : resolveDoseColor(dose);
       return {
         groupId: dose,
         label: dose,
-        color: compareDistUsesNeutralShapes() ? NEUTRAL_COMPARE_COLOR : resolveDoseColor(dose),
+        color: rowColor,
         values,
         n: rows.length,
         selected: state.selectedDoses.has(dose),
@@ -3003,14 +3496,27 @@ function paintDistributionChart(
 ): void {
   const distPanel = opts?.panelId ? distPanelById.get(opts.panelId) : undefined;
   const cohortRowIndices = distPanel?.rowIndices ?? dataFilteredRowIndices();
-  const xDomain = exposureXDomain(metric, cohortRowIndices);
+  const xDomain = xDomainForLinkedPanels(metric, opts?.panelId);
+  const spec = resolveActiveViewLayoutSpec();
   const colorVar =
-    state.layoutMode === "advanced" && activeViewLayoutSpec?.color.kind === "variable"
-      ? activeViewLayoutSpec.color.variableId
+    spec?.distribution.colorDistShapes && spec?.color.kind === "variable"
+      ? spec.color.variableId
       : undefined;
+  const distEndpointAccent =
+    (() => {
+      if (spec?.color.kind !== "endpoints" || (splitByEndpoints && splitByEndpoints.length > 1)) return undefined;
+      const scatterId = distPanel?.scatterPanelIds[0];
+      const scatterPanel = scatterId ? scatterPanelById.get(scatterId) : undefined;
+      const policy =
+        scatterPanel && spec ? resolvePanelVisualPolicy(spec, scatterPanel, selectedEndpoints()) : null;
+      if (!policy?.distUsesEndpointColorWhenUnsplit) return undefined;
+      return endpointIdForDistPanel(opts?.panelId, endpoint);
+    })();
   const distGroups = buildDistributionGroups(metric, splitByEndpoints, {
     cohortRowIndices,
-    splitByColorVariable: activeViewLayoutSpec?.distribution.colorDistShapes ? colorVar : undefined
+    splitByColorVariable: spec?.distribution.colorDistShapes ? colorVar : undefined,
+    panelId: opts?.panelId,
+    distEndpointId: distEndpointAccent
   });
   const distResult = renderDistributionViaRenderer(
     distGroups,
@@ -3026,7 +3532,7 @@ function paintDistributionChart(
   if (!readoutEl) return;
   const finalReadoutEndpoints = readoutEndpoints ?? (splitByEndpoints && splitByEndpoints.length > 1 ? splitByEndpoints : [endpoint]);
   attachDistributionInteractivity(chartWrap, metric, finalReadoutEndpoints, active, readoutEl, distResult.metadata, {
-    omitEndpointFit: opts?.omitEndpointFit ?? (isEndpointComparisonActive() && !state.compareDistByEndpoint)
+    omitEndpointFit: opts?.omitEndpointFit ?? false
   });
 }
 
@@ -3283,23 +3789,13 @@ function renderLegend(): void {
   }
 }
 
-/** Whether the currently-rendered view is the endpoint-comparison overlay (curves colored by
- * endpoint, not dose) - mirrors the same eligibility check used in render()/
- * renderEndpointComparisonRow. Used to avoid coloring dose names by DOSE_COLORS in text that sits
- * near that view, since a dose no longer maps to a single color there (it's split by endpoint). */
-function isEndpointComparisonActive(): boolean {
-  const endpoints = selectedEndpoints();
-  if (activeViewLayoutSpec && effectiveEndpointOverlay(activeViewLayoutSpec) && endpoints.length > 1) return true;
-  return state.compareEndpoints && endpoints.length > 1;
-}
-
 function doseColorFor(dose: string): string {
-  if (isEndpointComparisonActive()) return DOSE_SELECTION_NEUTRAL;
+  if (layoutUsesNeutralDoseChrome()) return DOSE_SELECTION_NEUTRAL;
   return resolveDoseColor(dose);
 }
 
 function doseSelectionAccentForDistribution(): string | undefined {
-  return isEndpointComparisonActive() ? DOSE_SELECTION_NEUTRAL : undefined;
+  return layoutUsesNeutralDoseChrome() ? DOSE_SELECTION_NEUTRAL : undefined;
 }
 
 function updateStatus(activeCount: number): void {
@@ -3309,7 +3805,7 @@ function updateStatus(activeCount: number): void {
     state.dataFilters.length > 0
       ? describeActiveFilters(state.dataFilters, (col) => filterColumnOptions().find((c) => c.id === col)?.label ?? col)
       : "";
-  const doseNamesHtml = isEndpointComparisonActive()
+  const doseNamesHtml = layoutUsesNeutralDoseChrome()
     ? [...state.selectedDoses].map((dose) => escapeHtml(dose)).join(", ")
     : [...state.selectedDoses]
         .map((dose) => `<strong style="color:${resolveDoseColor(dose)}">${escapeHtml(dose)}</strong>`)
@@ -3388,24 +3884,24 @@ function updateReadout(
   const omitEndpointFit = opts?.omitEndpointFit ?? false;
   const groupStats: Record<string, { min: number; q1: number; median: number; q3: number; max: number }> = {};
   const doseN: Record<string, number> = {};
-  for (const dose of state.selectedDoses) {
+  for (const dose of selectedDosesForReadout()) {
     const rows = rowIndicesForDose(dose).filter((i) => active.has(ds.patientId(i)));
     doseN[dose] = rows.length;
     const vals = rows.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
     const s = summarizeDistribution(vals);
     if (s) groupStats[dose] = { min: s.min, q1: s.q1, median: s.median, q3: s.q3, max: s.max };
   }
-  const doses = [...state.selectedDoses].filter((d) => groupStats[d]);
+  const doses = selectedDosesForReadout().filter((d) => groupStats[d]);
   if (!doses.length) {
     readoutEl.innerHTML = '<span class="muted">Click a box above to show projected fit values at Min, Q1, Median, Q3, and Max.</span>';
     return;
   }
   const multiEndpoint = endpoints.length > 1;
-  const colorByEndpoint = isEndpointComparisonActive();
+  const colorByEndpoint = layoutUsesNeutralDoseChrome() && endpoints.length > 1;
   const blocks: string[] = [];
   for (const dose of doses) {
     const g = groupStats[dose];
-    const doseColor = isEndpointComparisonActive() ? DOSE_SELECTION_NEUTRAL : doseColorFor(dose);
+    const doseColor = layoutUsesNeutralDoseChrome() ? DOSE_SELECTION_NEUTRAL : doseColorFor(dose);
     const expLine = `<div class="readout-line-exposure"><strong style="color:${doseColor}">${escapeHtml(dose)}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} &nbsp; Q1 = ${g.q1.toFixed(1)} &nbsp; Median = ${g.median.toFixed(1)} &nbsp; Q3 = ${g.q3.toFixed(1)} &nbsp; Max = ${g.max.toFixed(1)} &nbsp; N=${doseN[dose]}</div>`;
     blocks.push(expLine);
 
@@ -3501,9 +3997,15 @@ function attachDistributionInteractivity(
     g.addEventListener("click", () => {
       const raw = g.getAttribute("data-group");
       if (!raw || distributionAnimating) return;
-      const dose = raw.includes("|") ? raw.split("|")[0]! : raw;
-      if (state.selectedDoses.has(dose)) state.selectedDoses.delete(dose);
-      else state.selectedDoses.add(dose);
+      if (raw.includes("|")) {
+        if (state.selectedDistGroupIds.has(raw)) state.selectedDistGroupIds.delete(raw);
+        else state.selectedDistGroupIds.add(raw);
+        state.selectedDoses.clear();
+      } else {
+        state.selectedDistGroupIds.clear();
+        if (state.selectedDoses.has(raw)) state.selectedDoses.delete(raw);
+        else state.selectedDoses.add(raw);
+      }
       refreshSelectionVisuals();
     });
   });
@@ -3646,6 +4148,7 @@ function setDistModeButtonsActive(mode: DistributionMode): void {
 function resetSelection(): void {
   state.brushedIds = null;
   state.selectedDoses.clear();
+  state.selectedDistGroupIds.clear();
   render();
 }
 
@@ -3683,6 +4186,18 @@ function syncEndpointModelsUi(): void {
       render();
     };
   });
+}
+
+function syncCompareDistUi(comparisonEligible: boolean): void {
+  const showSplit = state.compareEndpoints && comparisonEligible;
+  const splitLabel = compareDistByEndpointEl.closest("label");
+  if (splitLabel) splitLabel.hidden = !showSplit;
+  if (!showSplit) {
+    if (state.compareDistByEndpoint) {
+      state.compareDistByEndpoint = false;
+      compareDistByEndpointEl.checked = false;
+    }
+  }
 }
 
 function syncCompareNormUi(endpoints: Endpoint[], show: boolean): void {
@@ -4469,12 +4984,16 @@ expandDistReadoutEl.addEventListener("change", () => {
 });
 compareEndpointsEl.addEventListener("change", () => {
   state.compareEndpoints = compareEndpointsEl.checked;
+  if (!state.compareEndpoints) {
+    state.compareDistByEndpoint = false;
+    compareDistByEndpointEl.checked = false;
+  }
   syncCompareNormUi(selectedEndpoints(), state.compareEndpoints && selectedEndpoints().length > 1);
   render();
 });
 compareDistByEndpointEl.addEventListener("change", () => {
   state.compareDistByEndpoint = compareDistByEndpointEl.checked;
-  refreshSelectionVisuals();
+  render();
 });
 
 addFilterRuleBtn.addEventListener("click", () => {
@@ -4529,6 +5048,10 @@ resetAdvancedToGuidedBtn.addEventListener("click", () => {
 function bindAdvancedLayoutInput(el: HTMLElement): void {
   el.addEventListener("change", () => {
     if (state.layoutMode !== "advanced") return;
+    if (el === advancedRowFacetsEl || el === advancedColFacetsEl) {
+      refreshAdvancedColorOptions();
+      reconcileAdvancedColorWithFacets();
+    }
     state.advancedViewLayout = pullAdvancedSpecFromUi();
     syncAdvancedFitByColorUi(state.advancedViewLayout);
     updateAdvancedLayoutStatus(state.advancedViewLayout);

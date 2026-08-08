@@ -65,6 +65,16 @@ pnpm --filter @er-explorer/renderer test
 pnpm --filter @er-explorer/data test
 ```
 
+## Automated UI smoke (layout policy)
+
+After `verify-build.mjs`:
+
+```powershell
+pnpm --filter @er-explorer/demo smoke:ui
+```
+
+Covers Guided compare (split on/off), Advanced endpoint rows + color endpoints, and sex + split dist → readout/projections. First run installs Playwright under `apps/demo`; run `npx playwright install chromium` from `apps/demo` if the browser binary is missing.
+
 ## Manual smoke (BYOD demo)
 
 1. Open `apps/demo/dist/index.html`

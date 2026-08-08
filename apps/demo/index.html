@@ -497,23 +497,23 @@
         </div>
         <div class="field"><label for="advancedRowFacets">Facet rows</label>
           <select id="advancedRowFacets" multiple size="5"></select>
-          <p class="field-hint">Hold Ctrl (Windows) or ⌘ (Mac) to select multiple. Order follows the list top-to-bottom. Typical: <strong>Endpoints</strong> on rows, <strong>Exposure metrics</strong> on columns; add <strong>wt</strong> here to split above/below median weight.</p>
+          <p class="field-hint">Hold Ctrl (Windows) or ⌘ (Mac) to select multiple. Row facets create horizontal strips (e.g. <strong>study</strong>). A dimension cannot be on both rows and columns (columns win).</p>
         </div>
         <div class="field"><label for="advancedColFacets">Facet columns</label>
           <select id="advancedColFacets" multiple size="5"></select>
+          <p class="field-hint"><strong>Exposure metrics</strong> here = one column per exposure (scatter x-axis). <strong>Endpoints</strong> here = one column per endpoint panel.</p>
         </div>
         <div class="field"><label for="advancedColorBy">Color curves / dist</label>
           <select id="advancedColorBy">
             <option value="dose">Dose</option>
             <option value="endpoints">Endpoints</option>
           </select>
+          <p class="field-hint">Same encoding for scatter curves/points and distribution strips (dose, endpoints, or a covariate).</p>
         </div>
         <div class="field"><label><input type="checkbox" id="advancedFitByColor" /> Fit separately per color group</label>
           <p class="field-hint">Available when color is a covariate (e.g. sex, study). Dose and endpoint colors use a single pooled fit.</p>
         </div>
-        <div class="field"><label><input type="checkbox" id="advancedEndpointOverlay" /> Overlay endpoints (compare)</label>
-          <p class="field-hint">Guided-style: multiple endpoints on the same axes. Disabled when <strong>Endpoints</strong> is already a row/column facet — use facets to put each endpoint in its own panel instead.</p>
-        </div>
+        <div class="field" hidden aria-hidden="true"><label><input type="checkbox" id="advancedEndpointOverlay" /> Overlay endpoints (compare)</label></div>
         <div class="field"><label for="advancedDistLinkage">Distribution layout</label>
           <select id="advancedDistLinkage">
             <option value="mirror_scatter_grid">Mirror scatter facets</option>
@@ -522,7 +522,9 @@
             <option value="mirror_color_only">Color-split boxplots only</option>
           </select>
         </div>
-        <div class="field"><label><input type="checkbox" id="advancedColorDistShapes" /> Color-split boxplots within dose rows</label></div>
+        <div class="field"><label><input type="checkbox" id="advancedColorDistShapes" /> Color-split boxplots within dose rows</label>
+          <p class="field-hint">For <strong>Endpoints</strong> color without endpoint facets: split each dose into side-by-side endpoint rows (Guided compare). When endpoints are faceted, boxplots use that panel’s endpoint color automatically.</p>
+        </div>
         <p class="hint" id="advancedLayoutStatus"></p>
       </div>
       <div class="field"><label for="doseColorScheme">Dose colors</label>
