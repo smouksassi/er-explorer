@@ -63,7 +63,17 @@ import {
 } from "./datasetContext";
 import { loadDataset, enumerateDistPanels, enumerateScatterPanels, getColumn } from "@er-explorer/data";
 import type { DistPanelSpec, ScatterPanelSpec, ViewLayoutSpec } from "@er-explorer/domain";
-import { dedupeFacetDimensions, distEndpointColorSplit, isGuidedCompareTopology, layoutHasEndpointFacet, resolveDistVisualContext, resolveLegendShowsEndpoints, resolvePanelVisualPolicy } from "@er-explorer/domain";
+import {
+  dedupeFacetDimensions,
+  distEndpointColorSplit,
+  isGuidedCompareTopology,
+  layoutHasEndpointFacet,
+  resolveDistVisualContext,
+  resolveLegendShowsEndpoints,
+  resolveOverlayCohortPolicy,
+  resolvePanelVisualPolicy,
+  type OverlayCohortPolicy
+} from "@er-explorer/domain";
 import { policyForLayoutChrome } from "./layout/resolvePanelStyle";
 import {
   type ByodSessionPayload,
@@ -1069,6 +1079,39 @@ function endpointIdForDistPanel(panelId: string | undefined, fallback: Endpoint)
 function cohortForPanel(panelId?: string): number[] | undefined {
   if (!panelId) return undefined;
   return scatterPanelById.get(panelId)?.rowIndices;
+}
+
+function panelMatchesEndpointForOverlay(panel: ScatterPanelSpec, endpoint: Endpoint): boolean {
+  if (panel.facetKey.endpoint === endpoint) return true;
+  if (panel.endpointId === endpoint) return true;
+  if (panel.endpointIds?.includes(endpoint)) return true;
+  return false;
+}
+
+/** ADR-0011: exposure split cut points use endpoint × metric, not facet/color slices. */
+function rowIndicesForReferenceSplit(metric: ExposureMetric, endpoint: Endpoint): number[] {
+  const allowed = new Set(dataFilteredRowIndices());
+  const merged = new Set<number>();
+  for (const p of scatterPanelById.values()) {
+    if (p.xVariableId === metric && panelMatchesEndpointForOverlay(p, endpoint)) {
+      for (const i of p.rowIndices) if (allowed.has(i)) merged.add(i);
+    }
+  }
+  if (!merged.size) {
+    return recordsWithEndpoint(endpoint).filter((i) => allowed.has(i));
+  }
+  return [...merged];
+}
+
+function overlayPolicyForScatterPanel(
+  panelId: string | undefined,
+  endpoint: Endpoint
+): OverlayCohortPolicy | null {
+  const spec = resolveActiveViewLayoutSpec();
+  if (!spec) return null;
+  const panel = panelId ? scatterPanelById.get(panelId) : undefined;
+  if (panel) return resolveOverlayCohortPolicy(spec, panel, selectedEndpoints());
+  return resolveOverlayCohortPolicy(spec, { facetKey: {}, endpointId: endpoint }, selectedEndpoints());
 }
 
 /** Shared exposure x-axis domain for scatter + distribution in the same exposure column (all facet rows). */
@@ -2144,15 +2187,12 @@ function renderBinaryScatterOverlay(
  * falls. These are global cut points (not per-dose), so a dose group's box/violin position can
  * be read directly against them: is this group mostly above the global median, above Q3, etc.
  */
-function computeReferenceLines(metric: ExposureMetric): ReferenceLine[] {
+function computeReferenceLines(metric: ExposureMetric, endpoint: Endpoint): ReferenceLine[] {
   const ds = requireDataset();
   const kind = state.referenceLineKind;
   if (!kind) return [];
-  const allowed = new Set(dataFilteredRowIndices());
   const pkLike = exposureIsPkMetric(metric);
-  const values = ds
-    .allRowIndices()
-    .filter((i) => allowed.has(i))
+  const values = rowIndicesForReferenceSplit(metric, endpoint)
     .filter((i) => !pkLike || !isPlaceboDose(ds.doseLabel(i)))
     .map((i) => exposureValue(i, metric))
     .filter((v) => Number.isFinite(v))
@@ -2189,15 +2229,17 @@ function computeReferenceLines(metric: ExposureMetric): ReferenceLine[] {
  * would be meaningless (and would silently double-count bins) there, but are exactly what a
  * caller building a chart's `referenceLines` prop wants.
  */
-function computeDisplayReferenceLines(metric: ExposureMetric): ReferenceLine[] {
+function computeDisplayReferenceLines(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  panelCohortRowIndices?: number[]
+): ReferenceLine[] {
   const ds = requireDataset();
-  const splits = computeReferenceLines(metric);
+  const splits = computeReferenceLines(metric, endpoint);
   if (!splits.length) return splits;
-  const allowed = new Set(dataFilteredRowIndices());
+  const cohort = panelCohortRowIndices ?? dataFilteredRowIndices();
   const pkLike = exposureIsPkMetric(metric);
-  const values = ds
-    .allRowIndices()
-    .filter((i) => allowed.has(i))
+  const values = cohort
     .filter((i) => !pkLike || !isPlaceboDose(ds.doseLabel(i)))
     .map((i) => exposureValue(i, metric))
     .filter((v) => Number.isFinite(v))
@@ -2231,11 +2273,12 @@ function computeDisplayReferenceLines(metric: ExposureMetric): ReferenceLine[] {
  */
 function computeSplitAnnotations(
   metric: ExposureMetric,
+  endpoint: Endpoint,
   xDomain: [number, number],
   mode: SplitAnnotationMode,
   rowIndices: number[]
 ): DistributionSplitAnnotation[] {
-  const cutpoints = computeReferenceLines(metric).map((r) => r.value);
+  const cutpoints = computeReferenceLines(metric, endpoint).map((r) => r.value);
   if (!cutpoints.length || !rowIndices.length) return [];
   const vals = rowIndices.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
   if (!vals.length) return [];
@@ -2262,13 +2305,14 @@ function computeSplitAnnotations(
 
 function splitAnnotationsForRows(
   metric: ExposureMetric,
+  endpoint: Endpoint,
   xDomain: [number, number],
   mode: SplitAnnotationMode,
   rowIndices: number[],
   skip: boolean
 ): DistributionSplitAnnotation[] | undefined {
   if (skip || mode === "off" || !rowIndices.length) return undefined;
-  const ann = computeSplitAnnotations(metric, xDomain, mode, rowIndices);
+  const ann = computeSplitAnnotations(metric, endpoint, xDomain, mode, rowIndices);
   return ann.length ? ann : undefined;
 }
 
@@ -2280,10 +2324,18 @@ function rowIndicesPlacebo(): number[] {
   return dataFilteredRowIndices().filter((i) => isPlaceboDose(requireDataset().doseLabel(i)));
 }
 
-function computeObservedResponseBins(metric: ExposureMetric, endpoint: Endpoint): ObservedResponseBin[] {
+function computeObservedResponseBins(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  cohortRowIndices?: number[]
+): ObservedResponseBin[] {
   if (!state.showObservedResponders || !state.referenceLineKind) return [];
-  const cutpoints = computeReferenceLines(metric).map((r) => r.value);
+  const cutpoints = computeReferenceLines(metric, endpoint).map((r) => r.value);
   if (!cutpoints.length) return [];
+
+  const cohort = cohortRowIndices ?? dataFilteredRowIndices();
+  const cohortSet = new Set(cohort);
+  const inCohort = (i: number) => cohortSet.has(i);
 
   const pkLike = exposureIsPkMetric(metric);
   const bins: ObservedResponseBin[] = [];
@@ -2299,29 +2351,33 @@ function computeObservedResponseBins(metric: ExposureMetric, endpoint: Endpoint)
   };
 
   if (pkLike) {
-    const placeboRows = rowIndicesPlacebo();
+    const placeboRows = rowIndicesPlacebo().filter(inCohort);
     if (placeboRows.length) {
       const responders = placeboRows.filter((i) => endpointValue(i, endpoint) === 1).length;
       const ci = wilsonScoreInterval(responders, placeboRows.length);
       bins.push({ x: 0, n: placeboRows.length, responders, proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper });
     }
-    rowIndicesDosed().forEach((i) => {
-      const v = exposureValue(i, metric);
-      let bin = 0;
-      while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
-      buckets[bin].push(i);
-    });
+    rowIndicesDosed()
+      .filter(inCohort)
+      .forEach((i) => {
+        const v = exposureValue(i, metric);
+        let bin = 0;
+        while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
+        buckets[bin].push(i);
+      });
     buckets.forEach(pushBin);
     return bins;
   }
 
-  recordsWithEndpoint(endpoint).forEach((i) => {
-    const v = exposureValue(i, metric);
-    if (!Number.isFinite(v)) return;
-    let bin = 0;
-    while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
-    buckets[bin].push(i);
-  });
+  recordsWithEndpoint(endpoint)
+    .filter(inCohort)
+    .forEach((i) => {
+      const v = exposureValue(i, metric);
+      if (!Number.isFinite(v)) return;
+      let bin = 0;
+      while (bin < cutpoints.length && v > cutpoints[bin]) bin++;
+      buckets[bin].push(i);
+    });
   buckets.forEach(pushBin);
   return bins;
 }
@@ -2331,15 +2387,23 @@ function computeObservedResponseBins(metric: ExposureMetric, endpoint: Endpoint)
  * rate + Wilson CI per exposure-split bin, this reports the raw observed mean response + 95% CI
  * (`meanConfidenceInterval`) - there is no responder/non-responder concept for BRLS/PRLS.
  */
-function computeObservedMeanBins(metric: ExposureMetric, endpoint: Endpoint): ObservedMeanBin[] {
+function computeObservedMeanBins(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  cohortRowIndices?: number[]
+): ObservedMeanBin[] {
   const ds = requireDataset();
   if (!state.showObservedResponders || !state.referenceLineKind) return [];
-  const cutpoints = computeReferenceLines(metric).map((r) => r.value);
+  const cutpoints = computeReferenceLines(metric, endpoint).map((r) => r.value);
   if (!cutpoints.length) return [];
+
+  const cohort = cohortRowIndices ?? dataFilteredRowIndices();
+  const cohortSet = new Set(cohort);
+  const inCohort = (i: number) => cohortSet.has(i);
 
   const pkLike = exposureIsPkMetric(metric);
   const bins: ObservedMeanBin[] = [];
-  const withEndpoint = recordsWithEndpoint(endpoint);
+  const withEndpoint = recordsWithEndpoint(endpoint).filter(inCohort);
   const binCount = cutpoints.length + 1;
   const buckets: number[][] = Array.from({ length: binCount }, () => []);
 
@@ -2377,6 +2441,64 @@ function computeObservedMeanBins(metric: ExposureMetric, endpoint: Endpoint): Ob
   });
   buckets.forEach(pushBin);
   return bins;
+}
+
+function computeObservedResponseBinsForPanel(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  cohortRowIndices: number[],
+  overlayPolicy: OverlayCohortPolicy | null,
+  colorVarId?: string,
+  colorModel?: ReturnType<typeof colorBinModelForSpec>
+): ObservedResponseBin[] {
+  if (overlayPolicy?.observedAtSplit === "colorLevelWithinPanel" && colorVarId && colorModel) {
+    const ds = requireDataset();
+    const levels = [
+      ...new Set(
+        cohortRowIndices
+          .map((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId))
+          .filter(Boolean)
+      )
+    ];
+    const paletteLevels = colorModel.levels;
+    return levels.flatMap((level) =>
+      computeObservedResponseBins(
+        metric,
+        endpoint,
+        cohortRowIndices.filter((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === level)
+      ).map((b) => ({ ...b, color: variableColorForLevel(colorVarId, level, paletteLevels) }))
+    );
+  }
+  return computeObservedResponseBins(metric, endpoint, cohortRowIndices);
+}
+
+function computeObservedMeanBinsForPanel(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  cohortRowIndices: number[],
+  overlayPolicy: OverlayCohortPolicy | null,
+  colorVarId?: string,
+  colorModel?: ReturnType<typeof colorBinModelForSpec>
+): ObservedMeanBin[] {
+  if (overlayPolicy?.observedAtSplit === "colorLevelWithinPanel" && colorVarId && colorModel) {
+    const ds = requireDataset();
+    const levels = [
+      ...new Set(
+        cohortRowIndices
+          .map((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId))
+          .filter(Boolean)
+      )
+    ];
+    const paletteLevels = colorModel.levels;
+    return levels.flatMap((level) =>
+      computeObservedMeanBins(
+        metric,
+        endpoint,
+        cohortRowIndices.filter((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === level)
+      ).map((b) => ({ ...b, color: variableColorForLevel(colorVarId, level, paletteLevels) }))
+    );
+  }
+  return computeObservedMeanBins(metric, endpoint, cohortRowIndices);
 }
 
 /** The active patient set is shared across every exposure panel: a brush made in one panel's
@@ -2934,8 +3056,8 @@ function renderScatterPanel(
       metric,
       endpoint,
       width,
-      computeDisplayReferenceLines(metric),
-      computeObservedMeanBins(metric, endpoint)
+      computeDisplayReferenceLines(metric, endpoint, dataFilteredRowIndices()),
+      computeObservedMeanBins(metric, endpoint, dataFilteredRowIndices())
     );
   } else {
     const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
@@ -2949,8 +3071,8 @@ function renderScatterPanel(
       exposureLabel(metric),
       endpoint.toUpperCase(),
       width,
-      computeDisplayReferenceLines(metric),
-      computeObservedResponseBins(metric, endpoint)
+      computeDisplayReferenceLines(metric, endpoint, dataFilteredRowIndices()),
+      computeObservedResponseBins(metric, endpoint, dataFilteredRowIndices())
     );
   }
 
@@ -2992,6 +3114,7 @@ function paintRegularScatterIntoWrap(
   const recordRows = cohort.filter((i) => Number.isFinite(endpointValue(i, endpoint)));
   const xDomain = xDomainForLinkedPanels(metric, panelId);
   const continuous = isContinuousEndpoint(endpoint);
+  const overlayPolicy = overlayPolicyForScatterPanel(panelId, endpoint);
   const colorSpec = spec?.color;
   const colorVarId = colorSpec?.kind === "variable" ? colorSpec.variableId : undefined;
   const panel = panelId ? scatterPanelById.get(panelId) : undefined;
@@ -3092,12 +3215,12 @@ function paintRegularScatterIntoWrap(
       metric,
       endpoint,
       width,
-      computeDisplayReferenceLines(metric),
-      computeObservedMeanBins(metric, endpoint),
+      computeDisplayReferenceLines(metric, endpoint, cohort),
+      computeObservedMeanBinsForPanel(metric, endpoint, cohort, overlayPolicy, colorVarId, colorModel ?? undefined),
       height
     );
   } else {
-    const refLines = computeDisplayReferenceLines(metric);
+    const refLines = computeDisplayReferenceLines(metric, endpoint, cohort);
     if (colorByVariable && colorVarId && colorModel) {
       const paletteLevels = colorModel.levels;
       const levels = [...new Set(recordRows.map((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId)).filter(Boolean))];
@@ -3152,12 +3275,19 @@ function paintRegularScatterIntoWrap(
         ds.endpointLabel(endpoint),
         width,
         refLines,
-        computeObservedResponseBins(metric, endpoint),
+        computeObservedResponseBinsForPanel(
+          metric,
+          endpoint,
+          cohort,
+          overlayPolicy,
+          colorVarId,
+          colorModel ?? undefined
+        ),
         height
       );
     } else if (scatterPolicy?.scatterPointColorSource === "endpointMonochrome" || colorSpec?.kind === "endpoints") {
       const epColor = endpointColor(endpoint);
-      const refLines = computeDisplayReferenceLines(metric);
+      const refLines = computeDisplayReferenceLines(metric, endpoint, cohort);
       const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active, cohort);
       const projected = projectedGroupsFor(groupStats, endpoint, epColor, {
         metric,
@@ -3186,7 +3316,7 @@ function paintRegularScatterIntoWrap(
         ds.endpointLabel(endpoint),
         width,
         refLines,
-        computeObservedResponseBins(metric, endpoint),
+        computeObservedResponseBins(metric, endpoint, cohort),
         height
       );
     } else {
@@ -3211,7 +3341,7 @@ function paintRegularScatterIntoWrap(
         endpoint.toUpperCase(),
         width,
         refLines,
-        computeObservedResponseBins(metric, endpoint),
+        computeObservedResponseBins(metric, endpoint, cohort),
         height
       );
     }
@@ -3240,7 +3370,7 @@ function paintCompareScatterIntoWrap(
   const ds = requireDataset();
   const cohort = cohortForPanel(panelId) ?? dataFilteredRowIndices();
   const xDomain = xDomainForLinkedPanels(metric, panelId);
-  const referenceLines = computeDisplayReferenceLines(metric);
+  const referenceLines = computeDisplayReferenceLines(metric, endpoints[0]!, cohort);
 
   const pointsFor = (endpoint: Endpoint): ScatterPoint[] => {
     const rows = recordsWithEndpoint(endpoint).filter((i) => !cohort || cohort.includes(i));
@@ -3270,13 +3400,13 @@ function paintCompareScatterIntoWrap(
     endpointColoredCurves ? endpointColor(endpoint) : DOSE_SELECTION_NEUTRAL;
 
   const fits = endpoints.map((endpoint) => {
-    const rows = recordsWithEndpoint(endpoint).filter((i) => !cohort || cohort.includes(i));
+    const rows = recordsWithEndpoint(endpoint).filter((i) => cohort.includes(i));
     const { fit, xs, ys } = fitForCohort(metric, endpoint, rows);
     const rawCurve = curveFor(fit, xs, ys, xDomain);
     const linear = usesLinearModel(endpoint);
     const { min, max, valid } = getCompareNormBounds(endpoint);
     const curve = linear && valid ? mapCurveToCompareScale(rawCurve, min, max) : rawCurve;
-    const observedBins = computeCompareObservedBins(metric, endpoint);
+    const observedBins = computeCompareObservedBins(metric, endpoint, rows);
     let projected: ProjectedGroup[] = [];
     if (linear) {
       const linearStats = computeContinuousDoseGroupStats(metric, endpoint, active);
@@ -3363,10 +3493,19 @@ function ensureDistShell(
 function buildDistributionGroups(
   metric: ExposureMetric,
   splitByEndpoints?: Endpoint[],
-  opts?: { cohortRowIndices?: number[]; splitByColorVariable?: string; panelId?: string; distEndpointId?: Endpoint }
+  opts?: {
+    cohortRowIndices?: number[];
+    splitByColorVariable?: string;
+    panelId?: string;
+    distEndpointId?: Endpoint;
+    endpointForSplits?: Endpoint;
+  }
 ): DistributionRawGroup[] {
   const spec = resolveActiveViewLayoutSpec();
   const cohort = opts?.cohortRowIndices ?? dataFilteredRowIndices();
+  const splitEndpoint =
+    opts?.endpointForSplits ?? opts?.distEndpointId ?? splitByEndpoints?.[0] ?? selectedEndpoints()[0];
+  if (!splitEndpoint) return [];
   const xDomain = xDomainForLinkedPanels(metric, opts?.panelId);
   const pkLike = exposureIsPkMetric(metric);
   const cohortSet = new Set(cohort);
@@ -3404,6 +3543,7 @@ function buildDistributionGroups(
             skipShape: isPlacebo && pkLike,
             splitAnnotations: splitAnnotationsForRows(
               metric,
+              splitEndpoint,
               xDomain,
               state.splitAnnotationMode,
               rows,
@@ -3439,6 +3579,7 @@ function buildDistributionGroups(
             skipShape: isPlacebo && pkLike,
             splitAnnotations: splitAnnotationsForRows(
               metric,
+              ep,
               xDomain,
               state.splitAnnotationMode,
               rows,
@@ -3471,6 +3612,7 @@ function buildDistributionGroups(
         skipShape: isPlacebo && pkLike,
         splitAnnotations: splitAnnotationsForRows(
           metric,
+          splitEndpoint,
           xDomain,
           state.splitAnnotationMode,
           rows,
@@ -3516,13 +3658,14 @@ function paintDistributionChart(
     cohortRowIndices,
     splitByColorVariable: spec?.distribution.colorDistShapes ? colorVar : undefined,
     panelId: opts?.panelId,
-    distEndpointId: distEndpointAccent
+    distEndpointId: distEndpointAccent,
+    endpointForSplits: endpoint
   });
   const distResult = renderDistributionViaRenderer(
     distGroups,
     xDomain,
     state.distributionMode,
-    computeDisplayReferenceLines(metric),
+    computeDisplayReferenceLines(metric, endpoint, cohortRowIndices),
     exposureLabel(metric),
     width,
     height
@@ -3733,12 +3876,16 @@ interface DistributionMeta {
  * (mirroring the regular grid's one-column-per-metric layout), rather than multiplying into a
  * full endpoints x metrics grid.
  */
-function computeCompareObservedBins(metric: ExposureMetric, endpoint: Endpoint): ObservedResponseBin[] {
+function computeCompareObservedBins(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  cohortRowIndices?: number[]
+): ObservedResponseBin[] {
   const neutral = compareDistUsesNeutralShapes();
   const color = neutral ? NEUTRAL_COMPARE_COLOR : endpointColor(endpoint);
   const strokeDash = neutral ? endpointMarkerDash(endpoint) : undefined;
   if (usesLinearModel(endpoint)) {
-    return computeObservedMeanBins(metric, endpoint).map((b) => {
+    return computeObservedMeanBins(metric, endpoint, cohortRowIndices).map((b) => {
       const fmt = (v: number) => (Number.isFinite(v) ? v.toFixed(1) : "—");
       return {
         x: b.x,
@@ -3754,7 +3901,7 @@ function computeCompareObservedBins(metric: ExposureMetric, endpoint: Endpoint):
       };
     });
   }
-  return computeObservedResponseBins(metric, endpoint).map((b) => ({ ...b, color, strokeDash }));
+  return computeObservedResponseBins(metric, endpoint, cohortRowIndices).map((b) => ({ ...b, color, strokeDash }));
 }
 
 function renderEndpointLegend(endpoints: Endpoint[]): void {

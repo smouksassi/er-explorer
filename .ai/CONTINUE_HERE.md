@@ -1,15 +1,16 @@
 # Continue here (session handoff)
 
-**Last updated:** 2026-08-07 (end of day)  
-**Theme:** Layout visual policy (Phase 0+1) + demo UX fixes (Guided compare dist, linked x-axes, endpoint/covariate dist + projections).  
-**Git:** Changes are **local** — user did not request a commit; run `git status` before starting.
+**Last updated:** 2026-08-07 (post-push)  
+**Theme:** Layout visual policy (Phase 0+1) + **overlay cohort scope (ADR-0011, Phase 2a)**; selection model still backlog.  
+**Git:** After commit — overlay cohort (ADR-0011) on `main`; exclude local `claudetwoexposureoneendpoint.R` from commits.
 
 ---
 
 ## Start next session (5 min)
 
-1. Read this file + skim [`LAYOUT_AND_ENCODING.md`](./LAYOUT_AND_ENCODING.md).
-2. Build and smoke:
+1. Read this file + [`OVERLAYS_AND_SPLITS.md`](./OVERLAYS_AND_SPLITS.md) (overlay cohort — ADR-0011 implemented in domain + demo paint).
+2. Skim [`LAYOUT_AND_ENCODING.md`](./LAYOUT_AND_ENCODING.md).
+3. Build and smoke:
 
 ```powershell
 cd "c:\Users\smouksas\OneDrive - Certara\Desktop\packages\er-explorer"
@@ -54,6 +55,8 @@ pnpm --filter @er-explorer/demo smoke:ui
 ---
 
 ## Phase 2 — next (approved direction, not started)
+
+**Priority (2026-08-08):** Overlay cohort scope — **in progress** (see [`OVERLAYS_AND_SPLITS.md`](./OVERLAYS_AND_SPLITS.md)). Verify sex-facet + color-by-sex manually; extend ui-smoke if needed.
 
 1. **Selection model in domain** — one type for `selectedDoses` + `selectedDistGroupIds`; derive readout/projections from spec + selection (move logic out of `main.ts` filters).
 2. **Guided presets only** — `compareEndpoints` / `compareDistByEndpoint` write/read `ViewLayoutSpec` via `guidedToViewLayoutSpec`; reduce parallel booleans.
@@ -107,13 +110,6 @@ docs/DECISIONS.md                        # ADR-0010
 
 ## Open / verify on next visit
 
-- [ ] User screenshot showed **old** status text (“Use Color: Dose…”) — ensure **rebuilt dist**; status string was updated in `updateAdvancedLayoutStatus`.
-- [ ] Endpoints on **both** row and column facets (unusual grid) — confirm dist `readoutEndpointId` and colors on all 6 panels.
-- [ ] Readout panel when split selection: may still summarize by **dose** only; align readout with subgroup if user asks.
-- [ ] `pnpm-lock.yaml` may include Playwright from smoke setup — intentional for CI/local smoke.
-
----
-
-## Do not commit without user ask
-
-Per project rules: no git commit/push unless explicitly requested. When ready, suggested scope: **one PR** — “layout policy Phase 0+1 + demo dist/selection UX” (exclude unrelated root junk like installer zips).
+- [x] **BUG (partial fix):** Overlays cohort-aware — `resolveOverlayCohortPolicy`, `rowIndicesForReferenceSplit`, panel cohort for observed/Min-Max; split x still endpoint×metric. Manual QA: sex facet callouts differ; color-by-sex callouts per level.
+- [ ] Endpoints on **both** row and column facets — confirm dist colors on all panels.
+- [ ] Readout panel when split selection: may still summarize by **dose** only.

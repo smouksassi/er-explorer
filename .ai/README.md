@@ -23,6 +23,7 @@ Persistent notes for AI assistants and contributors. **Official product docs sta
 | [`LAYOUT_AND_ENCODING.md`](./LAYOUT_AND_ENCODING.md) | Endpoint/compare heuristics, target encoding model, known UI bugs |
 | [`IMPLEMENTATION_RULES.md`](./IMPLEMENTATION_RULES.md) | How to implement refactors; stop conditions |
 | [**`CONTINUE_HERE.md`**](./CONTINUE_HERE.md) | **Latest session handoff — read this when resuming work** |
+| [**`OVERLAYS_AND_SPLITS.md`**](./OVERLAYS_AND_SPLITS.md) | Overlay cohort scope (ADR-0011); facet/color/split layering |
 
 ## Project status (one paragraph)
 

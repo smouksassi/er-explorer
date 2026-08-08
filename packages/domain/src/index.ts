@@ -96,3 +96,5 @@ export {
   resolveLegendShowsEndpoints,
   resolvePanelVisualPolicy
 } from "./panelVisualPolicy";
+export type { OverlayCohortPolicy, OverlayCohortScope } from "./overlayCohortPolicy";
+export { resolveOverlayCohortPolicy } from "./overlayCohortPolicy";

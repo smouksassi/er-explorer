@@ -38,6 +38,7 @@
 
 **Still open / Phase 2:**
 
+- **Overlays cohort scope (partial)** — ADR-0011 + `resolveOverlayCohortPolicy`; see [`.ai/OVERLAYS_AND_SPLITS.md`](./OVERLAYS_AND_SPLITS.md). Remaining: readout/fitted-at-split, selection model.
 - Unified **selection** type in domain; readout text may not fully match subgroup selection.
 - Guided booleans vs spec-only persistence.
 - Further dedupe of compare-specific paint in `main.ts`.

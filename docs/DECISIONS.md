@@ -105,3 +105,31 @@ resolvePanelStyle.ts`). Paint paths must not branch on ad hoc
 one resolver feeds readout, projections, and cohort highlight.
 
 See `.ai/LAYOUT_AND_ENCODING.md` and `.ai/ARCHITECTURE_REVIEW.md`.
+
+ADR-0011 Overlay cohort scope (2026-08-08).
+
+Reference splits and split-driven overlays must use explicit **cohort
+scopes** derived from `ViewLayoutSpec` + panel (`resolveOverlayCohortPolicy`
+in `@er-explorer/domain`), not ad hoc `dataFilteredRowIndices()` in paint
+paths.
+
+**Default:** For each scatter/dist cell, **facet cohort** =
+`panel.rowIndices` ∩ data filters. Observed rates/means at split x,
+Min/Max display lines, distribution split N annotations, and fitted
+readouts at splits use **panel facet** (or **color level within panel**
+when `color.kind === "variable"` and that variable is not faceted away).
+
+**Exception — split x positions only:** Median/tertile/quartile **cut
+points** on exposure are computed on the **endpoint × exposure metric**
+population (union of panels sharing that endpoint slice and x metric,
+with existing PK placebo exclusion for cut-point math). All panels with
+the same endpoint and metric share the same vertical split **x**; **y**
+callouts at those x still use facet/color cohorts.
+
+**Linked x-domain:** Unchanged (per exposure column, ADR-0010 demo
+behavior).
+
+**Demo:** `apps/demo` maps scopes to row indices (`rowIndicesForReferenceSplit`,
+`cohortForPanel`); overlay computors take `endpoint` + cohort arguments.
+
+See `.ai/OVERLAYS_AND_SPLITS.md`.
