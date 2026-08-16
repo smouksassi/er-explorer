@@ -299,6 +299,30 @@ async function run() {
     if (fills.length) ok(`projection markers rendered (${fills.length} circles)`);
     else ok("readout ok (no binary projection circles in this layout — acceptable)");
 
+    console.log("\n5) Advanced — continuous endpoint + color sex + fit per group (ADR-0012 curve groups)");
+    await setSelectedEndpoints(page, ["brls"]);
+    await openStyleDrawer(page);
+    await setSelectValue(page, "advancedColorBy", sexValue);
+    await setCheckbox(page, "advancedColorDistShapes", false);
+    await setCheckbox(page, "advancedFitByColor", true);
+    await openDrawerRail(page, "plot");
+    await page.waitForTimeout(400);
+
+    const contCurveStrokes = await page.$$eval(".facet-scatter-block svg path[stroke]", (paths) =>
+      paths
+        .filter((p) => p.getAttribute("fill") === "none" && !p.getAttribute("stroke-dasharray"))
+        .map((p) => p.getAttribute("stroke")?.toLowerCase() ?? "")
+        .filter((s) => s && s !== "none" && s !== "#ffffff" && s !== "#e2e8f0")
+    );
+    const uniqCont = [...new Set(contCurveStrokes)];
+    if (uniqCont.includes("#64748b") && uniqCont.length === 1) {
+      fail("continuous endpoint with fit-per-color should not render a single pooled gray curve");
+    }
+    if (uniqCont.length < 2) {
+      fail(`expected >=2 curve stroke colors for continuous fit-per-color, got ${uniqCont.join(", ")}`);
+    }
+    ok(`continuous fit-per-color renders ${uniqCont.length} distinct curve colors`);
+
     console.log("\nui-smoke: ALL CHECKS PASSED\n");
   } finally {
     await browser.close();

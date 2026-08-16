@@ -1816,16 +1816,26 @@ function renderContinuousScatterViaRenderer(
   width: number,
   referenceLines: ReferenceLine[],
   observedMeanBins: ObservedMeanBin[],
-  height = SCATTER_CHART_HEIGHT
+  height = SCATTER_CHART_HEIGHT,
+  opts?: {
+    /** ADR-0012 curve groups (fit per color level); replaces the single pooled curve. */
+    curves?: Array<{ curve: PredictionResult; color: string }>;
+    /** Point color under the active color channel; default = dose palette. */
+    pointColorFor?: (p: ScatterPoint) => string;
+  }
 ): { content: string; metadata: ScatterMeta } {
   const ds = requireDataset();
-  const curveSamples = toCurveSamples(curve);
-  const yDomain = computeContinuousYDomain(points, curveSamples);
+  const curveOverlays = opts?.curves?.length
+    ? opts.curves.map((c) => ({ samples: toCurveSamples(c.curve), color: c.color, band: c.color }))
+    : [{ samples: toCurveSamples(curve), color: "#64748b", band: "#94a3b8" }];
+  const allSamples = curveOverlays.flatMap((c) => c.samples);
+  const curveSamples = curveOverlays[0]!.samples;
+  const yDomain = computeContinuousYDomain(points, allSamples);
   const plotHeight = height;
 
   const scatterPoints: ScatterPointDatum[] = (state.showPoints ? points : []).map((p) =>
     scatterDatumFromPoint(p, {
-      color: resolveDoseColor(String(p.groupId)) ?? "#64748b",
+      color: opts?.pointColorFor?.(p) ?? resolveDoseColor(String(p.groupId)) ?? "#64748b",
       radius: p.selected ? 4.2 : 3.1,
       opacity: p.selected ? 0.84 : 0.14,
       stroke: p.selected ? "#ffffff" : undefined,
@@ -1841,10 +1851,12 @@ function renderContinuousScatterViaRenderer(
       orientation: "y",
       label: endpoint.toUpperCase(),
       format: (v) => (Number.isInteger(v) ? String(v) : v.toFixed(1))
-    }),
-    new ConfidenceRibbonLayer({ id: "band", samples: curveSamples, color: "#94a3b8", opacity: 0.18 }),
-    new FitLayer({ id: "curve", samples: curveSamples, color: "#64748b" })
+    })
   ];
+  curveOverlays.forEach((c, ci) => {
+    layers.push(new ConfidenceRibbonLayer({ id: `band-${ci}`, samples: c.samples, color: c.band, opacity: 0.18 }));
+    layers.push(new FitLayer({ id: `curve-${ci}`, samples: c.samples, color: c.color }));
+  });
 
   if (projected.length) {
     const rangeSamplesFor = (p: LinearProjectedGroup) => {
@@ -1892,22 +1904,24 @@ function renderContinuousScatterViaRenderer(
   }
 
   if (referenceLines.length) {
+    const multiCurve = curveOverlays.length > 1;
     const refSpecs: ReferenceLineSpec[] = referenceLines.map((ref) => {
       const spec: ReferenceLineSpec = { value: ref.value, label: ref.label };
       if (state.showSplitValue) spec.valueLabel = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
       if (state.showReferenceFit) {
-        const at = interpolateCurveSample(curveSamples, ref.value);
-        const [l1, l2] = formatFitMarkerLines(at.estimate, at.lower, at.upper, 1);
-        spec.markerValues = [
-          {
+        // One fitted marker per curve group: same split x, per-group y (ADR-0012).
+        spec.markerValues = curveOverlays.map((c) => {
+          const at = interpolateCurveSample(c.samples, ref.value);
+          const [l1, l2] = formatFitMarkerLines(at.estimate, at.lower, at.upper, 1);
+          return {
             estimate: at.estimate,
             lower: at.lower,
             upper: at.upper,
             lines: [l1, l2],
-            color: "#94a3b8",
+            color: multiCurve ? c.color : "#94a3b8",
             tooltip: splitFitMarkerTooltip(exposureLabel(metric), ref.value)
-          }
-        ];
+          };
+        });
       }
       return spec;
     });
@@ -1939,15 +1953,17 @@ function renderContinuousScatterViaRenderer(
   }
 
   if (state.showFittedAtObservedBin && observedMeanBins.length) {
-    layers.push(
-      createFitAtObservedBinLayer(
-        "fit-at-observed-bin",
-        observedMeanBins.map((b) => b.x),
-        curveSamples,
-        exposureLabel(metric),
-        1
-      )
-    );
+    curveOverlays.forEach((c, ci) => {
+      layers.push(
+        createFitAtObservedBinLayer(
+          `fit-at-observed-bin-${ci}`,
+          observedMeanBins.map((b) => b.x),
+          c.samples,
+          exposureLabel(metric),
+          1
+        )
+      );
+    });
   }
 
   layers.push(new ScatterLayer({ id: "points", points: scatterPoints, nativeTitle: false }));
@@ -3166,6 +3182,44 @@ function paintRegularScatterIntoWrap(
   if (continuous) {
     const { fit, xs, ys } = fitForCohort(metric, endpoint, recordRows);
     const curve = curveFor(fit, xs, ys, xDomain);
+
+    // ADR-0012 curve groups: continuous endpoints fit per color level like every
+    // other model family (this was the "BRLS not fit separately by sex" gap).
+    const presentLevels =
+      colorByVariable && colorVarId && colorModel
+        ? [...new Set(recordRows.map((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId)).filter(Boolean))]
+        : [];
+    let levelCurves: Array<{ curve: PredictionResult; color: string }> | undefined;
+    if (colorByVariable && colorVarId && colorModel && presentLevels.length) {
+      const paletteLevels = colorModel.levels;
+      if (spec?.fitByColor && presentLevels.length > 1) {
+        const built = presentLevels.flatMap((level) => {
+          const sub = recordRows.filter((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === level);
+          try {
+            const f = fitForCohort(metric, endpoint, sub);
+            return [
+              {
+                curve: curveFor(f.fit, f.xs, f.ys, xDomain),
+                color: variableColorForLevel(colorVarId, level, paletteLevels)
+              }
+            ];
+          } catch {
+            return [];
+          }
+        });
+        if (built.length) levelCurves = built;
+      } else if (presentLevels.length === 1) {
+        // Degenerate facet+color: the pooled curve wears the panel's level color.
+        levelCurves = [
+          { curve, color: variableColorForLevel(colorVarId, presentLevels[0]!, colorModel.levels) }
+        ];
+      }
+    }
+    const pointColorFor =
+      colorByVariable && colorVarId && colorModel
+        ? (p: ScatterPoint) => variableColorForLevel(colorVarId, String(p.groupId), colorModel.levels)
+        : undefined;
+
     const groupStats: Record<
       string,
       {
@@ -3224,7 +3278,8 @@ function paintRegularScatterIntoWrap(
       width,
       computeDisplayReferenceLines(metric, endpoint, cohort),
       computeObservedMeanBinsForPanel(metric, endpoint, cohort, overlayPolicy, colorVarId, colorModel ?? undefined),
-      height
+      height,
+      { curves: levelCurves, pointColorFor }
     );
   } else {
     const refLines = computeDisplayReferenceLines(metric, endpoint, cohort);
