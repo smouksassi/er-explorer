@@ -1,8 +1,10 @@
 # Continue here (session handoff)
 
-**Last updated:** 2026-08-07 (post-push)  
-**Theme:** Layout visual policy (Phase 0+1) + **overlay cohort scope (ADR-0011, Phase 2a)**; selection model still backlog.  
-**Git:** After commit — overlay cohort (ADR-0011) on `main`; exclude local `claudetwoexposureoneendpoint.R` from commits.
+**Last updated:** 2026-08-16 (uncommitted: policy fix + ADR-0012 + rethink docs)  
+**Theme:** **ENCODING V2 APPROVED** — unified grammar (ADR-0012 in `docs/DECISIONS.md`); full design record in [`ENCODING_V2_RETHINK.md`](./ENCODING_V2_RETHINK.md). The Phase-2 backlog below is **subsumed** by the v2 implementation sequence (rethink §F). Old plan kept for reference only.  
+**Git:** Uncommitted on `main`: `panelVisualPolicy` multiCurve fix (+test), ADR-0012, `.ai` updates; exclude local `claudetwoexposureoneendpoint.R` from commits.
+
+**Next session: start at `ENCODING_V2_RETHINK.md` §F step 2** — domain resolver (`resolveCellContexts`) + selection type + test matrix. User approved ("go", 2026-08-16); all design questions closed (§H/§I).
 
 ---
 
@@ -107,6 +109,11 @@ docs/DECISIONS.md                        # ADR-0010
 ```
 
 ---
+
+## Fixed 2026-08-13 (uncommitted — verify then commit)
+
+- **BUG:** `distUsesEndpointColorWhenUnsplit` was `true` for **multi-curve** overlay panels → Guided compare with split OFF painted **all** dose boxplots in one endpoint accent (icgi blue), instead of dose colors. Fix: policy now requires `!multiCurve` ([`panelVisualPolicy.ts`](../packages/domain/src/panelVisualPolicy.ts)); test expectation at "color endpoints without split → dose dist" corrected to `false` (test name always said dose dist). `smoke:ui` green again.
+- **Known cosmetic:** bundled dataset gained `icgi7`, which is not in `ENDPOINT_COLORS` (main.ts) → palette-index fallback gives it `#DDAA33`, colliding with `icgi2`'s hardcoded `#DDAA33`. Fix separately (dedupe fallback against hardcoded map).
 
 ## Open / verify on next visit
 

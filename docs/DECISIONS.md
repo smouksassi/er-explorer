@@ -133,3 +133,99 @@ behavior).
 `cohortForPanel`); overlay computors take `endpoint` + cohort arguments.
 
 See `.ai/OVERLAYS_AND_SPLITS.md`.
+
+ADR-0012 Unified encoding grammar (2026-08-16).
+
+Supersedes the encoding portions of ADR-0010 and the cut-point exception
+of ADR-0011. Full design record and decision log:
+`.ai/ENCODING_V2_RETHINK.md`.
+
+**Grammar:** A layout assigns grouping variables to five roles: `y`
+(endpoints), `x` (exposure metrics), `facet_row`, `facet_col` (nesting
+allowed; every strip labels its variable), and `color` (one variable).
+Endpoint, exposure metric, study, dose, and covariates are all ordinary
+grouping variables. `linetype` is an optional extra channel the user maps
+to endpoint or to the color variable (double encoding for color-blind
+safety), or leaves off.
+
+**Legality — the scale-bearing rule:** endpoint owns the y scale; exposure
+metric owns the x scale. A scale-bearing variable with more than one level
+in play must either be faceted along its axis or have all levels share a
+compatible scale to overlay. Exposure metrics therefore always facet
+(never two metrics on one x-axis). Endpoints overlay only on a shared
+scale: binary endpoints natively; continuous endpoints via the explicit
+per-endpoint rescale to [0,1] configured in the Analysis drawer (bounds +
+"Use data"). Values outside declared bounds are rendered as-is with a
+user-facing warning — the app never clamps, drops, or edits data.
+Direction of effect is always shown raw (AEs may be higher-is-worse);
+alignment/inversion is CUI's job later via desirability weighting. All
+scale-free combinations are legal, including the same variable on facet
+and color simultaneously (degenerate but useful: stable level colors when
+toggling between overlaid and faceted views).
+
+**One categorical color channel per view:** the `color` mapping has
+exactly one meaning everywhere on screen. Elements grouped by the color
+variable take the palette; everything else renders neutral ink. The
+selection highlight is a separate state accent. There are no other
+palettes on the canvas (replaces the legacy neutral-dist special cases
+with a single rule).
+
+**Cohort contract:** enumeration produces cells; one domain resolver
+produces per cell: facet cohort (facet slice ∩ filters), the color groups
+present in it, split x positions, linked x-domain, and selection. Every
+layer — points, curves, observed summaries, min/median/max markers,
+fitted-at-split, dist rows, annotations, projections, readout — consumes
+only this context, computed per (panel, group). No paint path may call
+global filtered indices or global fit caches.
+
+**Split cut points:** median/tertile/quartile x positions are computed per
+**exposure metric** on all available exposure values, all doses pooled,
+excluding placebo/standard-of-care/zero-by-design arms. Endpoint
+missingness does not shrink the cut-point cohort; one set of split lines
+per panel. (Simplifies ADR-0011, which scoped positions to endpoint ×
+metric.) Y-callouts at those x remain per (panel, group).
+
+**Distribution strip:** describes exposure, not endpoints. It renders once
+per exposure column; rows are dose arms, subdivided by the color variable
+when one is active (sub-rows take the palette; under color=endpoints rows
+are neutral — dose identity is the row label). Per-endpoint strips appear
+only when endpoint missingness makes contents genuinely differ
+(exact-match dedup; near-match shows both). Row N = unique patients;
+per-endpoint numbers (x/N binary, mean [CI] continuous) live in callouts
+and readout only — no patient is counted twice. Shapes (box, lineranges,
+KDE) never extend beyond observed min/max; KDE is kept (multimodality)
+but trimmed at the data boundaries.
+
+**Model registry:** each endpoint has a model family (logistic, linear,
+loess now; bounded binomial smoother, Emax, ordinal P(Y≥k) planned) with a
+per-endpoint user override. Fits are produced per (panel, group) — every
+family supports fit-by-group. The observed-summary layer is driven by
+endpoint TYPE, not model: binary → x/N (Wilson), continuous → mean ± CI
+per bin; loess-on-binary keeps x/N observed bins. Smoother curves are
+never clamped to [0,1]; the axis pads to show overflow. Loess CI comes
+from prediction SE with a t multiplier. The layer API reserves room for
+parameter overlays and fit-equation text (slope/intercept, EC50/Emax).
+
+**Fixed marker vocabulary:** circle = observed by dose; triangle/diamond =
+observed at exposure-quantile bin; shape is never user-mapped; size may
+scale with N.
+
+**Guided = presets:** P1 one endpoint × one exposure; P2 endpoints as rows
+× exposures as columns; P3 endpoints overlaid per exposure column
+(rescale as configured). Covariate color/facet/fit-per-group is Advanced
+only. Both modes write the same spec; one render path.
+
+**Selection and session:** one serializable selection type in domain feeds
+readout, projections, and highlights. Sessions persist the full spec +
+selection; pre-v2 `.erx` files are not migrated (explicitly accepted).
+
+**Dropped:** the Guided overlay mount and `compareEndpoints` /
+`compareDistByEndpoint` / `endpointOverlay` booleans; all neutral-mode
+special cases (subsumed by the one-channel rule); `layoutColorFacetConflict`;
+"shared by exposure column" as a user choice (now a derived dedup
+outcome); dist color heuristics incl. `distUsesEndpointColorWhenUnsplit`;
+hardcoded endpoint color/dash maps (ordered palette from dataset order);
+ghost curves; user-mapped point shapes.
+
+Implementation follows `.ai/ENCODING_V2_RETHINK.md` §F: domain resolver +
+tests first, then the single demo paint path, dist geometry, session.
