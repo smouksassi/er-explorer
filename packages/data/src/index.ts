@@ -77,3 +77,9 @@ export {
   binLabelsFor,
   effectiveVariableBinning
 } from "./variableBins";
+export {
+  type CellResolver,
+  buildCellResolutionInput,
+  createCellResolver,
+  resolveCellContexts
+} from "./cellResolution";
