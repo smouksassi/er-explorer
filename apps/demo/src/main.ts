@@ -118,12 +118,7 @@ import {
   populateFacetSelectOptions,
   readAdvancedSpecFromUi
 } from "./advancedLayoutUi";
-import {
-  defaultAdvancedLayout,
-  layoutColorFacetConflict,
-  resolveViewLayoutSpec,
-  type LayoutMode
-} from "./viewLayoutState";
+import { defaultAdvancedLayout, resolveViewLayoutSpec, type LayoutMode } from "./viewLayoutState";
 
 /**
  * Chart-input data shapes formerly imported from the now-deleted
@@ -654,32 +649,22 @@ function selectedAdvancedFacetVariableIds(): Set<string> {
 }
 
 function reconcileAdvancedColorWithFacets(): void {
-  const faceted = selectedAdvancedFacetVariableIds();
-  if (faceted.has(advancedColorByEl.value)) advancedColorByEl.value = "dose";
+  // ADR-0012: the same variable on facet AND color is legal (degenerate but
+  // useful — one level per panel keeps its stable color across facet toggles).
 }
 
 function refreshAdvancedColorOptions(): void {
   if (!dataset) return;
   const keep = advancedColorByEl.value;
-  const faceted = selectedAdvancedFacetVariableIds();
   advancedColorByEl.innerHTML =
     '<option value="dose">Dose</option><option value="endpoints">Endpoints</option>';
   for (const col of filterColumnOptions()) {
     const opt = document.createElement("option");
     opt.value = col.id;
-    const facetedHere = faceted.has(col.id);
-    opt.textContent = facetedHere ? `${col.label} (on facets)` : col.label;
-    opt.disabled = facetedHere;
+    opt.textContent = col.label;
     advancedColorByEl.appendChild(opt);
   }
-  if ([...advancedColorByEl.options].some((o) => o.value === keep && !o.disabled)) advancedColorByEl.value = keep;
-  else if (faceted.has(keep)) advancedColorByEl.value = "dose";
-}
-
-function colorVariableFacetedOnPanel(panel: ScatterPanelSpec | undefined, colorVarId: string): boolean {
-  if (!panel) return false;
-  const v = panel.facetKey[colorVarId];
-  return v != null && String(v).length > 0;
+  if ([...advancedColorByEl.options].some((o) => o.value === keep)) advancedColorByEl.value = keep;
 }
 
 function colorBinModelForSpec(spec: ViewLayoutSpec | null | undefined, cohortRowIndices: number[]): ColorBinModel | null {
@@ -787,8 +772,6 @@ function updateAdvancedLayoutStatus(spec: ViewLayoutSpec | null): void {
     return;
   }
   const parts: string[] = [];
-  const conflict = spec ? layoutColorFacetConflict(spec) : null;
-  if (conflict) parts.push(conflict);
   if (spec?.color.kind === "dose" && advancedFitByColorEl.checked) {
     parts.push("Separate fits by dose are not supported (dose is the ER x-axis grouping for projections).");
   }
@@ -813,7 +796,7 @@ function updateAdvancedLayoutStatus(spec: ViewLayoutSpec | null): void {
     }
     if (spec.color.kind === "endpoints" && layoutHasEndpointFacet(spec)) {
       parts.push(
-        "Endpoints are faceted — each panel and its boxplot strip use that endpoint’s color. Use “Color-split boxplots” when multiple endpoints share one panel (no endpoint facets)."
+        "Endpoints are faceted — curves/points use each panel's endpoint color; boxplot strips stay neutral (dose labels identify rows)."
       );
     }
     const endpoints = selectedEndpoints();
@@ -3151,11 +3134,11 @@ function paintRegularScatterIntoWrap(
             selectedEndpoints()
           )
         : null;
-  const colorVarFaceted = !!colorVarId && colorVariableFacetedOnPanel(panel, colorVarId);
+  // ADR-0012: color stays active when the color variable is also faceted —
+  // the panel is single-level and keeps that level's color (stable identity).
   const colorByVariable =
-    (scatterPolicy?.scatterPointColorSource === "variable" ||
-      (!scatterPolicy && state.layoutMode === "advanced" && !!colorVarId)) &&
-    !colorVarFaceted;
+    scatterPolicy?.scatterPointColorSource === "variable" ||
+    (!scatterPolicy && state.layoutMode === "advanced" && !!colorVarId);
   const colorModel = colorByVariable ? colorBinModelForSpec(spec, cohort) : null;
 
   const points: ScatterPoint[] = recordRows.map((i) => {
@@ -3561,6 +3544,8 @@ function buildDistributionGroups(
     panelId?: string;
     /** ADR-0012 one-channel rule: rows grouped by dose only render neutral when color ≠ dose. */
     neutralRows?: boolean;
+    /** Degenerate facet+color: the panel's single level color for every dose row. */
+    fixedRowColor?: string;
     endpointForSplits?: Endpoint;
   }
 ): DistributionRawGroup[] {
@@ -3582,7 +3567,10 @@ function buildDistributionGroups(
     const binning =
       spec?.continuousBinning ??
       (spec?.color.kind === "variable" ? spec.color.binning : undefined);
-    const colorModel = buildColorBinModel(loaded, colorVar, cohort, binning);
+    // Bin model on the BASE cohort (ADR-0012): cut points and level->color
+    // assignment must be identical in every facet panel, even when this dist
+    // cell's cohort holds a subset of levels (facet+color on the same variable).
+    const colorModel = buildColorBinModel(loaded, colorVar, dataFilteredRowIndices(), binning);
     const levels = colorModel.levels;
     return DOSE_ORDER()
       .slice()
@@ -3661,7 +3649,8 @@ function buildDistributionGroups(
       const rows = rowIndicesForDose(dose).filter((i) => inCohort(i));
       const values =
         isPlacebo && pkLike ? [] : rows.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
-      const rowColor = opts?.neutralRows ? NEUTRAL_COMPARE_COLOR : resolveDoseColor(dose);
+      const rowColor =
+        opts?.fixedRowColor ?? (opts?.neutralRows ? NEUTRAL_COMPARE_COLOR : resolveDoseColor(dose));
       return {
         groupId: dose,
         label: dose,
@@ -3706,16 +3695,16 @@ function paintDistributionChart(
       ? spec.color.variableId
       : undefined;
   // ADR-0012 one-color-channel rule: unsplit dose rows are grouped by dose only,
-  // so they take the palette only when color IS dose. Under color=endpoints the
-  // strip renders neutral ink — the strip describes exposure; dose identity is
-  // the row label. Endpoint-split sub-rows (grouped BY the color variable) keep
-  // endpoint colors in their own branch.
-  const distRowsNeutral = (() => {
-    if (splitByEndpoints && splitByEndpoints.length > 1) return false;
-    if (!spec) return false;
+  // so they take the palette only when color IS dose; under color=endpoints or an
+  // unsplit color variable the strip renders neutral ink (dose identity = row
+  // label). A degenerate single-level cell (same variable on facet + color) keeps
+  // that level's color. Endpoint-split sub-rows keep endpoint colors in their branch.
+  const distRowPaint = (() => {
+    if (splitByEndpoints && splitByEndpoints.length > 1) return {} as { neutral?: boolean; fixedColor?: string };
+    if (!spec) return {};
     const scatterId = distPanel?.scatterPanelIds[0];
     const scatterPanel = scatterId ? scatterPanelById.get(scatterId) : undefined;
-    if (!scatterPanel) return spec.color.kind === "endpoints";
+    if (!scatterPanel) return spec.color.kind !== "dose" ? { neutral: true } : {};
     const ctx = resolveCellContext(
       buildCellResolutionInput(
         requireDataset().loaded,
@@ -3725,13 +3714,27 @@ function paintDistributionChart(
         scatterPanel
       )
     );
-    return ctx.distRows.palette === "neutral";
+    if (ctx.distRows.palette === "neutral") return { neutral: true };
+    if (
+      ctx.distRows.palette === "variable" &&
+      !ctx.distRows.splitLevels.length &&
+      ctx.colorChannel.kind === "variable" &&
+      ctx.colorChannel.levels.length === 1
+    ) {
+      const paletteModel = colorBinModelForSpec(spec, dataFilteredRowIndices());
+      const level = ctx.colorChannel.levels[0]!;
+      return {
+        fixedColor: variableColorForLevel(ctx.colorChannel.variableId, level, paletteModel?.levels ?? [level])
+      };
+    }
+    return {};
   })();
   const distGroups = buildDistributionGroups(metric, splitByEndpoints, {
     cohortRowIndices,
     splitByColorVariable: spec?.distribution.colorDistShapes ? colorVar : undefined,
     panelId: opts?.panelId,
-    neutralRows: distRowsNeutral,
+    neutralRows: distRowPaint.neutral,
+    fixedRowColor: distRowPaint.fixedColor,
     endpointForSplits: endpoint
   });
   const distResult = renderDistributionViaRenderer(
@@ -3844,8 +3847,10 @@ function computeDistributionGroupData(
   const summary = summarizeDistribution(values);
   if (!summary) return null;
   const bandwidth = silvermanBandwidth(values);
-  const pad = Math.max(bandwidth * 2.5, (summary.max - summary.min) * 0.02);
-  const localDomain: [number, number] = [Math.max(xDomain[0], summary.min - pad), Math.min(xDomain[1], summary.max + pad)];
+  // ADR-0012: density shapes are TRIMMED at the observed min/max — no KDE
+  // extrapolation beyond the data range (a shape past Max reads as fabricated
+  // exposure). The kernel still smooths within the range.
+  const localDomain: [number, number] = [Math.max(xDomain[0], summary.min), Math.min(xDomain[1], summary.max)];
   const xSamples = buildDistributionSampleGrid(
     localDomain,
     [summary.whiskerLow, summary.q1, summary.q3, summary.whiskerHigh, summary.min, summary.max],

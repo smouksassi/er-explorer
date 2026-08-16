@@ -129,6 +129,13 @@ describe("resolveCellContext — color = variable (sex)", () => {
     expect(ctx.distRows).toEqual({ splitLevels: ["1", "2"], palette: "variable", variableId: "sex" });
   });
 
+  it("colorDistShapes OFF → unsplit rows are NEUTRAL, never dose colors (one channel)", () => {
+    const ctx = resolveCellContext(
+      input({ spec: { ...spec, distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false } }, ...vars })
+    );
+    expect(ctx.distRows).toEqual({ splitLevels: [], palette: "neutral" });
+  });
+
   it("overlay endpoints × fitByColor → cartesian curve groups (endpoint × level)", () => {
     const ctx = resolveCellContext(
       input({

@@ -177,11 +177,14 @@ export function resolveCellContext(input: CellResolutionInput): ResolvedCellCont
           ]
     );
 
+    // One channel: rows split by level wear the level palette; a single-level cell
+    // keeps its level color; unsplit multi-level rows are grouped by dose only and
+    // therefore render NEUTRAL (dose palette would be a second color channel).
     distRows = spec.distribution.colorDistShapes && levels.length > 1
       ? { splitLevels: levels, palette: "variable", variableId }
       : levels.length === 1
         ? { splitLevels: [], palette: "variable", variableId }
-        : { splitLevels: [], palette: "dose" };
+        : { splitLevels: [], palette: "neutral" };
   } else if (color.kind === "endpoints") {
     colorChannel = { kind: "endpoints", endpointIds };
     curveGroups = endpointIds.map((endpointId) => ({

@@ -106,14 +106,6 @@ export function resetAdvancedToGuided(guidedInput: GuidedLayoutInput): ViewLayou
   return defaultAdvancedSpecFromGuided(guidedInput);
 }
 
-/** Warn when color variable is already used as a facet (one level per panel). */
-export function layoutColorFacetConflict(spec: ViewLayoutSpec): string | null {
-  if (spec.color.kind !== "variable") return null;
-  const v = spec.color.variableId;
-  const inRow = spec.rowDimensions.some((d) => d.kind === "variable" && d.variableId === v);
-  const inCol = spec.colDimensions.some((d) => d.kind === "variable" && d.variableId === v);
-  if (inRow || inCol) {
-    return `Color is "${v}" and "${v}" is also a row/column facet — each panel is one ${v} level, so curves/points use dose colors here. Pick Dose or Endpoints for color, or remove "${v}" from facets to color by ${v} within a panel.`;
-  }
-  return null;
-}
+// ADR-0012: same variable on facet AND color is legal (degenerate encoding keeps
+// stable level colors across facet toggles) — the former layoutColorFacetConflict
+// guard was removed.
