@@ -24,7 +24,10 @@ export interface PanelVisualPolicy {
   /** When true, readout skips per-endpoint fit lines (compare without dist split). */
   omitPerEndpointFitInReadout: boolean;
   legendUsesEndpointColors: boolean;
-  /** Unsplit dose rows use this panel’s endpoint color (color=endpoints, one curve/cell). */
+  /**
+   * @deprecated ADR-0012 one-color-channel rule: unsplit dose rows render NEUTRAL under
+   * color=endpoints (see `resolveCellContext().distRows`). Demo no longer consumes this.
+   */
   distUsesEndpointColorWhenUnsplit: boolean;
 }
 

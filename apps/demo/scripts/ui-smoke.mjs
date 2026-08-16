@@ -203,18 +203,21 @@ async function run() {
     if (splitIds.length < 2) fail(`expected split dist rows (dose|endpoint), got ${splitIds.length}`);
     ok(`split dist rows (${splitIds.length} with |)`);
 
-    console.log("\n2) Guided compare — split distribution OFF (dose-colored dist, endpoint curves)");
+    console.log("\n2) Guided compare — split distribution OFF (ADR-0012: neutral strip, endpoint curves)");
     await setCheckbox(page, "compareDistByEndpoint", false);
     await openDrawerRail(page, "plot");
     await page.waitForTimeout(400);
 
+    // One color channel per view: under color=endpoints, unsplit dose rows are
+    // grouped by dose only -> neutral ink; dose identity is the row label.
     const strokes = await distShapeStrokes(page);
     if (!strokes.length) fail("no distribution shapes rendered");
     const uniqStroke = await distinct(strokes);
     const allNeutral = uniqStroke.length === 1 && uniqStroke[0] === NEUTRAL_COMPARE;
-    if (allNeutral) fail("unsplit compare dist should not be all neutral gray (#64748b)");
-    if (uniqStroke.length < 2) fail(`expected multiple dose stroke colors, got ${uniqStroke.join(", ")}`);
-    ok(`dist uses dose colors (${uniqStroke.length} distinct strokes)`);
+    if (!allNeutral) {
+      fail(`unsplit dist under color=endpoints must be neutral ${NEUTRAL_COMPARE}, got ${uniqStroke.join(", ")}`);
+    }
+    ok("dist rows neutral under color=endpoints (one color channel)");
 
     const curveStrokes = await page.$$eval(".facet-scatter-block path[stroke]", (paths) =>
       paths

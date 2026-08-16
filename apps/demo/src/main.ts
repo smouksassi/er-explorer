@@ -61,13 +61,20 @@ import {
   buildPendingContext,
   rowsFromLoaded
 } from "./datasetContext";
-import { loadDataset, enumerateDistPanels, enumerateScatterPanels, getColumn } from "@er-explorer/data";
+import {
+  buildCellResolutionInput,
+  enumerateDistPanels,
+  enumerateScatterPanels,
+  getColumn,
+  loadDataset
+} from "@er-explorer/data";
 import type { DistPanelSpec, ScatterPanelSpec, ViewLayoutSpec } from "@er-explorer/domain";
 import {
   dedupeFacetDimensions,
   distEndpointColorSplit,
   isGuidedCompareTopology,
   layoutHasEndpointFacet,
+  resolveCellContext,
   resolveDistVisualContext,
   resolveLegendShowsEndpoints,
   resolveOverlayCohortPolicy,
@@ -3497,14 +3504,15 @@ function buildDistributionGroups(
     cohortRowIndices?: number[];
     splitByColorVariable?: string;
     panelId?: string;
-    distEndpointId?: Endpoint;
+    /** ADR-0012 one-channel rule: rows grouped by dose only render neutral when color ≠ dose. */
+    neutralRows?: boolean;
     endpointForSplits?: Endpoint;
   }
 ): DistributionRawGroup[] {
   const spec = resolveActiveViewLayoutSpec();
   const cohort = opts?.cohortRowIndices ?? dataFilteredRowIndices();
   const splitEndpoint =
-    opts?.endpointForSplits ?? opts?.distEndpointId ?? splitByEndpoints?.[0] ?? selectedEndpoints()[0];
+    opts?.endpointForSplits ?? splitByEndpoints?.[0] ?? selectedEndpoints()[0];
   if (!splitEndpoint) return [];
   const xDomain = xDomainForLinkedPanels(metric, opts?.panelId);
   const pkLike = exposureIsPkMetric(metric);
@@ -3598,9 +3606,7 @@ function buildDistributionGroups(
       const rows = rowIndicesForDose(dose).filter((i) => inCohort(i));
       const values =
         isPlacebo && pkLike ? [] : rows.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v));
-      const rowColor = opts?.distEndpointId
-        ? endpointColor(opts.distEndpointId)
-        : resolveDoseColor(dose);
+      const rowColor = opts?.neutralRows ? NEUTRAL_COMPARE_COLOR : resolveDoseColor(dose);
       return {
         groupId: dose,
         label: dose,
@@ -3644,21 +3650,33 @@ function paintDistributionChart(
     spec?.distribution.colorDistShapes && spec?.color.kind === "variable"
       ? spec.color.variableId
       : undefined;
-  const distEndpointAccent =
-    (() => {
-      if (spec?.color.kind !== "endpoints" || (splitByEndpoints && splitByEndpoints.length > 1)) return undefined;
-      const scatterId = distPanel?.scatterPanelIds[0];
-      const scatterPanel = scatterId ? scatterPanelById.get(scatterId) : undefined;
-      const policy =
-        scatterPanel && spec ? resolvePanelVisualPolicy(spec, scatterPanel, selectedEndpoints()) : null;
-      if (!policy?.distUsesEndpointColorWhenUnsplit) return undefined;
-      return endpointIdForDistPanel(opts?.panelId, endpoint);
-    })();
+  // ADR-0012 one-color-channel rule: unsplit dose rows are grouped by dose only,
+  // so they take the palette only when color IS dose. Under color=endpoints the
+  // strip renders neutral ink — the strip describes exposure; dose identity is
+  // the row label. Endpoint-split sub-rows (grouped BY the color variable) keep
+  // endpoint colors in their own branch.
+  const distRowsNeutral = (() => {
+    if (splitByEndpoints && splitByEndpoints.length > 1) return false;
+    if (!spec) return false;
+    const scatterId = distPanel?.scatterPanelIds[0];
+    const scatterPanel = scatterId ? scatterPanelById.get(scatterId) : undefined;
+    if (!scatterPanel) return spec.color.kind === "endpoints";
+    const ctx = resolveCellContext(
+      buildCellResolutionInput(
+        requireDataset().loaded,
+        spec,
+        selectedEndpoints(),
+        dataFilteredRowIndices(),
+        scatterPanel
+      )
+    );
+    return ctx.distRows.palette === "neutral";
+  })();
   const distGroups = buildDistributionGroups(metric, splitByEndpoints, {
     cohortRowIndices,
     splitByColorVariable: spec?.distribution.colorDistShapes ? colorVar : undefined,
     panelId: opts?.panelId,
-    distEndpointId: distEndpointAccent,
+    neutralRows: distRowsNeutral,
     endpointForSplits: endpoint
   });
   const distResult = renderDistributionViaRenderer(
