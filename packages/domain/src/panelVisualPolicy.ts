@@ -99,7 +99,8 @@ export function resolvePanelVisualPolicy(
   const useNeutralDistShapes = false;
   const omitPerEndpointFitInReadout =
     color.kind === "endpoints" && multiCurve && distSplitMode === "none";
-  const distUsesEndpointColorWhenUnsplit = color.kind === "endpoints" && distSplitMode === "none";
+  const distUsesEndpointColorWhenUnsplit =
+    color.kind === "endpoints" && distSplitMode === "none" && !multiCurve;
 
   return {
     scatterPrimaryEndpointId: primary,

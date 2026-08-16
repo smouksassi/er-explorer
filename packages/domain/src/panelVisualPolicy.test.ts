@@ -55,7 +55,7 @@ describe("resolvePanelVisualPolicy", () => {
     expect(p.distSplitMode).toBe("none");
     expect(p.omitPerEndpointFitInReadout).toBe(true);
     expect(p.useNeutralDistShapes).toBe(false);
-    expect(p.distUsesEndpointColorWhenUnsplit).toBe(true);
+    expect(p.distUsesEndpointColorWhenUnsplit).toBe(false);
   });
 
   it("endpoint row facet + color endpoints → monochrome endpoint per panel", () => {
