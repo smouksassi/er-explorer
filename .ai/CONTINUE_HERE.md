@@ -4,7 +4,9 @@
 **Theme:** **ENCODING V2 APPROVED** — unified grammar (ADR-0012 in `docs/DECISIONS.md`); full design record in [`ENCODING_V2_RETHINK.md`](./ENCODING_V2_RETHINK.md). The Phase-2 backlog below is **subsumed** by the v2 implementation sequence (rethink §F). Old plan kept for reference only.  
 **Git:** Uncommitted on `main`: `panelVisualPolicy` multiCurve fix (+test), ADR-0012, `.ai` updates; exclude local `claudetwoexposureoneendpoint.R` from commits.
 
-**Next session: start at `ENCODING_V2_RETHINK.md` §F step 2** — domain resolver (`resolveCellContexts`) + selection type + test matrix. User approved ("go", 2026-08-16); all design questions closed (§H/§I).
+**Progress (2026-08-16, uncommitted):** §F step 2 core DONE — `packages/domain/src/cellContext.ts` (`resolveCellContext`: one-channel color rule, curve/observed groups per (endpoint × level), dist-row policy, metricPopulation split scope) + `viewSelection.ts` (serializable `ViewSelection`, `dose|suffix` parse/format) + 13-case test matrix (`cellContext.test.ts`). Domain stays pure — dataset access injected via `levelForRow`/`colorLevels`. All 30 domain tests + full build green.
+
+**Next: §F step 3** — demo cutover: data-side `CellResolutionInput` builder from `LoadedDataset` (bin model → `colorLevels`/`levelForRow`), then ONE paint path in `main.ts` consuming `ResolvedCellContext`; delete overlay mount, compare booleans, neutral special cases, dist color heuristics. Then dist geometry (once-per-column strip + dedup, bounded KDE), session persistence (`ViewSelection` + spec, `.erx` break approved).
 
 ---
 

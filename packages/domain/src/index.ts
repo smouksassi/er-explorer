@@ -98,3 +98,21 @@ export {
 } from "./panelVisualPolicy";
 export type { OverlayCohortPolicy, OverlayCohortScope } from "./overlayCohortPolicy";
 export { resolveOverlayCohortPolicy } from "./overlayCohortPolicy";
+export type {
+  CellResolutionInput,
+  CurveGroup,
+  DistRowPolicy,
+  ObservedGroup,
+  ResolvedCellContext,
+  ResolvedColorChannel
+} from "./cellContext";
+export { resolveCellContext } from "./cellContext";
+export type { DistGroupRef, ViewSelection } from "./viewSelection";
+export {
+  emptyViewSelection,
+  formatDistGroupId,
+  parseDistGroupId,
+  selectedDoseUniverse,
+  toggleDistGroup,
+  toggleDose
+} from "./viewSelection";
