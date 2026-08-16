@@ -4,9 +4,18 @@
 **Theme:** **ENCODING V2 APPROVED** — unified grammar (ADR-0012 in `docs/DECISIONS.md`); full design record in [`ENCODING_V2_RETHINK.md`](./ENCODING_V2_RETHINK.md). The Phase-2 backlog below is **subsumed** by the v2 implementation sequence (rethink §F). Old plan kept for reference only.  
 **Git:** Uncommitted on `main`: `panelVisualPolicy` multiCurve fix (+test), ADR-0012, `.ai` updates; exclude local `claudetwoexposureoneendpoint.R` from commits.
 
-**Progress (2026-08-16, uncommitted):** §F step 2 core DONE — `packages/domain/src/cellContext.ts` (`resolveCellContext`: one-channel color rule, curve/observed groups per (endpoint × level), dist-row policy, metricPopulation split scope) + `viewSelection.ts` (serializable `ViewSelection`, `dose|suffix` parse/format) + 13-case test matrix (`cellContext.test.ts`). Domain stays pure — dataset access injected via `levelForRow`/`colorLevels`. All 30 domain tests + full build green.
+**Progress (2026-08-16, committed on main):**
+- `301ceab` §F step 2: domain `cellContext.ts` (`resolveCellContext` — one-channel rule, curve/observed groups, dist-row policy, metricPopulation split scope) + `viewSelection.ts` (serializable selection, `dose|suffix` parse/format) + 13-test matrix.
+- `08685ad` step 3a: data `cellResolution.ts` — `createCellResolver` (bin model built ONCE on base cohort) + 5 tests.
+- `e087df2` step 3b: dist strip palette via resolver — **unsplit rows neutral under color=endpoints** (ADR-0012 §I.1); `distEndpointAccent` heuristic deleted; `distUsesEndpointColorWhenUnsplit` deprecated; ui-smoke step 2 updated to neutral contract.
+- `0726eeb` step 3c: **continuous endpoints fit per color level** (BRLS bug fixed) — `renderContinuousScatterViaRenderer` takes curve groups + point color resolver; per-curve fitted markers at splits; degenerate facet+color panels wear their level color; ui-smoke step 5 added.
 
-**Next: §F step 3** — demo cutover: data-side `CellResolutionInput` builder from `LoadedDataset` (bin model → `colorLevels`/`levelForRow`), then ONE paint path in `main.ts` consuming `ResolvedCellContext`; delete overlay mount, compare booleans, neutral special cases, dist color heuristics. Then dist geometry (once-per-column strip + dedup, bounded KDE), session persistence (`ViewSelection` + spec, `.erx` break approved).
+**Next (§F step 3 continues):**
+1. Binary/compare paths onto `resolveCellContext` (replace `fitByColor` ad hoc levels with `ctx.curveGroups`; observed bins from `ctx.observedGroups`).
+2. Replace `state.selectedDoses`/`selectedDistGroupIds` with domain `ViewSelection` (persist in `.erx`; break approved).
+3. Delete Guided overlay mount + compare booleans → presets P1–P3 writing spec.
+4. Dist geometry: strip once per exposure column + exact-match dedup; KDE trim at min/max (no extrapolation).
+5. Smoke additions: callouts differ across facet panels; nested facets; linetype channel (once implemented).
 
 ---
 
