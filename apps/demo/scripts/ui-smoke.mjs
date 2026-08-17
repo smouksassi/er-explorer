@@ -323,6 +323,24 @@ async function run() {
     }
     ok(`continuous fit-per-color renders ${uniqCont.length} distinct curve colors`);
 
+    console.log("\n6) Advanced — continuous endpoint + color endpoints (monochrome, no dose rainbow)");
+    await openStyleDrawer(page);
+    await setSelectValue(page, "advancedColorBy", "endpoints");
+    await openDrawerRail(page, "plot");
+    await page.waitForTimeout(400);
+
+    const pointFills = await page.$$eval(".facet-scatter-block svg g.er-points circle", (cs) =>
+      cs
+        .map((c) => (c.getAttribute("fill") || "").toLowerCase())
+        .filter((f) => f && f !== "none" && f !== "#ffffff" && f !== "transparent")
+    );
+    if (!pointFills.length) fail("no scatter points found for monochrome check");
+    const uniqFills = [...new Set(pointFills)];
+    if (uniqFills.length > 1) {
+      fail(`continuous scatter points under color=endpoints must be monochrome, got ${uniqFills.join(", ")}`);
+    }
+    ok(`continuous points monochrome under color=endpoints (${uniqFills[0]})`);
+
     console.log("\nui-smoke: ALL CHECKS PASSED\n");
   } finally {
     await browser.close();

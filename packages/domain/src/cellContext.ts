@@ -97,6 +97,14 @@ export interface CellResolutionInput {
    * cohort but joins no level group). Required when `spec.color.kind === "variable"`.
    */
   levelForRow?: (variableId: string, rowIndex: number) => string | null;
+  /**
+   * Dose arms in display order. Dose is an ordinary categorical channel (ADR-0012 —
+   * no exceptions): with `color.kind === "dose"` and `fitByColor`, curves are fitted
+   * per arm. Required for that combination only.
+   */
+  doseLevels?: readonly string[];
+  /** Dose arm for a row; `null` = missing. Required with doseLevels. */
+  doseForRow?: (rowIndex: number) => string | null;
 }
 
 function endpointIdsForCell(input: CellResolutionInput): string[] {
@@ -201,12 +209,33 @@ export function resolveCellContext(input: CellResolutionInput): ResolvedCellCont
     // rows render neutral; dose identity is the row label (ADR-0012).
     distRows = { splitLevels: [], palette: "neutral" };
   } else {
+    // Dose is an ordinary categorical channel — no exceptions (ADR-0012, user
+    // decision 2026-08-16). fitByColor fits one curve per arm; whether a per-arm
+    // fit is meaningful over that arm's narrow exposure range is the analyst's call.
     colorChannel = { kind: "dose" };
-    curveGroups = endpointIds.map((endpointId) => ({
-      endpointId,
-      rows: facetCohort,
-      colorKey: ""
-    }));
+    const doseAccessor = input.doseForRow;
+    const arms =
+      spec.fitByColor && doseAccessor
+        ? (input.doseLevels ?? []).filter((arm) =>
+            panel.rowIndices.some((i) => doseAccessor(i) === arm)
+          )
+        : [];
+    curveGroups = endpointIds.flatMap((endpointId) =>
+      arms.length > 1
+        ? arms.map((arm) => ({
+            endpointId,
+            level: arm,
+            rows: panel.rowIndices.filter((i) => doseAccessor!(i) === arm),
+            colorKey: arm
+          }))
+        : [
+            {
+              endpointId,
+              rows: facetCohort,
+              colorKey: ""
+            }
+          ]
+    );
     observedGroups = endpointIds.map((endpointId) => ({
       endpointId,
       rows: facetCohort,

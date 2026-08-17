@@ -41,6 +41,21 @@ describe("resolveCellContext — color = dose (default)", () => {
     expect(ctx.splitCohortScope).toBe("metricPopulation");
     expect(ctx.xDomainKey).toBe("auc");
   });
+
+  it("fitByColor with dose → one curve per arm (dose is not special)", () => {
+    const doseOf = (i: number): string | null => (i < 4 ? "Placebo" : i < 7 ? "600 mg" : "1200 mg");
+    const ctx = resolveCellContext(
+      input({
+        spec: { ...base, fitByColor: true },
+        doseLevels: ["Placebo", "600 mg", "1200 mg"],
+        doseForRow: doseOf
+      })
+    );
+    expect(ctx.curveGroups.map((g) => g.level)).toEqual(["Placebo", "600 mg", "1200 mg"]);
+    expect(ctx.curveGroups[1]!.rows).toEqual([4, 5, 6]);
+    expect(ctx.curveGroups[1]!.colorKey).toBe("600 mg");
+    expect(ctx.distRows).toEqual({ splitLevels: [], palette: "dose" });
+  });
 });
 
 describe("resolveCellContext — color = endpoints", () => {

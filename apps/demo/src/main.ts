@@ -794,7 +794,9 @@ function syncAdvancedColorDistShapesUi(spec: ViewLayoutSpec | null): void {
 }
 
 function syncAdvancedFitByColorUi(spec: ViewLayoutSpec | null): void {
-  const allowed = spec?.color.kind === "variable";
+  // ADR-0012: dose is an ordinary channel — fit-per-arm is the analyst's call.
+  // Only color=endpoints disables it (curves are already one per endpoint).
+  const allowed = spec?.color.kind === "variable" || spec?.color.kind === "dose";
   advancedFitByColorEl.disabled = !allowed;
   if (!allowed) advancedFitByColorEl.checked = false;
   const epFacet = spec ? layoutHasEndpointFacet(spec) : false;
@@ -809,9 +811,6 @@ function updateAdvancedLayoutStatus(spec: ViewLayoutSpec | null): void {
     return;
   }
   const parts: string[] = [];
-  if (spec?.color.kind === "dose" && advancedFitByColorEl.checked) {
-    parts.push("Separate fits by dose are not supported (dose is the ER x-axis grouping for projections).");
-  }
   if (spec) {
     const deduped = dedupeFacetDimensions(spec);
     if (deduped.rowDimensions.length !== spec.rowDimensions.length) {
@@ -1311,11 +1310,14 @@ function colorForDistGroupId(
 ): string {
   const { dose, suffix } = parseDistGroupId(gid);
   if (colorOverride) return colorOverride;
+  // Split rows are grouped BY the color variable → they wear the palette.
   if (suffix && spec?.color.kind === "variable" && colorModel) {
     return variableColorForLevel(spec.color.variableId, suffix, colorModel.levels);
   }
   if (suffix && selectedEndpoints().includes(suffix as Endpoint)) return endpointColor(suffix as Endpoint);
-  if (spec?.color.kind === "endpoints") return endpointColor(endpoint);
+  // Plain dose rows: one-channel law — dose palette only when color IS dose,
+  // otherwise the projection matches the neutral strip row it came from.
+  if (spec && spec.color.kind !== "dose") return DOSE_SELECTION_NEUTRAL;
   return resolveDoseColor(dose);
 }
 
@@ -2980,12 +2982,16 @@ function projectedLinearGroupsFor(
  * distinction on that single curve); `colorOverride` lets "Compare endpoints" mode color every
  * dose's projection by the endpoint's own color instead, so the projection reads as "this curve's
  * highlight" rather than blending into the dose-colored points/legend of a different endpoint. */
-function doseProjectionAccent(endpoint: Endpoint): string | undefined {
+/**
+ * One-channel law for plain-dose projections: they match the dist row they came
+ * from — dose palette only when color IS dose, otherwise neutral ink (undefined
+ * = caller falls back to per-dose colors).
+ */
+function doseProjectionAccent(_endpoint: Endpoint): string | undefined {
   const spec = activeViewLayoutSpec;
   if (!spec) return undefined;
   if (spec.color.kind === "dose") return undefined;
-  if (spec.color.kind === "endpoints") return endpointColor(endpoint);
-  return "#475569";
+  return DOSE_SELECTION_NEUTRAL;
 }
 
 function projectedGroupsFor(
@@ -3237,11 +3243,31 @@ function paintRegularScatterIntoWrap(
           { curve, color: variableColorForLevel(colorVarId, presentLevels[0]!, colorModel.levels) }
         ];
       }
+    } else if (colorSpec?.kind === "endpoints") {
+      // Endpoint channel: monochrome endpoint curve — never the pooled gray.
+      levelCurves = [{ curve, color: endpointColor(endpoint) }];
+    } else if (spec?.fitByColor) {
+      // Dose is an ordinary channel (ADR-0012): fit per arm when asked.
+      const arms = DOSE_ORDER().filter((dose) => recordRows.some((i) => ds.doseLabel(i) === dose));
+      if (arms.length > 1) {
+        const built = arms.flatMap((dose) => {
+          const sub = recordRows.filter((i) => ds.doseLabel(i) === dose);
+          try {
+            const f = fitForCohort(metric, endpoint, sub);
+            return [{ curve: curveFor(f.fit, f.xs, f.ys, xDomain), color: resolveDoseColor(dose) }];
+          } catch {
+            return [];
+          }
+        });
+        if (built.length) levelCurves = built;
+      }
     }
     const pointColorFor =
       colorByVariable && colorVarId && colorModel
         ? (p: ScatterPoint) => variableColorForLevel(colorVarId, String(p.groupId), colorModel.levels)
-        : undefined;
+        : colorSpec?.kind === "endpoints"
+          ? () => endpointColor(endpoint)
+          : undefined;
 
     const groupStats: Record<
       string,
@@ -3257,8 +3283,13 @@ function paintRegularScatterIntoWrap(
         observedMean: { mean: number; ciLower: number; ciUpper: number; n: number };
       }
     > = {};
+    // Projection stats on the PANEL cohort (ADR-0012): the projected band must
+    // span the same rows as the facet-filtered boxplot the user clicked.
+    const cohortSet = new Set(cohort);
     for (const dose of DOSE_ORDER()) {
-      const doseRecords = recordsWithEndpoint(endpoint).filter((i) => active.has(ds.patientId(i)) && ds.doseLabel(i) === dose);
+      const doseRecords = recordsWithEndpoint(endpoint).filter(
+        (i) => cohortSet.has(i) && active.has(ds.patientId(i)) && ds.doseLabel(i) === dose
+      );
       const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
       if (!vals.length) continue;
       const s = summarizeDistribution(vals);
@@ -3315,7 +3346,12 @@ function paintRegularScatterIntoWrap(
       const pointColors: Record<string | number, string> = {};
       for (const level of levels) pointColors[level] = variableColorForLevel(colorVarId, level, paletteLevels);
 
-      const doseProjected = projectedGroupsForDistSelection(metric, endpoint, active, cohort, { spec });
+      // Degenerate facet+color: plain-dose projections wear the panel's level color.
+      const rowPaint = resolveDoseRowPaint(spec ?? null, panel);
+      const doseProjected = projectedGroupsForDistSelection(metric, endpoint, active, cohort, {
+        spec,
+        colorOverride: rowPaint.fixedColor
+      });
 
       const fitSeparate = !!spec?.fitByColor && levels.length > 1;
       let curves: BinaryCurveOverlay[];
@@ -3377,7 +3413,9 @@ function paintRegularScatterIntoWrap(
       const epColor = endpointColor(endpoint);
       const refLines = computeDisplayReferenceLines(metric, endpoint, cohort);
       const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active, cohort);
-      const projected = projectedGroupsFor(groupStats, endpoint, epColor, {
+      // Projections match the (neutral) strip rows — one channel; the curve alone
+      // carries the endpoint color.
+      const projected = projectedGroupsFor(groupStats, endpoint, undefined, {
         metric,
         active,
         cohortRowIndices: cohort,
@@ -3408,7 +3446,6 @@ function paintRegularScatterIntoWrap(
         height
       );
     } else {
-      const fitResult = tryFitForCohort(metric, endpoint, recordRows);
       const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active, cohort);
       const projected = projectedGroupsFor(groupStats, endpoint, undefined, {
         metric,
@@ -3416,9 +3453,32 @@ function paintRegularScatterIntoWrap(
         cohortRowIndices: cohort,
         spec
       });
-      const curves: BinaryCurveOverlay[] = fitResult
-        ? [{ curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain), projected }]
+      // Dose is an ordinary channel (ADR-0012): fit per arm when asked.
+      let curves: BinaryCurveOverlay[];
+      const fitArms = spec?.fitByColor
+        ? DOSE_ORDER().filter((dose) => recordRows.some((i) => ds.doseLabel(i) === dose))
         : [];
+      if (fitArms.length > 1) {
+        curves = fitArms.flatMap((dose) => {
+          const sub = recordRows.filter((i) => ds.doseLabel(i) === dose);
+          const fitResult = tryFitForCohort(metric, endpoint, sub);
+          return fitResult
+            ? [
+                {
+                  curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
+                  color: resolveDoseColor(dose),
+                  dash: "",
+                  projected
+                }
+              ]
+            : [];
+        });
+      } else {
+        const fitResult = tryFitForCohort(metric, endpoint, recordRows);
+        curves = fitResult
+          ? [{ curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain), projected }]
+          : [];
+      }
 
       scatterResult = renderBinaryScatterOverlay(
         state.showPoints ? points : [],
