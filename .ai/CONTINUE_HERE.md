@@ -10,12 +10,21 @@
 - `e087df2` step 3b: dist strip palette via resolver — **unsplit rows neutral under color=endpoints** (ADR-0012 §I.1); `distEndpointAccent` heuristic deleted; `distUsesEndpointColorWhenUnsplit` deprecated; ui-smoke step 2 updated to neutral contract.
 - `0726eeb` step 3c: **continuous endpoints fit per color level** (BRLS bug fixed) — `renderContinuousScatterViaRenderer` takes curve groups + point color resolver; per-curve fitted markers at splits; degenerate facet+color panels wear their level color; ui-smoke step 5 added.
 
-**Next (§F step 3 continues):**
-1. Binary/compare paths onto `resolveCellContext` (replace `fitByColor` ad hoc levels with `ctx.curveGroups`; observed bins from `ctx.observedGroups`).
-2. Replace `state.selectedDoses`/`selectedDistGroupIds` with domain `ViewSelection` (persist in `.erx`; break approved).
-3. Delete Guided overlay mount + compare booleans → presets P1–P3 writing spec.
-4. Dist geometry: strip once per exposure column + exact-match dedup; KDE trim at min/max (no extrapolation).
-5. Smoke additions: callouts differ across facet panels; nested facets; linetype channel (once implemented).
+**QA round 3 findings (2026-08-16 screenshots — user-confirmed symptoms → root causes):**
+- Continuous scatter points/curve ignore `endpointMonochrome`: BRLS panel under color=endpoints shows DOSE-rainbow points and a gray curve (point color hardcoded to dose palette in continuous branch; curve color only overridden for color=variable).
+- Binary/compare projections still dose-colored (violet 2400 mg bands) regardless of channel — `projectedGroupsFor`/binary path never unified with `resolveDoseRowPaint`.
+- Projection quantile stats computed GLOBALLY (`recordsWithEndpoint` + active set), not per panel cohort → projected band does not match the clicked (facet-filtered) boxplot; per-endpoint missingness also makes BRLS band start left of ICGI's.
+- Stale selection: `selectedDistGroupIds` survive layout changes with orphaned group ids — impossible to unselect.
+- **USER DECISION: dose is NOT special.** Remove the fitByColor-for-dose exception (user responsibility); dose behaves as an ordinary categorical color channel (levels = arms). Only remaining dose-specific rules: dist rows organized by dose; PK placebo exclusion (data rules, not encoding).
+
+**Plan progress (each slice committed + smoke-extended):**
+1. ✅ **Slice A** (`00105d8`): one-channel law in every color decider — continuous endpointMonochrome points + endpoint curve; `colorForDistGroupId` plain-dose tail → neutral unless color=dose; `doseProjectionAccent` → neutral; binary endpointMonochrome accent → neutral; degenerate level color passed as colorOverride; continuous projection stats on the PANEL cohort. Smoke #6: monochrome continuous points.
+2. ✅ **Slice B** (`00105d8`): dose de-specialized — fitByColor legal for color=dose (per-arm curves, binary + continuous + resolver `doseLevels`/`doseForRow`); UI disable + status message removed.
+3. ◐ **Slice C1** (`08d1756`): selection invariant — rendered dist group ids collected per paint pass; orphaned selections pruned with one guarded re-render (kills ghost projections/stuck rows). **C2 next: full `ViewSelection` type swap (43 sites in main.ts) + `.erx` persistence + readout derivation.**
+4. **Slice D — dist geometry:** strip once per exposure column + exact-match dedup (kills duplicated stacked strips + overlapping axes); 2-D facet grids.
+5. **Slice E — guided presets P1–P3** (delete overlay mount + compare booleans) and smoke matrix (facet-panels-differ, facet order, one-curve-per-degenerate-panel).
+
+Known cosmetic to verify in D/E QA: smoke #6 reports point fill `#ddaa33` for the brls-only panel (expected `#55a868`) — endpoint accent may resolve via a fallback panel; check `endpointIdForDistPanel`/panel endpoint wiring when touching dist geometry.
 
 ---
 
