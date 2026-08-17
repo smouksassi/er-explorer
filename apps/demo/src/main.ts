@@ -3020,11 +3020,19 @@ function computeBinaryDoseGroupStats(
 type ContinuousDoseGroupStats = Omit<ProjectedGroup, "groupId" | "color">;
 
 /** Exposure quantiles + observed mean/CI for a continuous endpoint, per dose (active patients). */
-function computeContinuousDoseGroupStats(metric: ExposureMetric, endpoint: Endpoint, active: Set<number>): Record<string, ContinuousDoseGroupStats> {
+function computeContinuousDoseGroupStats(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  active: Set<number>,
+  cohortRowIndices?: number[]
+): Record<string, ContinuousDoseGroupStats> {
   const ds = requireDataset();
+  const cohortSet = cohortRowIndices ? new Set(cohortRowIndices) : null;
   const groupStats: Record<string, ContinuousDoseGroupStats> = {};
   for (const dose of DOSE_ORDER()) {
-    const doseRecords = recordsWithEndpoint(endpoint).filter((i) => active.has(ds.patientId(i)) && ds.doseLabel(i) === dose);
+    const doseRecords = recordsWithEndpoint(endpoint).filter(
+      (i) => (!cohortSet || cohortSet.has(i)) && active.has(ds.patientId(i)) && ds.doseLabel(i) === dose
+    );
     const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
     if (!vals.length) continue;
     const s = summarizeDistribution(vals);
@@ -3662,15 +3670,19 @@ function paintCompareScatterIntoWrap(
     const { min, max, valid } = getCompareNormBounds(endpoint);
     const curve = linear && valid ? mapCurveToCompareScale(rawCurve, min, max) : rawCurve;
     const observedBins = computeCompareObservedBins(metric, endpoint, rows);
+    // Panel cohort everywhere (ADR-0012): a multi-curve cell inside a facet grid
+    // must project/summarize THAT panel's rows — without this, every facet showed
+    // identical global projections (user QA round 6, sex-faceted compare cells).
     let projected: ProjectedGroup[] = [];
     if (linear) {
-      const linearStats = computeContinuousDoseGroupStats(metric, endpoint, active);
+      const linearStats = computeContinuousDoseGroupStats(metric, endpoint, active, cohort);
       projected = projectedLinearGroupsFor(linearStats, projectionAccent(endpoint), endpoint, endpoint);
     } else {
-      const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
+      const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active, cohort);
       projected = projectedGroupsFor(groupStats, endpoint, projectionAccent(endpoint), {
         metric,
         active,
+        cohortRowIndices: cohort,
         spec: resolveActiveViewLayoutSpec()
       });
     }
