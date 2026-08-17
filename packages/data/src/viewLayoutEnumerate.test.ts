@@ -50,6 +50,20 @@ describe("viewLayoutEnumerate", () => {
     expect(scatter.map((p) => p.facetKey.endpoint).sort()).toEqual(["icgi", "icgi2"]);
   });
 
+  it("metric rows with NO column dimensions keep each row's metric (symmetric regression)", () => {
+    const spec: ViewLayoutSpec = {
+      mode: "advanced",
+      rowDimensions: [{ kind: "xMetrics", ids: ["auc", "cmax"], order: ["auc", "cmax"] }],
+      colDimensions: [],
+      color: { kind: "dose" },
+      fitByColor: false,
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
+    };
+    const scatter = enumerateScatterPanels(loaded, [], spec, { xMetricIds: ["auc", "cmax"], endpointIds: ["icgi"] });
+    expect(scatter).toHaveLength(2);
+    expect(scatter.map((p) => p.xVariableId).sort()).toEqual(["auc", "cmax"]);
+  });
+
   it("guided endpoint rows × x columns", () => {
     const spec: ViewLayoutSpec = {
       mode: "guided",

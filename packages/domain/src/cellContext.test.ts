@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ViewLayoutSpec } from "./viewLayout";
 import { resolveCellContext, type CellResolutionInput } from "./cellContext";
+import { ensureScaleBearingFacets } from "./viewLayout";
 import {
   emptyViewSelection,
   formatDistGroupId,
@@ -240,5 +241,35 @@ describe("viewSelection — serializable dist selection", () => {
     sel = toggleDistGroup(sel, { dose: "600 mg", level: "icgi-like" });
     sel = toggleDistGroup(sel, { dose: "600 mg", endpointId: "icgi-like" });
     expect(sel.selectedDistGroups).toHaveLength(2);
+  });
+});
+
+describe("ensureScaleBearingFacets — ADR-0012 scale-bearing rule", () => {
+  it("implicitly facets >1 metric onto columns instead of dropping levels", () => {
+    const spec = ensureScaleBearingFacets(base, ["auc", "cmax"], ["icgi"]);
+    expect(spec.colDimensions.some((d) => d.kind === "xMetrics")).toBe(true);
+  });
+
+  it("implicitly facets >1 endpoint onto rows when not overlaid by color=endpoints", () => {
+    const noFacets: ViewLayoutSpec = { ...base, colDimensions: [] };
+    const spec = ensureScaleBearingFacets(noFacets, ["auc"], ["icgi", "icgi2"]);
+    expect(spec.rowDimensions.some((d) => d.kind === "endpoints")).toBe(true);
+  });
+
+  it("leaves color=endpoints overlay alone (legal same-scale overlay)", () => {
+    const overlay: ViewLayoutSpec = { ...base, colDimensions: [], color: { kind: "endpoints" } };
+    const spec = ensureScaleBearingFacets(overlay, ["auc"], ["icgi", "icgi2"]);
+    expect(spec.rowDimensions).toHaveLength(0);
+  });
+
+  it("does not add facets when the user already placed them", () => {
+    const placed: ViewLayoutSpec = {
+      ...base,
+      rowDimensions: [{ kind: "xMetrics", ids: ["auc", "cmax"], order: ["auc", "cmax"] }],
+      colDimensions: []
+    };
+    const spec = ensureScaleBearingFacets(placed, ["auc", "cmax"], ["icgi"]);
+    expect(spec.colDimensions).toHaveLength(0);
+    expect(spec.rowDimensions).toHaveLength(1);
   });
 });

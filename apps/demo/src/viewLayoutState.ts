@@ -1,5 +1,5 @@
 import type { LayoutDimension, ViewLayoutSpec } from "@er-explorer/domain";
-import { dedupeFacetDimensions } from "@er-explorer/domain";
+import { dedupeFacetDimensions, ensureScaleBearingFacets } from "@er-explorer/domain";
 import { defaultAdvancedSpecFromGuided, guidedToViewLayoutSpec, type GuidedLayoutInput } from "./guidedViewLayout";
 
 export type LayoutMode = "guided" | "advanced";
@@ -81,6 +81,9 @@ export function resolveViewLayoutSpec(
         analysis.xMetricIds,
         analysis.xMetricOrder
       );
+      // Scale-bearing rule (ADR-0012): >1 metric or >1 non-overlaid endpoint in
+      // play must facet — implicitly if the user placed no facet for them.
+      spec = ensureScaleBearingFacets(spec, analysis.xMetricIds, analysis.endpointIds);
     }
     return normalizeAdvancedColorFit(spec);
   }

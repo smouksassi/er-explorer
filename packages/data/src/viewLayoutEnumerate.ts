@@ -191,18 +191,15 @@ export function enumerateScatterPanels(
   const panels: ScatterPanelSpec[] = [];
 
   for (const row of rowBranches) {
-    // The synthetic no-columns branch may only contribute the axis it owns (x).
-    // Injecting an endpoint here clobbered row-faceted endpoints on merge —
-    // "endpoints as rows" with a single metric collapsed every row to the first
-    // endpoint. resolveEndpointAndX already falls back when no facet sets one.
+    // The synthetic no-columns branch contributes NOTHING to the facet key:
+    // injecting endpoint clobbered row-faceted endpoints, and injecting xMetric
+    // clobbered row-faceted metrics (same bug, other axis). resolveEndpointAndX
+    // falls back to the first ids when no facet sets them, and the scale-bearing
+    // rule (ensureScaleBearingFacets) guarantees multi-level metrics/endpoints
+    // are faceted before enumeration ever sees them.
     const colBranches = spec.colDimensions.length
       ? cartesianFacetBranches(loaded, row.indices, spec.colDimensions, input, spec)
-      : [
-          {
-            facetKey: { xMetric: input.xMetricIds[0] ?? "" } as FacetKey,
-            indices: row.indices
-          }
-        ];
+      : [{ facetKey: {} as FacetKey, indices: row.indices }];
 
     for (const col of colBranches) {
       const facetKey = { ...row.facetKey, ...col.facetKey };

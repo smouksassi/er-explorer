@@ -78,6 +78,7 @@ export {
   dedupeFacetDimensions,
   distEndpointColorSplit,
   effectiveEndpointOverlay,
+  ensureScaleBearingFacets,
   isGuidedCompareTopology,
   layoutHasEndpointFacet,
   panelEndpointMode,

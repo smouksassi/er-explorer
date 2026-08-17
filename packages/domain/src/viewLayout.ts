@@ -146,5 +146,44 @@ export function dedupeFacetDimensions(spec: ViewLayoutSpec): ViewLayoutSpec {
   return rowDimensions.length === spec.rowDimensions.length ? spec : { ...spec, rowDimensions };
 }
 
+/**
+ * ADR-0012 scale-bearing rule, enforced: a scale-bearing variable with more than
+ * one level in play must be faceted. When the layout doesn't place it, the facet
+ * is IMPLICIT — exposure metrics join the columns (each level owns an x-axis);
+ * endpoints join the rows unless they legally overlay via `color=endpoints`.
+ * Silently dropping levels (e.g. only the first metric rendering) is never an
+ * option.
+ */
+export function ensureScaleBearingFacets(
+  spec: ViewLayoutSpec,
+  xMetricIds: readonly string[],
+  endpointIds: readonly string[]
+): ViewLayoutSpec {
+  let next = spec;
+  const hasXFacet = [...next.rowDimensions, ...next.colDimensions].some((d) => d.kind === "xMetrics");
+  if (xMetricIds.length > 1 && !hasXFacet) {
+    next = {
+      ...next,
+      colDimensions: [
+        ...next.colDimensions,
+        { kind: "xMetrics", ids: [...xMetricIds], order: [...xMetricIds] }
+      ]
+    };
+  }
+  const hasEndpointFacet = [...next.rowDimensions, ...next.colDimensions].some(
+    (d) => d.kind === "endpoints"
+  );
+  if (endpointIds.length > 1 && !hasEndpointFacet && next.color.kind !== "endpoints") {
+    next = {
+      ...next,
+      rowDimensions: [
+        ...next.rowDimensions,
+        { kind: "endpoints", ids: [...endpointIds], order: [...endpointIds] }
+      ]
+    };
+  }
+  return next;
+}
+
 /** Open grouping key for stats shared between scatter and distribution. */
 export type GroupKey = Record<string, string | number>;
