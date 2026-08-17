@@ -72,14 +72,17 @@ import type { DistPanelSpec, ScatterPanelSpec, ViewLayoutSpec } from "@er-explor
 import {
   dedupeFacetDimensions,
   distEndpointColorSplit,
+  formatDistGroupId,
   isGuidedCompareTopology,
   layoutHasEndpointFacet,
+  parseDistGroupId as parseDistGroupRef,
   resolveCellContext,
   resolveDistVisualContext,
   resolveLegendShowsEndpoints,
   resolveOverlayCohortPolicy,
   resolvePanelVisualPolicy,
-  type OverlayCohortPolicy
+  type OverlayCohortPolicy,
+  type ViewSelection
 } from "@er-explorer/domain";
 import { policyForLayoutChrome } from "./layout/resolvePanelStyle";
 import {
@@ -5083,7 +5086,15 @@ function buildSessionState(): SessionState {
     visualization,
     {
       brushedIds: state.brushedIds ? [...state.brushedIds] : null,
-      selectedDoses: [...state.selectedDoses]
+      selectedDoses: [...state.selectedDoses],
+      // ADR-0012 (C2): the domain ViewSelection is the serialized selection
+      // contract — split rows (dose × endpoint / dose × level) survive reload.
+      viewSelection: {
+        selectedDoses: [...state.selectedDoses],
+        selectedDistGroups: [...state.selectedDistGroupIds].map((gid) =>
+          parseDistGroupRef(gid, endpoints)
+        )
+      } satisfies ViewSelection
     },
     {
       exposureMetrics: metrics,
@@ -5311,6 +5322,12 @@ function loadSessionFromFile(file: File): void {
       state.brushedIds = Array.isArray(brushed) ? new Set(brushed as number[]) : null;
       const doses = session.filters["selectedDoses"];
       state.selectedDoses = new Set(Array.isArray(doses) ? (doses as string[]) : []);
+      state.selectedDistGroupIds = new Set();
+      const vs = session.filters["viewSelection"] as ViewSelection | undefined;
+      if (vs && Array.isArray(vs.selectedDoses) && Array.isArray(vs.selectedDistGroups)) {
+        state.selectedDoses = new Set(vs.selectedDoses);
+        state.selectedDistGroupIds = new Set(vs.selectedDistGroups.map((ref) => formatDistGroupId(ref)));
+      }
 
       syncMetricEndpointControls();
       ciSelect.value = state.ciMethod;
