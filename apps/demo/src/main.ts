@@ -1752,8 +1752,54 @@ function schedulePaintSyncedMetricStacks(active: Set<number>): void {
   });
 }
 
+/**
+ * Selection invariant (ADR-0012 / ViewSelection C1): a selection may only
+ * reference dist rows that exist in the CURRENT layout. Rendered ids are
+ * collected during each paint pass; anything orphaned by a layout change is
+ * pruned afterwards (one guarded re-render), so stale rows can no longer
+ * project ghost bands with no visible row to unselect.
+ */
+const renderedDistGroupIds = new Set<string>();
+const renderedDistDoseRows = new Set<string>();
+let selectionPruneRerenderScheduled = false;
+
+function registerRenderedDistGroups(groups: DistributionRawGroup[]): void {
+  for (const g of groups) {
+    const gid = String(g.groupId);
+    renderedDistGroupIds.add(gid);
+    const sep = gid.indexOf("|");
+    renderedDistDoseRows.add(sep === -1 ? gid : gid.slice(0, sep));
+  }
+}
+
+function pruneOrphanedSelection(): void {
+  if (!state.selectedDistGroupIds.size && !state.selectedDoses.size) return;
+  let dropped = false;
+  for (const gid of [...state.selectedDistGroupIds]) {
+    if (!renderedDistGroupIds.has(gid)) {
+      state.selectedDistGroupIds.delete(gid);
+      dropped = true;
+    }
+  }
+  for (const dose of [...state.selectedDoses]) {
+    if (!renderedDistDoseRows.has(dose)) {
+      state.selectedDoses.delete(dose);
+      dropped = true;
+    }
+  }
+  if (dropped && !selectionPruneRerenderScheduled) {
+    selectionPruneRerenderScheduled = true;
+    requestAnimationFrame(() => {
+      selectionPruneRerenderScheduled = false;
+      render();
+    });
+  }
+}
+
 function paintSyncedMetricStacks(active: Set<number>): void {
   if (!dataset) return;
+  renderedDistGroupIds.clear();
+  renderedDistDoseRows.clear();
   distributionPanels = [];
   document.querySelectorAll<HTMLElement>(".metric-stack").forEach((stack) => {
     const kind = stack.dataset.stackKind ?? "regular";
@@ -1812,6 +1858,7 @@ function paintSyncedMetricStacks(active: Set<number>): void {
       return;
     }
   });
+  pruneOrphanedSelection();
 }
 
 /**
@@ -3815,6 +3862,7 @@ function paintDistributionChart(
     fixedRowColor: distRowPaint.fixedColor,
     endpointForSplits: endpoint
   });
+  registerRenderedDistGroups(distGroups);
   const distResult = renderDistributionViaRenderer(
     distGroups,
     xDomain,
