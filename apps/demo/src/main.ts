@@ -1851,8 +1851,10 @@ function pruneOrphanedSelection(): void {
 
 function paintSyncedMetricStacks(active: Set<number>): void {
   if (!dataset) return;
-  renderedDistGroupIds.clear();
-  renderedDistDoseRows.clear();
+  // NOTE: renderedDistGroupIds is cleared in render() (mount), not here — dist
+  // cells paint both at mount and in this synced pass depending on layout; a
+  // pass that repaints no dist stacks must not empty the registry, or the prune
+  // below would wipe a selection the user just made.
   distributionPanels = [];
   document.querySelectorAll<HTMLElement>(".metric-stack").forEach((stack) => {
     const kind = stack.dataset.stackKind ?? "regular";
@@ -2911,6 +2913,10 @@ function render(): void {
   resetMetricStackObservers();
   scatterPanelsEl.innerHTML = "";
   distributionPanels = [];
+  // Selection registry lifetime = one mounted layout: cleared here, populated by
+  // every dist paint (mount-time AND synced passes), pruned after synced passes.
+  renderedDistGroupIds.clear();
+  renderedDistDoseRows.clear();
 
   // "Compare endpoints" overlays every selected endpoint's curve on the same response axis, so
   // it's only meaningful when they all share the same scale - either every selected endpoint is

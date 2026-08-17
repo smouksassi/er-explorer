@@ -33,6 +33,23 @@ describe("viewLayoutEnumerate", () => {
 
   const input = { xMetricIds: ["auc", "cmax"], endpointIds: ["icgi", "icgi2"] };
 
+  it("endpoint rows with NO column dimensions keep each row's endpoint", () => {
+    // Regression: the synthetic no-columns branch injected endpoint=first and
+    // clobbered row-faceted endpoints on merge — every row collapsed to icgi.
+    const spec: ViewLayoutSpec = {
+      mode: "advanced",
+      rowDimensions: [{ kind: "endpoints", ids: ["icgi", "icgi2"], order: ["icgi", "icgi2"] }],
+      colDimensions: [],
+      color: { kind: "endpoints" },
+      fitByColor: false,
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
+    };
+    const scatter = enumerateScatterPanels(loaded, [], spec, { xMetricIds: ["auc"], endpointIds: ["icgi", "icgi2"] });
+    expect(scatter).toHaveLength(2);
+    expect(scatter.map((p) => p.endpointId).sort()).toEqual(["icgi", "icgi2"]);
+    expect(scatter.map((p) => p.facetKey.endpoint).sort()).toEqual(["icgi", "icgi2"]);
+  });
+
   it("guided endpoint rows × x columns", () => {
     const spec: ViewLayoutSpec = {
       mode: "guided",

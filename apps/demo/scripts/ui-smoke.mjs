@@ -256,6 +256,16 @@ async function run() {
     }
     ok(`endpoint row facets (${titles.length} panel titles)`);
 
+    // Each endpoint must get its OWN panels — duplicated first-endpoint stacks
+    // passed the count check for months (fallback col branch clobbered row endpoints).
+    const stackEndpoints = await page.$$eval(".metric-stack[data-endpoint]", (els) => [
+      ...new Set(els.map((e) => e.getAttribute("data-endpoint")))
+    ]);
+    if (stackEndpoints.length < compareEps.length) {
+      fail(`endpoint row facets must cover every endpoint, got stacks for: ${stackEndpoints.join(", ")}`);
+    }
+    ok(`distinct endpoint stacks (${stackEndpoints.join(", ")})`);
+
     const overlayText = await page.locator("text=ENDPOINTS OVERLAID").count();
     if (overlayText > 0) fail("Advanced should not show ENDPOINTS OVERLAID banner");
     ok("no legacy overlay banner");
@@ -283,8 +293,13 @@ async function run() {
     ok(`covariate split dist (${levelIds.length} split rows)`);
 
     await setCheckbox(page, "showDistReadout", true);
-    await page.locator("g.er-ridge").first().click({ force: true });
-    await page.waitForTimeout(350);
+    // Dispatch the click directly: with 3 endpoint rows the physical click point
+    // can land off-ridge in headless; the handler itself is what we're testing.
+    await page.evaluate(() => {
+      const g = document.querySelector("g.er-ridge");
+      g?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await page.waitForTimeout(500);
 
     const readout = await readoutText(page);
     if (!readout || /click a box/i.test(readout)) {
@@ -329,17 +344,33 @@ async function run() {
     await openDrawerRail(page, "plot");
     await page.waitForTimeout(400);
 
-    const pointFills = await page.$$eval(".facet-scatter-block svg g.er-points circle", (cs) =>
-      cs
-        .map((c) => (c.getAttribute("fill") || "").toLowerCase())
-        .filter((f) => f && f !== "none" && f !== "#ffffff" && f !== "transparent")
+    // Per-PANEL monochrome: each endpoint's panel wears exactly one point color
+    // (its own endpoint accent) — a dose rainbow inside any panel fails.
+    const perStackFills = await page.$$eval(".metric-stack[data-endpoint]", (stacks) =>
+      stacks
+        .map((s) => ({
+          ep: s.getAttribute("data-endpoint"),
+          fills: [
+            ...new Set(
+              [...s.querySelectorAll("svg g.er-points circle")]
+                .map((c) => (c.getAttribute("fill") || "").toLowerCase())
+                .filter((f) => f && f !== "none" && f !== "#ffffff" && f !== "transparent")
+            )
+          ]
+        }))
+        .filter((s) => s.fills.length)
     );
-    if (!pointFills.length) fail("no scatter points found for monochrome check");
-    const uniqFills = [...new Set(pointFills)];
-    if (uniqFills.length > 1) {
-      fail(`continuous scatter points under color=endpoints must be monochrome, got ${uniqFills.join(", ")}`);
+    if (!perStackFills.length) fail("no scatter points found for monochrome check");
+    for (const s of perStackFills) {
+      if (s.fills.length > 1) {
+        fail(`panel ${s.ep} under color=endpoints must be monochrome, got ${s.fills.join(", ")}`);
+      }
     }
-    ok(`continuous points monochrome under color=endpoints (${uniqFills[0]})`);
+    ok(
+      `points monochrome per panel under color=endpoints (${perStackFills
+        .map((s) => `${s.ep}:${s.fills[0]}`)
+        .join(", ")})`
+    );
 
     console.log("\nui-smoke: ALL CHECKS PASSED\n");
   } finally {
