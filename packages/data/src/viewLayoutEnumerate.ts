@@ -27,28 +27,33 @@ function orderedIds(dim: LayoutDimension, fallbackIds: string[]): string[] {
 
 function expandDimension(
   loaded: LoadedDataset,
-  baseIndices: number[],
+  branchIndices: number[],
   dim: LayoutDimension,
   fallbackEndpoints: string[],
   fallbackXMetrics: string[],
-  spec: ViewLayoutSpec
+  spec: ViewLayoutSpec,
+  modelIndices: number[]
 ): Array<{ keyPart: FacetKey; indices: number[] }> {
   if (dim.kind === "endpoints") {
     const ids = orderedIds(dim, fallbackEndpoints);
     return ids.map((endpointId) => ({
       keyPart: { endpoint: endpointId },
-      indices: baseIndices
+      indices: branchIndices
     }));
   }
   if (dim.kind === "xMetrics") {
     const ids = orderedIds(dim, fallbackXMetrics);
     return ids.map((xVariableId) => ({
       keyPart: { xMetric: xVariableId },
-      indices: baseIndices
+      indices: branchIndices
     }));
   }
   const varId = dim.variableId;
-  const model = buildVariableLevelModel(loaded, varId, baseIndices, spec.continuousBinning);
+  // Bin model on the BASE cohort (ADR-0012), never on the nested branch: binning
+  // wt inside a study branch gives each study its own median, while the color
+  // channel bins globally — the same patient lands in the "≤ median" PANEL but
+  // wears the "> median" COLOR. Cut points are global; membership is per branch.
+  const model = buildVariableLevelModel(loaded, varId, modelIndices, spec.continuousBinning);
   let levels = [...model.levels];
   if (dim.levels?.length) {
     levels = dim.levels.filter((l: string) => model.levels.includes(l));
@@ -66,7 +71,7 @@ function expandDimension(
   }
   return levels.map((level: string) => ({
     keyPart: { [varId]: level },
-    indices: baseIndices.filter((i) => levelForRow(i, model, loaded, varId) === level)
+    indices: branchIndices.filter((i) => levelForRow(i, model, loaded, varId) === level)
   }));
 }
 
@@ -75,13 +80,15 @@ function cartesianFacetBranches(
   baseIndices: number[],
   dimensions: LayoutDimension[],
   input: ViewLayoutEnumerateInput,
-  spec: ViewLayoutSpec
+  spec: ViewLayoutSpec,
+  modelIndices?: number[]
 ): Array<{ facetKey: FacetKey; indices: number[] }> {
+  const binBase = modelIndices ?? baseIndices;
   let branches: Array<{ facetKey: FacetKey; indices: number[] }> = [{ facetKey: {}, indices: baseIndices }];
   for (const dim of dimensions) {
     const next: Array<{ facetKey: FacetKey; indices: number[] }> = [];
     for (const branch of branches) {
-      const parts = expandDimension(loaded, branch.indices, dim, input.endpointIds, input.xMetricIds, spec);
+      const parts = expandDimension(loaded, branch.indices, dim, input.endpointIds, input.xMetricIds, spec, binBase);
       for (const part of parts) {
         next.push({
           facetKey: { ...branch.facetKey, ...part.keyPart },
@@ -198,7 +205,7 @@ export function enumerateScatterPanels(
     // rule (ensureScaleBearingFacets) guarantees multi-level metrics/endpoints
     // are faceted before enumeration ever sees them.
     const colBranches = spec.colDimensions.length
-      ? cartesianFacetBranches(loaded, row.indices, spec.colDimensions, input, spec)
+      ? cartesianFacetBranches(loaded, row.indices, spec.colDimensions, input, spec, baseIndices)
       : [{ facetKey: {} as FacetKey, indices: row.indices }];
 
     for (const col of colBranches) {

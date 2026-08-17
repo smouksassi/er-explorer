@@ -64,6 +64,43 @@ describe("viewLayoutEnumerate", () => {
     expect(scatter.map((p) => p.xVariableId).sort()).toEqual(["auc", "cmax"]);
   });
 
+  it("nested binned facet uses BASE-cohort cut points, not per-branch medians", () => {
+    // 32 distinct wt values (> numeric threshold) → real median binning.
+    // Study A wt 1..16 (all ≤ global median 16.5); study B wt 17..32 (all >).
+    // Per-branch binning would re-split each study by its OWN median and leak
+    // wrong-level patients into panels (facet level ≠ color level — the orange
+    // points inside the "≤ median" panel from user QA round 9).
+    const n = 32;
+    const idx = Array.from({ length: n }, (_, i) => i);
+    const nested = wide({
+      id: idx.map((i) => i + 1),
+      study: idx.map((i) => (i < 16 ? "A" : "B")),
+      wt: idx.map((i) => i + 1),
+      dose: idx.map(() => "600"),
+      auc: idx.map((i) => 10 + i),
+      icgi: idx.map((i) => i % 2)
+    });
+    const spec: ViewLayoutSpec = {
+      mode: "advanced",
+      rowDimensions: [{ kind: "variable", variableId: "study" }],
+      colDimensions: [{ kind: "variable", variableId: "wt" }],
+      color: { kind: "variable", variableId: "wt", binning: "median" },
+      continuousBinning: "median",
+      fitByColor: false,
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
+    };
+    const scatter = enumerateScatterPanels(nested, [], spec, { xMetricIds: ["auc"], endpointIds: ["icgi"] });
+    const rowsOf = (study: string, wtLevel: string) =>
+      scatter
+        .filter((p) => p.facetKey.study === study && p.facetKey.wt === wtLevel)
+        .flatMap((p) => p.rowIndices);
+    // Global cut: study A is entirely ≤ median, study B entirely > median.
+    expect(rowsOf("A", "≤ median")).toHaveLength(16);
+    expect(rowsOf("A", "> median")).toHaveLength(0);
+    expect(rowsOf("B", "> median")).toHaveLength(16);
+    expect(rowsOf("B", "≤ median")).toHaveLength(0);
+  });
+
   it("guided endpoint rows × x columns", () => {
     const spec: ViewLayoutSpec = {
       mode: "guided",
