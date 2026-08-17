@@ -1226,13 +1226,6 @@ function selectedDosesForEndpoint(endpoint: Endpoint): Set<string> {
 }
 
 /** Dose labels currently selected via distribution rows (plain dose or `dose|level` splits). */
-function selectedDosesForReadout(): string[] {
-  if (state.selectedDistGroupIds.size) {
-    return [...new Set([...state.selectedDistGroupIds].map((gid) => (gid.includes("|") ? gid.split("|")[0]! : gid)))];
-  }
-  return [...state.selectedDoses];
-}
-
 function parseDistGroupId(gid: string): { dose: string; suffix?: string } {
   const sep = gid.indexOf("|");
   if (sep === -1) return { dose: gid };
@@ -3794,33 +3787,39 @@ function buildDistributionGroups(
       .reverse()
       .flatMap((dose) => {
         const isPlacebo = isPlaceboDose(dose);
-        return levels.map((level, li) => {
-          const rows = rowIndicesForDose(dose).filter(
-            (i) => inCohort(i) && colorLevelForRow(i, colorModel, loaded, colorVar) === level
-          );
-          const values =
-            isPlacebo && pkLike ? [] : rows.map((r) => exposureValue(r, metric)).filter((v) => Number.isFinite(v));
-          return {
-            groupId: `${dose}|${level}`,
-            label: li === 0 ? dose : "",
-            color: variableColorForLevel(colorVar, level, levels),
-            values,
-            n: rows.length,
-            selected: state.selectedDistGroupIds.has(`${dose}|${level}`),
-            selectionColor: selectionAccent,
-            skipShape: isPlacebo && pkLike,
-            splitAnnotations: splitAnnotationsForRows(
-              metric,
-              splitEndpoint,
-              xDomain,
-              state.splitAnnotationMode,
-              rows,
-              isPlacebo && pkLike
-            )
-          };
-        });
-      })
-      .filter((g) => g.n > 0);
+        const subRows = levels
+          .map((level) => {
+            const rows = rowIndicesForDose(dose).filter(
+              (i) => inCohort(i) && colorLevelForRow(i, colorModel, loaded, colorVar) === level
+            );
+            const values =
+              isPlacebo && pkLike ? [] : rows.map((r) => exposureValue(r, metric)).filter((v) => Number.isFinite(v));
+            return {
+              groupId: `${dose}|${level}`,
+              label: "",
+              color: variableColorForLevel(colorVar, level, levels),
+              values,
+              n: rows.length,
+              selected: state.selectedDistGroupIds.has(`${dose}|${level}`),
+              selectionColor: selectionAccent,
+              skipShape: isPlacebo && pkLike,
+              splitAnnotations: splitAnnotationsForRows(
+                metric,
+                splitEndpoint,
+                xDomain,
+                state.splitAnnotationMode,
+                rows,
+                isPlacebo && pkLike
+              )
+            };
+          })
+          .filter((g) => g.n > 0);
+        // Dose label on the first SURVIVING sub-row — the level model is shared
+        // across facets (base cohort), so this cell may hold only later levels;
+        // labeling level index 0 would leave whole facets unlabeled.
+        if (subRows.length) subRows[0]!.label = dose;
+        return subRows;
+      });
   }
 
   if (splitByEndpoints && splitByEndpoints.length > 1) {
@@ -3944,7 +3943,8 @@ function paintDistributionChart(
   if (!readoutEl) return;
   const finalReadoutEndpoints = readoutEndpoints ?? (splitByEndpoints && splitByEndpoints.length > 1 ? splitByEndpoints : [endpoint]);
   attachDistributionInteractivity(chartWrap, metric, finalReadoutEndpoints, active, readoutEl, distResult.metadata, {
-    omitEndpointFit: opts?.omitEndpointFit ?? false
+    omitEndpointFit: opts?.omitEndpointFit ?? false,
+    cohortRowIndices
   });
 }
 
@@ -4296,55 +4296,90 @@ function updateReadout(
   metric: ExposureMetric,
   endpoints: Endpoint[],
   active: Set<number>,
-  opts?: { omitEndpointFit?: boolean }
+  opts?: { omitEndpointFit?: boolean; cohortRowIndices?: number[] }
 ): void {
   const ds = requireDataset();
   const omitEndpointFit = opts?.omitEndpointFit ?? false;
-  const groupStats: Record<string, { min: number; q1: number; median: number; q3: number; max: number }> = {};
-  const doseN: Record<string, number> = {};
-  for (const dose of selectedDosesForReadout()) {
-    const rows = rowIndicesForDose(dose).filter((i) => active.has(ds.patientId(i)));
-    doseN[dose] = rows.length;
-    const vals = rows.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
-    const s = summarizeDistribution(vals);
-    if (s) groupStats[dose] = { min: s.min, q1: s.q1, median: s.median, q3: s.q3, max: s.max };
-  }
-  const doses = selectedDosesForReadout().filter((d) => groupStats[d]);
-  if (!doses.length) {
-    readoutEl.innerHTML = '<span class="muted">Click a box above to show projected fit values at Min, Q1, Median, Q3, and Max.</span>';
-    return;
-  }
-  const multiEndpoint = endpoints.length > 1;
-  const colorByEndpoint = layoutUsesNeutralDoseChrome() && endpoints.length > 1;
+  const cohort = opts?.cohortRowIndices;
+  const spec = resolveActiveViewLayoutSpec();
+  // Same pipeline as projections (ADR-0012): same row resolution (clicked row =
+  // dose ∩ level/endpoint ∩ panel cohort), same one-channel color, and fit values
+  // from the SAME group the plotted curve was fitted on — never the global fit.
+  const colorModel =
+    spec?.color.kind === "variable" && dataset
+      ? buildColorBinModel(
+          dataset.loaded,
+          spec.color.variableId,
+          dataFilteredRowIndices(),
+          spec.continuousBinning ?? spec.color.binning
+        )
+      : null;
+  const colorCtx =
+    spec?.color.kind === "variable" && colorModel
+      ? { variableId: spec.color.variableId, model: colorModel }
+      : undefined;
+
+  const gids = state.selectedDistGroupIds.size ? [...state.selectedDistGroupIds] : [...state.selectedDoses];
   const blocks: string[] = [];
-  for (const dose of doses) {
-    const g = groupStats[dose];
-    const doseColor = layoutUsesNeutralDoseChrome() ? DOSE_SELECTION_NEUTRAL : doseColorFor(dose);
-    const expLine = `<div class="readout-line-exposure"><strong style="color:${doseColor}">${escapeHtml(dose)}</strong> &nbsp; Min ${exposureLabel(metric)} = ${g.min.toFixed(1)} &nbsp; Q1 = ${g.q1.toFixed(1)} &nbsp; Median = ${g.median.toFixed(1)} &nbsp; Q3 = ${g.q3.toFixed(1)} &nbsp; Max = ${g.max.toFixed(1)} &nbsp; N=${doseN[dose]}</div>`;
-    blocks.push(expLine);
+  for (const gid of gids) {
+    const { dose, suffix } = parseDistGroupId(gid);
+    const suffixIsEndpoint = !!suffix && selectedEndpoints().includes(suffix as Endpoint);
+    const lineEndpoints = suffixIsEndpoint ? [suffix as Endpoint] : endpoints;
+    const refEndpoint = lineEndpoints[0] ?? endpoints[0]!;
+    const rows = rowsForDistGroupId(gid, active, cohort, refEndpoint, colorCtx);
+    const vals = rows
+      .map((i) => exposureValue(i, metric))
+      .filter((v) => Number.isFinite(v))
+      .sort((a, b) => a - b);
+    const s = summarizeDistribution(vals);
+    if (!s) continue;
+    const groupColor = colorForDistGroupId(gid, refEndpoint, spec, colorModel);
+    const label = suffix && !suffixIsEndpoint ? `${dose} · ${suffix}` : dose;
+    blocks.push(
+      `<div class="readout-line-exposure"><strong style="color:${groupColor}">${escapeHtml(label)}</strong> &nbsp; Min ${exposureLabel(metric)} = ${s.min.toFixed(1)} &nbsp; Q1 = ${s.q1.toFixed(1)} &nbsp; Median = ${s.median.toFixed(1)} &nbsp; Q3 = ${s.q3.toFixed(1)} &nbsp; Max = ${s.max.toFixed(1)} &nbsp; N=${rows.length}</div>`
+    );
 
     if (omitEndpointFit) continue;
 
-    for (const endpoint of endpoints) {
-      const { fit } = fitFor(metric, endpoint);
+    for (const endpoint of lineEndpoints) {
+      // Fit rows mirror the plotted curve group: per-level under fitByColor with a
+      // covariate channel, per-arm under fitByColor with the dose channel, panel
+      // cohort pooled otherwise.
+      const fitBase = (cohort ?? dataFilteredRowIndices()).filter((i) =>
+        Number.isFinite(endpointValue(i, endpoint))
+      );
+      let fitRows = fitBase;
+      if (spec?.fitByColor && colorCtx && suffix && !suffixIsEndpoint) {
+        fitRows = fitBase.filter(
+          (i) => colorLevelForRow(i, colorCtx.model, ds.loaded, colorCtx.variableId) === suffix
+        );
+      } else if (spec?.fitByColor && spec.color.kind === "dose") {
+        fitRows = fitBase.filter((i) => ds.doseLabel(i) === dose);
+      }
+      const fitResult = tryFitForCohort(metric, endpoint, fitRows);
+      if (!fitResult) continue;
+      const fit = fitResult.fit;
       const continuous = isContinuousEndpoint(endpoint);
       const decimals = continuous ? 1 : 3;
       const fitAt = (x: number) =>
-        fit.kind === "linear" ? fit.model.intercept + fit.model.slope * x : 1 / (1 + Math.exp(-(fit.model.intercept + fit.model.slope * x)));
-      const color = colorByEndpoint ? endpointColor(endpoint) : doseColor;
-      const label = multiEndpoint ? ds.endpointLabel(endpoint) : dose;
-      const endpointN = rowIndicesForDose(dose).filter(
-        (i) => active.has(ds.patientId(i)) && Number.isFinite(endpointValue(i, endpoint))
-      ).length;
-      const missing = doseN[dose] - endpointN;
+        fit.kind === "linear"
+          ? fit.model.intercept + fit.model.slope * x
+          : 1 / (1 + Math.exp(-(fit.model.intercept + fit.model.slope * x)));
+      const lineColor = spec?.color.kind === "endpoints" ? endpointColor(endpoint) : groupColor;
+      const lineLabel = lineEndpoints.length > 1 || endpoints.length > 1 ? ds.endpointLabel(endpoint) : label;
+      const endpointN = rows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).length;
+      const missing = rows.length - endpointN;
       const nNote =
-        missing === 0
-          ? ""
-          : ` &nbsp; <span class="muted">${missing} missing from N=${doseN[dose]}</span>`;
+        missing === 0 ? "" : ` &nbsp; <span class="muted">${missing} missing from N=${rows.length}</span>`;
       blocks.push(
-        `<div class="readout-line-fit"><span style="color:${color}">${label}</span> — fit @ Min ${fitAt(g.min).toFixed(decimals)} · Q1 ${fitAt(g.q1).toFixed(decimals)} · Med ${fitAt(g.median).toFixed(decimals)} · Q3 ${fitAt(g.q3).toFixed(decimals)} · Max ${fitAt(g.max).toFixed(decimals)}${nNote}</div>`
+        `<div class="readout-line-fit"><span style="color:${lineColor}">${escapeHtml(lineLabel)}</span> — fit @ Min ${fitAt(s.min).toFixed(decimals)} · Q1 ${fitAt(s.q1).toFixed(decimals)} · Med ${fitAt(s.median).toFixed(decimals)} · Q3 ${fitAt(s.q3).toFixed(decimals)} · Max ${fitAt(s.max).toFixed(decimals)}${nNote}</div>`
       );
     }
+  }
+  if (!blocks.length) {
+    readoutEl.innerHTML =
+      '<span class="muted">Click a box above to show projected fit values at Min, Q1, Median, Q3, and Max.</span>';
+    return;
   }
   readoutEl.innerHTML = blocks.join("");
   applyReadoutChrome(readoutEl);
@@ -4400,7 +4435,7 @@ function attachDistributionInteractivity(
   active: Set<number>,
   readoutEl: HTMLDivElement,
   meta: DistributionMeta,
-  readoutOpts?: { omitEndpointFit?: boolean }
+  readoutOpts?: { omitEndpointFit?: boolean; cohortRowIndices?: number[] }
 ): void {
   const svg = chartWrap.querySelector("svg");
   updateReadout(readoutEl, metric, endpoints, active, readoutOpts);
