@@ -25,6 +25,10 @@ function usesStackedFacetShells(spec: ViewLayoutSpec): boolean {
 function sortPanelsByColOrder(panels: ScatterPanelSpec[], spec: ViewLayoutSpec): ScatterPanelSpec[] {
   const dims = spec.colDimensions.length ? spec.colDimensions : spec.rowDimensions;
   if (!dims.length) return panels;
+  // Enumeration emits panels in level-model order (e.g. "≤ median" before
+  // "> median" for binned covariates); when a dimension has no explicit order,
+  // preserve that input order instead of sorting labels alphabetically.
+  const inputRank = new Map(panels.map((p, i) => [p.id, i]));
   return [...panels].sort((a, b) => {
     for (const dim of spec.colDimensions) {
       let ka: string;
@@ -45,7 +49,7 @@ function sortPanelsByColOrder(panels: ScatterPanelSpec[], spec: ViewLayoutSpec):
       const cmp = (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
       if (cmp !== 0) return cmp;
     }
-    return a.id.localeCompare(b.id);
+    return (inputRank.get(a.id) ?? 0) - (inputRank.get(b.id) ?? 0);
   });
 }
 
@@ -80,8 +84,9 @@ function comparePanelsByRowDimensions(a: ScatterPanelSpec, b: ScatterPanelSpec, 
     const ib = order.indexOf(kb);
     const cmp = (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
     if (cmp !== 0) return cmp;
-    const lc = ka.localeCompare(kb);
-    if (lc !== 0) return lc;
+    // No explicit order → keep enumeration (level-model) order: sort() is stable,
+    // so returning 0 preserves input order (alphabetical would put "> median"
+    // before "≤ median").
   }
   return 0;
 }

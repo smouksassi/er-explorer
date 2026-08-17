@@ -667,6 +667,43 @@ function refreshAdvancedColorOptions(): void {
   if ([...advancedColorByEl.options].some((o) => o.value === keep)) advancedColorByEl.value = keep;
 }
 
+/**
+ * ADR-0012 one-color-channel paint for dose-only rows (dist strip rows AND the
+ * dose-click projection accent — they must match): the dose palette applies only
+ * when color IS dose; a degenerate single-level cell (same variable on facet +
+ * color) keeps its level color; any other color encoding renders neutral ink.
+ */
+function resolveDoseRowPaint(
+  spec: ViewLayoutSpec | null,
+  scatterPanel: ScatterPanelSpec | undefined
+): { neutral?: boolean; fixedColor?: string } {
+  if (!spec) return {};
+  if (!scatterPanel) return spec.color.kind !== "dose" ? { neutral: true } : {};
+  const ctx = resolveCellContext(
+    buildCellResolutionInput(
+      requireDataset().loaded,
+      spec,
+      selectedEndpoints(),
+      dataFilteredRowIndices(),
+      scatterPanel
+    )
+  );
+  if (ctx.distRows.palette === "neutral") return { neutral: true };
+  if (
+    ctx.distRows.palette === "variable" &&
+    !ctx.distRows.splitLevels.length &&
+    ctx.colorChannel.kind === "variable" &&
+    ctx.colorChannel.levels.length === 1
+  ) {
+    const paletteModel = colorBinModelForSpec(spec, dataFilteredRowIndices());
+    const level = ctx.colorChannel.levels[0]!;
+    return {
+      fixedColor: variableColorForLevel(ctx.colorChannel.variableId, level, paletteModel?.levels ?? [level])
+    };
+  }
+  return {};
+}
+
 function colorBinModelForSpec(spec: ViewLayoutSpec | null | undefined, cohortRowIndices: number[]): ColorBinModel | null {
   if (!spec || spec.color.kind !== "variable" || !dataset) return null;
   const binning = spec.continuousBinning ?? spec.color.binning;
@@ -3139,7 +3176,10 @@ function paintRegularScatterIntoWrap(
   const colorByVariable =
     scatterPolicy?.scatterPointColorSource === "variable" ||
     (!scatterPolicy && state.layoutMode === "advanced" && !!colorVarId);
-  const colorModel = colorByVariable ? colorBinModelForSpec(spec, cohort) : null;
+  // Bin model on the BASE cohort (ADR-0012): binning a numeric covariate inside a
+  // facet slice would re-split the panel by its OWN median — a single-level panel
+  // (facet+color on the same variable) would fabricate two levels and two curves.
+  const colorModel = colorByVariable ? colorBinModelForSpec(spec, dataFilteredRowIndices()) : null;
 
   const points: ScatterPoint[] = recordRows.map((i) => {
     const pid = ds.patientId(i);
@@ -3237,12 +3277,15 @@ function paintRegularScatterIntoWrap(
       };
     }
 
+    // Projection accent matches the dist row that was clicked (one color channel):
+    // level color in degenerate cells, neutral when the strip is neutral, else dose.
+    const rowPaint = resolveDoseRowPaint(spec ?? null, panel);
     const projected: LinearProjectedGroup[] = [...selectedDosesForEndpoint(endpoint)]
       .filter((dose) => groupStats[dose])
       .map((dose) => {
         const { observedMean, ...rest } = groupStats[dose]!;
         const accent =
-          spec?.color.kind === "endpoints" ? endpointColor(endpoint) : resolveDoseColor(dose);
+          rowPaint.fixedColor ?? (rowPaint.neutral ? DOSE_SELECTION_NEUTRAL : resolveDoseColor(dose));
         return {
           groupId: dose,
           color: accent,
@@ -3694,41 +3737,16 @@ function paintDistributionChart(
     spec?.distribution.colorDistShapes && spec?.color.kind === "variable"
       ? spec.color.variableId
       : undefined;
-  // ADR-0012 one-color-channel rule: unsplit dose rows are grouped by dose only,
-  // so they take the palette only when color IS dose; under color=endpoints or an
-  // unsplit color variable the strip renders neutral ink (dose identity = row
-  // label). A degenerate single-level cell (same variable on facet + color) keeps
-  // that level's color. Endpoint-split sub-rows keep endpoint colors in their branch.
-  const distRowPaint = (() => {
-    if (splitByEndpoints && splitByEndpoints.length > 1) return {} as { neutral?: boolean; fixedColor?: string };
-    if (!spec) return {};
-    const scatterId = distPanel?.scatterPanelIds[0];
-    const scatterPanel = scatterId ? scatterPanelById.get(scatterId) : undefined;
-    if (!scatterPanel) return spec.color.kind !== "dose" ? { neutral: true } : {};
-    const ctx = resolveCellContext(
-      buildCellResolutionInput(
-        requireDataset().loaded,
-        spec,
-        selectedEndpoints(),
-        dataFilteredRowIndices(),
-        scatterPanel
-      )
-    );
-    if (ctx.distRows.palette === "neutral") return { neutral: true };
-    if (
-      ctx.distRows.palette === "variable" &&
-      !ctx.distRows.splitLevels.length &&
-      ctx.colorChannel.kind === "variable" &&
-      ctx.colorChannel.levels.length === 1
-    ) {
-      const paletteModel = colorBinModelForSpec(spec, dataFilteredRowIndices());
-      const level = ctx.colorChannel.levels[0]!;
-      return {
-        fixedColor: variableColorForLevel(ctx.colorChannel.variableId, level, paletteModel?.levels ?? [level])
-      };
-    }
-    return {};
-  })();
+  const distRowPaint =
+    splitByEndpoints && splitByEndpoints.length > 1
+      ? {}
+      : resolveDoseRowPaint(
+          spec ?? null,
+          (() => {
+            const scatterId = distPanel?.scatterPanelIds[0];
+            return scatterId ? scatterPanelById.get(scatterId) : undefined;
+          })()
+        );
   const distGroups = buildDistributionGroups(metric, splitByEndpoints, {
     cohortRowIndices,
     splitByColorVariable: spec?.distribution.colorDistShapes ? colorVar : undefined,
