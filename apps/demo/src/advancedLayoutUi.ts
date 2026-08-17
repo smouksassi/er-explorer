@@ -105,7 +105,9 @@ export function readAdvancedSpecFromUi(
     color = { kind: "variable", variableId: colorValue, binning };
   }
 
-  const fitByColorAllowed = color.kind === "variable";
+  // ADR-0012: dose is an ordinary channel — fit-per-arm is legal. Only
+  // color=endpoints strips fitByColor (curves are already one per endpoint).
+  const fitByColorAllowed = color.kind === "variable" || color.kind === "dose";
 
   return dedupeFacetDimensions({
     mode: "advanced",

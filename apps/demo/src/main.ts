@@ -1360,6 +1360,66 @@ function projectedGroupsForDistSelection(
   return out;
 }
 
+/**
+ * Continuous analog of {@link projectedGroupsForDistSelection}: identical row
+ * resolution (clicked row = dose ∩ level/endpoint ∩ panel cohort) and identical
+ * one-channel color, with mean ± CI instead of x/N. Until this existed, a click
+ * on a `dose|level` sub-row of a continuous panel collapsed to a whole-dose
+ * projection with pooled stats and dose-palette colors.
+ */
+function projectedLinearGroupsForDistSelection(
+  metric: ExposureMetric,
+  endpoint: Endpoint,
+  active: Set<number>,
+  cohortRowIndices?: number[],
+  opts?: { colorOverride?: string; spec?: ViewLayoutSpec | null }
+): LinearProjectedGroup[] {
+  const spec = opts?.spec ?? resolveActiveViewLayoutSpec();
+  const colorModel =
+    spec?.color.kind === "variable" && dataset
+      ? buildColorBinModel(
+          dataset.loaded,
+          spec.color.variableId,
+          dataFilteredRowIndices(),
+          spec.continuousBinning ?? spec.color.binning
+        )
+      : null;
+  const colorCtx =
+    spec?.color.kind === "variable" && colorModel
+      ? { variableId: spec.color.variableId, model: colorModel }
+      : undefined;
+
+  const gids = distGroupIdsForProjections(endpoint);
+  const out: LinearProjectedGroup[] = [];
+  for (const gid of gids) {
+    const rows = rowsForDistGroupId(gid, active, cohortRowIndices, endpoint, colorCtx).filter((i) =>
+      Number.isFinite(endpointValue(i, endpoint))
+    );
+    const vals = rows
+      .map((i) => exposureValue(i, metric))
+      .filter((v) => Number.isFinite(v))
+      .sort((a, b) => a - b);
+    const s = summarizeDistribution(vals);
+    if (!s) continue;
+    const mci = meanConfidenceInterval(rows.map((i) => endpointValue(i, endpoint)));
+    out.push({
+      groupId: gid,
+      color: colorForDistGroupId(gid, endpoint, spec, colorModel, opts?.colorOverride),
+      q1: s.q1,
+      q3: s.q3,
+      median: s.median,
+      whiskerLow: s.whiskerLow,
+      whiskerHigh: s.whiskerHigh,
+      min: s.min,
+      max: s.max,
+      observedMean: state.showDoseObserved
+        ? { mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n }
+        : undefined
+    });
+  }
+  return out;
+}
+
 function pointColorsMonochromeForEndpoint(endpoint: Endpoint): Record<string, string> {
   const c = endpointColor(endpoint);
   const map: Record<string, string> = {};
@@ -3355,22 +3415,29 @@ function paintRegularScatterIntoWrap(
       };
     }
 
-    // Projection accent matches the dist row that was clicked (one color channel):
-    // level color in degenerate cells, neutral when the strip is neutral, else dose.
+    // Projection follows the CLICKED dist row (one color channel + one cohort):
+    // split-row clicks resolve their own rows/stats/color via the shared
+    // selection pipeline; whole-dose clicks use the panel-cohort dose stats with
+    // the strip row's paint.
     const rowPaint = resolveDoseRowPaint(spec ?? null, panel);
-    const projected: LinearProjectedGroup[] = [...selectedDosesForEndpoint(endpoint)]
-      .filter((dose) => groupStats[dose])
-      .map((dose) => {
-        const { observedMean, ...rest } = groupStats[dose]!;
-        const accent =
-          rowPaint.fixedColor ?? (rowPaint.neutral ? DOSE_SELECTION_NEUTRAL : resolveDoseColor(dose));
-        return {
-          groupId: dose,
-          color: accent,
-          ...rest,
-          observedMean: state.showDoseObserved ? observedMean : undefined
-        };
-      });
+    const projected: LinearProjectedGroup[] = state.selectedDistGroupIds.size
+      ? projectedLinearGroupsForDistSelection(metric, endpoint, active, cohort, {
+          spec,
+          colorOverride: rowPaint.fixedColor
+        })
+      : [...selectedDosesForEndpoint(endpoint)]
+          .filter((dose) => groupStats[dose])
+          .map((dose) => {
+            const { observedMean, ...rest } = groupStats[dose]!;
+            const accent =
+              rowPaint.fixedColor ?? (rowPaint.neutral ? DOSE_SELECTION_NEUTRAL : resolveDoseColor(dose));
+            return {
+              groupId: dose,
+              color: accent,
+              ...rest,
+              observedMean: state.showDoseObserved ? observedMean : undefined
+            };
+          });
 
     scatterResult = renderContinuousScatterViaRenderer(
       points,

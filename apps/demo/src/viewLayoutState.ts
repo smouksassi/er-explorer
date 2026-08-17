@@ -52,7 +52,10 @@ export function syncAdvancedSpecWithAnalysis(
 }
 
 function normalizeAdvancedColorFit(spec: ViewLayoutSpec): ViewLayoutSpec {
-  if (spec.color.kind === "variable") return spec;
+  // ADR-0012: fitByColor is legal for variable AND dose channels (fit per level /
+  // per arm — the analyst's call). Only color=endpoints strips it, where it is
+  // vacuous (curves are already one per endpoint).
+  if (spec.color.kind !== "endpoints") return spec;
   if (!spec.fitByColor) return spec;
   return { ...spec, fitByColor: false };
 }
