@@ -73,7 +73,10 @@ export function readFacetDimensionsFromSelect(
 }
 
 export function applyFacetSelectFromSpec(select: HTMLSelectElement, dimensions: LayoutDimension[]): void {
-  const tokens = new Set(dimensions.map(facetTokenForDimension));
+  // Implicit dims (ensureScaleBearingFacets) are derived, not authored: showing
+  // them selected would turn them into sticky user choices on the next read —
+  // e.g. an implicit metrics COLUMN that can never be moved to rows.
+  const tokens = new Set(dimensions.filter((d) => !d.implicit).map(facetTokenForDimension));
   for (const opt of select.options) {
     opt.selected = tokens.has(opt.value);
   }

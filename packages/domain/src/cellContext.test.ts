@@ -273,3 +273,24 @@ describe("ensureScaleBearingFacets — ADR-0012 scale-bearing rule", () => {
     expect(spec.rowDimensions).toHaveLength(1);
   });
 });
+
+describe("implicit facets stay derived (user can re-place scale-bearing dims)", () => {
+  it("authored ROW beats a persisted implicit COLUMN of the same kind", () => {
+    const stuck: ViewLayoutSpec = {
+      ...base,
+      rowDimensions: [{ kind: "xMetrics", ids: ["auc", "cmax"], order: ["auc", "cmax"] }],
+      colDimensions: [{ kind: "xMetrics", ids: ["auc", "cmax"], order: ["auc", "cmax"], implicit: true }]
+    };
+    const spec = ensureScaleBearingFacets(stuck, ["auc", "cmax"], ["icgi"]);
+    expect(spec.colDimensions.some((d) => d.kind === "xMetrics")).toBe(false);
+    expect(spec.rowDimensions.some((d) => d.kind === "xMetrics")).toBe(true);
+  });
+
+  it("implicit dims are recomputed, not accumulated", () => {
+    const noFacets: ViewLayoutSpec = { ...base, colDimensions: [] };
+    const withImplicit = ensureScaleBearingFacets(noFacets, ["auc", "cmax"], ["icgi"]);
+    const again = ensureScaleBearingFacets(withImplicit, ["auc", "cmax"], ["icgi"]);
+    expect(again.colDimensions.filter((d) => d.kind === "xMetrics")).toHaveLength(1);
+    expect(again.colDimensions.find((d) => d.kind === "xMetrics")?.implicit).toBe(true);
+  });
+});

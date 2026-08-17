@@ -5,14 +5,20 @@
 
 /** One axis of the facet formula: endpoints, x-axis metrics, or a stratification variable. */
 export type LayoutDimension =
-  | { kind: "endpoints"; ids: string[]; order: string[] }
-  | { kind: "xMetrics"; ids: string[]; order: string[] }
+  | { kind: "endpoints"; ids: string[]; order: string[]; implicit?: boolean }
+  | { kind: "xMetrics"; ids: string[]; order: string[]; implicit?: boolean }
   | {
       kind: "variable";
       variableId: string;
       /** Restrict to these levels; omit = all distinct in filtered data. */
       levels?: string[];
       order?: string[];
+      /**
+       * Added by {@link ensureScaleBearingFacets}, never by the user: recomputed on
+       * every spec resolution, hidden from layout UI controls, and yields as soon
+       * as the user authors this dimension on either axis.
+       */
+      implicit?: boolean;
     };
 
 export type VariableColorBinning = "median" | "tertiles" | "quartiles";
@@ -137,13 +143,24 @@ function dimensionFacetKey(dim: LayoutDimension): string {
 }
 
 /**
- * A dimension cannot facet both rows and columns (e.g. endpoints on both axes). Column facets win;
- * duplicates are removed from rows.
+ * A dimension cannot facet both rows and columns (e.g. endpoints on both axes).
+ * An authored (explicit) dimension always beats an implicit one regardless of
+ * axis; between two authored duplicates, columns win.
  */
 export function dedupeFacetDimensions(spec: ViewLayoutSpec): ViewLayoutSpec {
-  const colKeys = new Set(spec.colDimensions.map(dimensionFacetKey));
-  const rowDimensions = spec.rowDimensions.filter((d) => !colKeys.has(dimensionFacetKey(d)));
-  return rowDimensions.length === spec.rowDimensions.length ? spec : { ...spec, rowDimensions };
+  const colDimensions = spec.colDimensions.filter(
+    (d) =>
+      !(
+        d.implicit &&
+        spec.rowDimensions.some((r) => !r.implicit && dimensionFacetKey(r) === dimensionFacetKey(d))
+      )
+  );
+  const keptColKeys = new Set(colDimensions.map(dimensionFacetKey));
+  const rowDimensions = spec.rowDimensions.filter((d) => !keptColKeys.has(dimensionFacetKey(d)));
+  if (rowDimensions.length === spec.rowDimensions.length && colDimensions.length === spec.colDimensions.length) {
+    return spec;
+  }
+  return { ...spec, rowDimensions, colDimensions };
 }
 
 /**
@@ -159,14 +176,21 @@ export function ensureScaleBearingFacets(
   xMetricIds: readonly string[],
   endpointIds: readonly string[]
 ): ViewLayoutSpec {
-  let next = spec;
+  // Drop previously-added implicit dims first: they are derived state, recomputed
+  // here from scratch, and must never outrank a facet the user just authored
+  // (a persisted implicit column would win dedupe over an authored row).
+  let next: ViewLayoutSpec = {
+    ...spec,
+    rowDimensions: spec.rowDimensions.filter((d) => !d.implicit),
+    colDimensions: spec.colDimensions.filter((d) => !d.implicit)
+  };
   const hasXFacet = [...next.rowDimensions, ...next.colDimensions].some((d) => d.kind === "xMetrics");
   if (xMetricIds.length > 1 && !hasXFacet) {
     next = {
       ...next,
       colDimensions: [
         ...next.colDimensions,
-        { kind: "xMetrics", ids: [...xMetricIds], order: [...xMetricIds] }
+        { kind: "xMetrics", ids: [...xMetricIds], order: [...xMetricIds], implicit: true }
       ]
     };
   }
@@ -178,7 +202,7 @@ export function ensureScaleBearingFacets(
       ...next,
       rowDimensions: [
         ...next.rowDimensions,
-        { kind: "endpoints", ids: [...endpointIds], order: [...endpointIds] }
+        { kind: "endpoints", ids: [...endpointIds], order: [...endpointIds], implicit: true }
       ]
     };
   }
