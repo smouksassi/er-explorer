@@ -229,3 +229,41 @@ ghost curves; user-mapped point shapes.
 
 Implementation follows `.ai/ENCODING_V2_RETHINK.md` §F: domain resolver +
 tests first, then the single demo paint path, dist geometry, session.
+
+ADR-0013 Model-family adapter contract (2026-08-17).
+
+Motivated by the most expensive bug class of the encoding-v2 QA campaign:
+features implemented per model family drifted apart (fit-per-color existed
+for logistic but not linear; split-row projections existed for binary but
+not continuous; binary and linear disagreed on endpoint-missing rows).
+Each divergence was caught by a human comparing two families by eye, which
+does not scale as Emax, ordinal, and bounded smoothers arrive.
+
+**Contract:** every selection, projection, overlay, callout, strip, and
+readout behavior is written ONCE, parameterized by an
+`EndpointFamilyAdapter`. A family implements only:
+
+- `fit(rows)` -> model (per curve group; any cohort);
+- `curve(model, xDomain)` -> samples with CI;
+- `fittedAt(x)` -> estimate with CI (split/bin markers, readout fit lines);
+- `observedSummary(rows)` -> {center, lower, upper, n, label} (x/N Wilson
+  for binary, mean +/- CI for continuous, P(Y >= k) set for ordinal);
+- `readoutFormat` (decimals, unit labels).
+
+Pipelines may not branch on family beyond selecting the adapter. Rows fed
+to any family are endpoint-finite under the same rule. Curves never clamp;
+axes pad (ADR-0012).
+
+**Conformance matrix:** one parameterized test suite runs the SAME scenario
+set (facet x color x split x dose-click) against every registered family
+and asserts structurally identical outputs: curve-group count and color
+keys, per-curve projection association, cohort Ns, readout group labels.
+Adding a family means implementing the adapter and appearing in the matrix
+- "does linear behave like logistic" becomes CI, not manual QA.
+
+Implementation is staged: the current demo keeps its two families on the
+shared selection pipeline (rowsForDistGroupId / colorForDistGroupId /
+updateReadout); the adapter extraction lands with the compare-painter
+convergence (Slice E/F) rather than as another parallel path.
+
+Full invariant catalog with per-bug history: `.ai/INVARIANTS.md`.
