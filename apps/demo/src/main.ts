@@ -1325,12 +1325,15 @@ function projectedGroupsForDistSelection(
   opts?: { colorOverride?: string; spec?: ViewLayoutSpec | null }
 ): ProjectedGroup[] {
   const spec = opts?.spec ?? resolveActiveViewLayoutSpec();
+  // Bin model on the BASE cohort (ADR-0012): binning on the panel cohort gives
+  // the panel its own median, so level membership diverges from the strip rows
+  // (clicked N=6 row projecting as 8/9). Rows still come from the panel cohort.
   const colorModel =
     spec?.color.kind === "variable" && dataset
       ? buildColorBinModel(
           dataset.loaded,
           spec.color.variableId,
-          cohortRowIndices ?? dataFilteredRowIndices(),
+          dataFilteredRowIndices(),
           spec.continuousBinning ?? spec.color.binning
         )
       : null;
@@ -1342,7 +1345,11 @@ function projectedGroupsForDistSelection(
   const gids = distGroupIdsForProjections(endpoint);
   const out: ProjectedGroup[] = [];
   for (const gid of gids) {
-    const rows = rowsForDistGroupId(gid, active, cohortRowIndices, endpoint, colorCtx);
+    // Endpoint-finite rows only (same as the linear twin): the band and x/N must
+    // describe the rows this endpoint's curve actually sees, not exposure-only rows.
+    const rows = rowsForDistGroupId(gid, active, cohortRowIndices, endpoint, colorCtx).filter((i) =>
+      Number.isFinite(endpointValue(i, endpoint))
+    );
     const stats = computeBinaryStatsFromRows(rows, metric, endpoint);
     if (!stats) continue;
     const { observed, ...rest } = stats;
@@ -1946,17 +1953,24 @@ function renderContinuousScatterViaRenderer(
   height = SCATTER_CHART_HEIGHT,
   opts?: {
     /** ADR-0012 curve groups (fit per color level); replaces the single pooled curve. */
-    curves?: Array<{ curve: PredictionResult; color: string }>;
+    curves?: Array<{ curve: PredictionResult; color: string; level?: string }>;
     /** Point color under the active color channel; default = dose palette. */
     pointColorFor?: (p: ScatterPoint) => string;
   }
 ): { content: string; metadata: ScatterMeta } {
   const ds = requireDataset();
   const curveOverlays = opts?.curves?.length
-    ? opts.curves.map((c) => ({ samples: toCurveSamples(c.curve), color: c.color, band: c.color }))
-    : [{ samples: toCurveSamples(curve), color: "#64748b", band: "#94a3b8" }];
+    ? opts.curves.map((c) => ({ samples: toCurveSamples(c.curve), color: c.color, band: c.color, level: c.level }))
+    : [{ samples: toCurveSamples(curve), color: "#64748b", band: "#94a3b8", level: undefined as string | undefined }];
   const allSamples = curveOverlays.flatMap((c) => c.samples);
   const curveSamples = curveOverlays[0]!.samples;
+  // A clicked group projects onto ITS OWN level's curve; groups without a level
+  // suffix (whole-dose clicks) fall back to the first curve.
+  const samplesForGroup = (groupId: string | number) => {
+    const { suffix } = parseDistGroupId(String(groupId));
+    const match = suffix ? curveOverlays.find((c) => c.level === suffix) : undefined;
+    return (match ?? curveOverlays[0]!).samples;
+  };
   const yDomain = computeContinuousYDomain(points, allSamples);
   const plotHeight = height;
 
@@ -1989,9 +2003,10 @@ function renderContinuousScatterViaRenderer(
     const rangeSamplesFor = (p: LinearProjectedGroup) => {
       const lo = p.min ?? p.whiskerLow;
       const hi = p.max ?? p.whiskerHigh;
-      return curveSamples.filter((s) => s.exposure >= lo && s.exposure <= hi);
+      return samplesForGroup(p.groupId).filter((s) => s.exposure >= lo && s.exposure <= hi);
     };
-    const coreSamplesFor = (p: LinearProjectedGroup) => curveSamples.filter((s) => s.exposure >= p.q1 && s.exposure <= p.q3);
+    const coreSamplesFor = (p: LinearProjectedGroup) =>
+      samplesForGroup(p.groupId).filter((s) => s.exposure >= p.q1 && s.exposure <= p.q3);
 
     projected.forEach((p, i) => {
       layers.push(new ConfidenceRibbonLayer({ id: `proj-band-${i}`, samples: rangeSamplesFor(p), color: p.color, opacity: 0.1 }));
@@ -1999,13 +2014,15 @@ function renderContinuousScatterViaRenderer(
       layers.push(new FitLayer({ id: `proj-core-${i}`, samples: coreSamplesFor(p), color: p.color, dash: null, strokeWidth: 3.8, opacity: 0.98 }));
     });
 
-    layers.push(
-      new DoseProjectionLayer({
-        id: "projection-markers",
-        curveSamples,
-        groups: projected.map((p) => ({ color: p.color, q1: p.q1, q3: p.q3, median: p.median, min: p.min, max: p.max }))
-      })
-    );
+    projected.forEach((p, i) => {
+      layers.push(
+        new DoseProjectionLayer({
+          id: `projection-markers-${i}`,
+          curveSamples: samplesForGroup(p.groupId),
+          groups: [{ color: p.color, q1: p.q1, q3: p.q3, median: p.median, min: p.min, max: p.max }]
+        })
+      );
+    });
 
     const observedMeanStats = projected
       .filter((p): p is LinearProjectedGroup & { observedMean: NonNullable<LinearProjectedGroup["observedMean"]> } => Boolean(p.observedMean))
@@ -3335,7 +3352,7 @@ function paintRegularScatterIntoWrap(
       colorByVariable && colorVarId && colorModel
         ? [...new Set(recordRows.map((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId)).filter(Boolean))]
         : [];
-    let levelCurves: Array<{ curve: PredictionResult; color: string }> | undefined;
+    let levelCurves: Array<{ curve: PredictionResult; color: string; level?: string }> | undefined;
     if (colorByVariable && colorVarId && colorModel && presentLevels.length) {
       const paletteLevels = colorModel.levels;
       if (spec?.fitByColor && presentLevels.length > 1) {
@@ -3346,7 +3363,8 @@ function paintRegularScatterIntoWrap(
             return [
               {
                 curve: curveFor(f.fit, f.xs, f.ys, xDomain),
-                color: variableColorForLevel(colorVarId, level, paletteLevels)
+                color: variableColorForLevel(colorVarId, level, paletteLevels),
+                level
               }
             ];
           } catch {
@@ -3357,7 +3375,11 @@ function paintRegularScatterIntoWrap(
       } else if (presentLevels.length === 1) {
         // Degenerate facet+color: the pooled curve wears the panel's level color.
         levelCurves = [
-          { curve, color: variableColorForLevel(colorVarId, presentLevels[0]!, colorModel.levels) }
+          {
+            curve,
+            color: variableColorForLevel(colorVarId, presentLevels[0]!, colorModel.levels),
+            level: presentLevels[0]!
+          }
         ];
       }
     } else if (colorSpec?.kind === "endpoints") {
@@ -3371,7 +3393,9 @@ function paintRegularScatterIntoWrap(
           const sub = recordRows.filter((i) => ds.doseLabel(i) === dose);
           try {
             const f = fitForCohort(metric, endpoint, sub);
-            return [{ curve: curveFor(f.fit, f.xs, f.ys, xDomain), color: resolveDoseColor(dose) }];
+            return [
+              { curve: curveFor(f.fit, f.xs, f.ys, xDomain), color: resolveDoseColor(dose), level: dose }
+            ];
           } catch {
             return [];
           }
@@ -3476,6 +3500,15 @@ function paintRegularScatterIntoWrap(
         spec,
         colorOverride: rowPaint.fixedColor
       });
+      // A clicked group projects ONLY onto its own level's curve: attaching the
+      // full array to every curve painted the blue group's band on the orange
+      // curve and duplicated every callout once per curve.
+      const projectedForCurve = (level: string, isFirst: boolean): ProjectedGroup[] =>
+        doseProjected.filter((g) => {
+          const { suffix } = parseDistGroupId(String(g.groupId));
+          if (!suffix || selectedEndpoints().includes(suffix as Endpoint)) return isFirst;
+          return suffix === level;
+        });
 
       const fitSeparate = !!spec?.fitByColor && levels.length > 1;
       let curves: BinaryCurveOverlay[];
@@ -3489,7 +3522,7 @@ function paintRegularScatterIntoWrap(
             curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
             color: variableColorForLevel(colorVarId, level, paletteLevels),
             dash: "",
-            projected: doseProjected
+            projected: projectedForCurve(level, built.length === 0)
           });
         }
         curves = built.length
