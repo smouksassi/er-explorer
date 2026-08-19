@@ -514,10 +514,13 @@
           <p class="field-hint">One curve per color group (covariate level or dose arm). With Endpoints color, curves are always one per endpoint. Per-arm fits over a narrow exposure range are the analyst's judgment.</p>
         </div>
         <div class="field" hidden aria-hidden="true"><label><input type="checkbox" id="advancedEndpointOverlay" /> Overlay endpoints (compare)</label></div>
-        <div class="field"><label for="advancedDistLinkage">Distribution layout</label>
+        <!-- ADR-0012: distribution layout is DERIVED — strips collapse over endpoints
+             and mirror non-endpoint facets; shared-by-column is the no-facet outcome.
+             Hidden (not removed) until the Slice E wiring cleanup. -->
+        <div class="field" hidden aria-hidden="true"><label for="advancedDistLinkage">Distribution layout</label>
           <select id="advancedDistLinkage">
             <option value="mirror_scatter_grid">Mirror scatter facets</option>
-            <option value="shared_by_x_column">Shared by exposure column (Guided default)</option>
+            <option value="shared_by_x_column">Shared by exposure column</option>
             <option value="single_pooled">Single pooled per exposure</option>
             <option value="mirror_color_only">Color-split boxplots only</option>
           </select>

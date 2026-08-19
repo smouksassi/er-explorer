@@ -117,7 +117,6 @@ import { mountViewLayoutGrid } from "./renderViewLayout";
 import {
   applyAdvancedSpecToUi,
   applyFacetSelectFromSpec,
-  linkageFromSelectValue,
   populateFacetSelectOptions,
   readAdvancedSpecFromUi
 } from "./advancedLayoutUi";
@@ -744,7 +743,9 @@ function pullAdvancedSpecFromUi(): ViewLayoutSpec {
     advancedColorByEl.value,
     advancedColorBinningEl.value,
     advancedFitByColorEl.checked,
-    linkageFromSelectValue(advancedDistLinkageEl.value),
+    // ADR-0012: distribution layout is derived (collapse over endpoints, mirror
+    // non-endpoint facets) — the linkage field is pinned, the control hidden.
+    "mirror_scatter_grid",
     advancedColorDistShapesEl.checked,
     advancedEndpointOverlayEl.checked
   );

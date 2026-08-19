@@ -149,8 +149,12 @@ describe("viewLayoutEnumerate", () => {
     };
     const scatter = enumerateScatterPanels(loaded, [], spec, input);
     expect(scatter).toHaveLength(8);
+    // ADR-0012 dedup: strips collapse over endpoints → one per (sex × metric),
+    // each linking both endpoint panels and listing both readout endpoints.
     const dist = enumerateDistPanels(spec, scatter, "icgi");
-    expect(dist).toHaveLength(8);
+    expect(dist).toHaveLength(4);
+    expect(dist.every((d) => d.scatterPanelIds.length === 2)).toBe(true);
+    expect(dist.every((d) => (d.readoutEndpointIds ?? []).length === 2)).toBe(true);
   });
 
   it("countPanelsForGuidedTopology matches endpoint-rows shared dist", () => {
@@ -186,9 +190,11 @@ describe("viewLayoutEnumerate", () => {
     expect(scatter.every((p) => !p.endpointIds || p.endpointIds.length <= 1)).toBe(true);
     const byEp = new Set(scatter.map((p) => p.endpointId));
     expect(byEp).toEqual(new Set(["icgi", "icgi2"]));
+    // ADR-0012 dedup: one strip per metric, spanning both endpoint columns.
     const dist = enumerateDistPanels(spec, scatter, "icgi", ["icgi", "icgi2"], 2);
-    expect(dist).toHaveLength(4);
-    expect(new Set(dist.map((d) => d.readoutEndpointId))).toEqual(new Set(["icgi", "icgi2"]));
+    expect(dist).toHaveLength(2);
+    expect(new Set(dist.map((d) => d.xVariableId))).toEqual(new Set(["auc", "cmax"]));
+    expect(dist.every((d) => (d.readoutEndpointIds ?? []).length === 2)).toBe(true);
   });
 
   it("advanced color endpoints cols=x only uses facet grid with multi-curve cells", () => {

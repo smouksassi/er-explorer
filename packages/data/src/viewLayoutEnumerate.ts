@@ -7,7 +7,7 @@ import type {
   ScatterPanelSpec,
   ViewLayoutSpec
 } from "@er-explorer/domain";
-import { distEndpointColorSplit, isGuidedCompareTopology, panelEndpointMode } from "@er-explorer/domain";
+import { isGuidedCompareTopology, panelEndpointMode } from "@er-explorer/domain";
 import { getColumn, type LoadedDataset } from "./loadedDataset";
 import { isMissing } from "./rawValue";
 import { selectRecordIndices } from "./filters";
@@ -240,24 +240,20 @@ function facetKeyMatchesSubset(full: FacetKey, subset: FacetKey): boolean {
   return true;
 }
 
-function collapseKeyForLinkage(
-  panel: ScatterPanelSpec,
-  linkage: DistributionLinkage,
-  scatterPanels: ScatterPanelSpec[]
-): string {
-  const fk = panel.facetKey;
-  switch (linkage) {
-    case "mirror_scatter_grid":
-      return panel.id;
-    case "shared_by_x_column":
-      return `x=${panel.xVariableId}`;
-    case "single_pooled":
-      return `x=${panel.xVariableId}|pooled`;
-    case "mirror_color_only":
-      return `x=${panel.xVariableId}|colorMirror`;
-    default:
-      return panel.id;
-  }
+/**
+ * ADR-0012 dist dedup: the strip describes exposure of a cohort — it varies by
+ * facet slice (and color split) but NOT by endpoint, so per-endpoint mirror
+ * strips are exact duplicates by construction. Dist cells collapse over the
+ * endpoint dimension and keep every non-endpoint facet slice. This replaces the
+ * user-facing "distribution layout" linkage choice: shared-by-column is now the
+ * derived outcome when no non-endpoint facets exist.
+ */
+function distCollapseKey(panel: ScatterPanelSpec): string {
+  const parts = Object.keys(panel.facetKey)
+    .filter((k) => k !== "endpoint" && k !== "xMetric")
+    .sort()
+    .map((k) => `${k}=${panel.facetKey[k]}`);
+  return [`x=${panel.xVariableId}`, ...parts].join("|");
 }
 
 /**
@@ -270,7 +266,6 @@ export function enumerateDistPanels(
   readoutEndpointIds?: string[],
   selectedEndpointCount?: number
 ): DistPanelSpec[] {
-  const linkage = spec.distribution.linkage;
   const groups = new Map<
     string,
     {
@@ -279,25 +274,24 @@ export function enumerateDistPanels(
       rowIndices: number[];
       scatterPanelIds: string[];
       readoutEndpointId: string;
+      endpointIds: string[];
     }
   >();
 
   for (const panel of scatterPanels) {
-    const key = collapseKeyForLinkage(panel, linkage, scatterPanels);
+    const key = distCollapseKey(panel);
     let existing = groups.get(key);
     if (!existing) {
-      let facetKey: FacetKey;
-      if (linkage === "mirror_scatter_grid") facetKey = { ...panel.facetKey };
-      else if (linkage === "shared_by_x_column" || linkage === "single_pooled" || linkage === "mirror_color_only") {
-        facetKey = { xMetric: panel.xVariableId };
-      } else facetKey = { ...panel.facetKey };
-
+      const facetKey: FacetKey = { ...panel.facetKey };
+      delete facetKey.endpoint;
+      facetKey.xMetric = panel.xVariableId;
       existing = {
         facetKey,
         xVariableId: panel.xVariableId,
         rowIndices: [],
         scatterPanelIds: [],
-        readoutEndpointId: panel.endpointId
+        readoutEndpointId: panel.endpointId,
+        endpointIds: []
       };
       groups.set(key, existing);
     }
@@ -305,11 +299,11 @@ export function enumerateDistPanels(
     for (const i of panel.rowIndices) indexSet.add(i);
     existing.rowIndices = [...indexSet];
     existing.scatterPanelIds.push(panel.id);
+    for (const ep of panel.endpointIds ?? [panel.endpointId]) {
+      if (ep && !existing.endpointIds.includes(ep)) existing.endpointIds.push(ep);
+    }
   }
 
-  const epCount = selectedEndpointCount ?? readoutEndpointIds?.length ?? 1;
-  const splitReadouts =
-    isGuidedCompareTopology(spec) || distEndpointColorSplit(spec, epCount) ? readoutEndpointIds : undefined;
   const distPanels: DistPanelSpec[] = [];
   for (const [key, g] of groups) {
     distPanels.push({
@@ -317,7 +311,9 @@ export function enumerateDistPanels(
       facetKey: g.facetKey,
       xVariableId: g.xVariableId,
       readoutEndpointId: g.readoutEndpointId || readoutEndpointId,
-      readoutEndpointIds: splitReadouts,
+      // Every endpoint sharing the strip: the readout lists a fit line per
+      // endpoint; row shapes stay endpoint-agnostic (one-channel rule).
+      readoutEndpointIds: g.endpointIds.length > 1 ? g.endpointIds : readoutEndpointIds,
       rowIndices: g.rowIndices,
       scatterPanelIds: g.scatterPanelIds
     });
@@ -325,7 +321,9 @@ export function enumerateDistPanels(
   return distPanels;
 }
 
-/** Expected scatter/dist counts for Guided parity tests. */
+/** Expected scatter/dist counts for Guided parity tests. Dist cells collapse over
+ * endpoints (ADR-0012 dedup), so with no variable facets there is exactly one
+ * strip per exposure metric regardless of endpoint count or linkage. */
 export function countPanelsForGuidedTopology(opts: {
   endpointCount: number;
   xMetricCount: number;
@@ -333,24 +331,10 @@ export function countPanelsForGuidedTopology(opts: {
   exposureRows: boolean;
   distLinkage: DistributionLinkage;
 }): { scatter: number; dist: number } {
-  const { endpointCount, xMetricCount, compareEndpoints, exposureRows, distLinkage } = opts;
-  if (compareEndpoints) {
-    const scatter = xMetricCount;
-    const dist =
-      distLinkage === "mirror_scatter_grid" ? xMetricCount * endpointCount : xMetricCount;
-    return { scatter, dist };
-  }
-  if (exposureRows) {
-    const scatter = xMetricCount * endpointCount;
-    const dist = distLinkage === "mirror_scatter_grid" ? scatter : xMetricCount * endpointCount;
-    return { scatter, dist };
-  }
-  const scatter = endpointCount * xMetricCount;
-  let dist: number;
-  if (distLinkage === "shared_by_x_column") dist = xMetricCount;
-  else if (distLinkage === "mirror_scatter_grid") dist = scatter;
-  else dist = xMetricCount;
-  return { scatter, dist };
+  const { endpointCount, xMetricCount, compareEndpoints, exposureRows } = opts;
+  const scatter = compareEndpoints ? xMetricCount : endpointCount * xMetricCount;
+  void exposureRows;
+  return { scatter, dist: xMetricCount };
 }
 
 export { facetKeyMatchesSubset };

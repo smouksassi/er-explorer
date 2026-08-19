@@ -270,6 +270,18 @@ async function run() {
     if (overlayText > 0) fail("Advanced should not show ENDPOINTS OVERLAID banner");
     ok("no legacy overlay banner");
 
+    // ADR-0012 dedup: strips collapse over endpoints — with endpoints as the only
+    // row facet there must be exactly ONE dist strip per exposure metric, never
+    // one per endpoint row (the duplicated-stacked-strips bug).
+    const distStackMetrics = await page.$$eval(".metric-stack-dist-only", (els) =>
+      els.map((e) => e.getAttribute("data-metric"))
+    );
+    const uniqDistMetrics = [...new Set(distStackMetrics)];
+    if (distStackMetrics.length !== uniqDistMetrics.length) {
+      fail(`dist strips must collapse over endpoints: ${distStackMetrics.length} strips for metrics ${uniqDistMetrics.join(", ")}`);
+    }
+    ok(`dist strips deduped over endpoints (${distStackMetrics.length} strip(s): ${uniqDistMetrics.join(", ")})`);
+
     console.log("\n4) Advanced — color by sex + split dist → click row → readout/projections");
     await openStyleDrawer(page);
     const sexValue = await page.evaluate(() => {

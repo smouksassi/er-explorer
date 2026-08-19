@@ -120,8 +120,19 @@ function sortDistPanelsByScatterColumns(
   });
 }
 
-function distUsesSharedGridClass(spec: ViewLayoutSpec): boolean {
-  return spec.distribution.linkage === "shared_by_x_column" && !isGuidedCompareTopology(spec);
+/**
+ * Row-slice key for a dist panel: the non-endpoint row facet parts (ADR-0012 —
+ * strips collapse over endpoints, so endpoint row dims contribute nothing).
+ * "" = every dist panel shares one grid (the derived shared-by-column layout).
+ */
+function distRowKey(panel: DistPanelSpec, spec: ViewLayoutSpec): string {
+  const parts: string[] = [];
+  for (const dim of spec.rowDimensions) {
+    if (dim.kind === "endpoints") continue;
+    if (dim.kind === "xMetrics") parts.push(`x:${panel.xVariableId}`);
+    else parts.push(`${dim.variableId}:${panel.facetKey[dim.variableId] ?? ""}`);
+  }
+  return parts.join("\0");
 }
 
 /**
@@ -158,7 +169,7 @@ export function mountViewLayoutGrid(
     }
 
     const distGrid = document.createElement("div");
-    distGrid.className = `panel-grid${distUsesSharedGridClass(spec) ? " facet-shared-dist-grid" : ""}`;
+    distGrid.className = "panel-grid facet-shared-dist-grid";
     for (const dp of distPanels) {
       opts.appendDistCell(distGrid, dp);
     }
@@ -210,11 +221,6 @@ export function mountViewLayoutGrid(
     distBlock.appendChild(distGrid);
   };
 
-  const mirrorDistByScatterRow =
-    spec.distribution.linkage === "mirror_scatter_grid" &&
-    rowKeys.length > 1 &&
-    !(rowKeys.length === 1 && rowKeys[0] === "all");
-
   if (stacked) {
     for (const key of rowKeys) {
       const stripPanels = rowGroups.get(key)!;
@@ -244,21 +250,28 @@ export function mountViewLayoutGrid(
     }
   }
 
-  if (distUsesSharedGridClass(spec)) {
-    const xOrder =
-      spec.colDimensions.find((d) => d.kind === "xMetrics")?.order ?? [...new Set(distPanels.map((d) => d.xVariableId))];
-    const byX = new Map(distPanels.map((d) => [d.xVariableId, d]));
-    const ordered = xOrder.map((x) => byX.get(x)).filter((d): d is DistPanelSpec => !!d);
-    mountDistGrid(distBlock, ordered.length ? ordered : distPanels, true, scatterPanels);
-  } else if (mirrorDistByScatterRow) {
-    for (const key of rowKeys) {
-      const stripPanels = rowGroups.get(key)!;
-      const stripScatterIds = new Set(stripPanels.map((p) => p.id));
-      const stripDist = distPanels.filter((d) => d.scatterPanelIds.some((id) => stripScatterIds.has(id)));
-      mountDistGrid(distBlock, stripDist, false, stripPanels);
+  // One dist grid per non-endpoint row slice (ADR-0012 dedup): strips collapsed
+  // over endpoints mount exactly once, in scatter row order; with no non-endpoint
+  // row dims everything shares a single grid (the derived shared-by-column look).
+  const distRowKeys: string[] = [];
+  const distByRowKey = new Map<string, DistPanelSpec[]>();
+  for (const dp of distPanels) {
+    const key = distRowKey(dp, spec);
+    if (!distByRowKey.has(key)) {
+      distByRowKey.set(key, []);
+      distRowKeys.push(key);
     }
+    distByRowKey.get(key)!.push(dp);
+  }
+  if (distRowKeys.length <= 1) {
+    mountDistGrid(distBlock, distPanels, distPanels.length > 1, scatterPanels);
   } else {
-    mountDistGrid(distBlock, distPanels, false, scatterPanels);
+    for (const key of distRowKeys) {
+      const stripDist = distByRowKey.get(key)!;
+      const stripScatterIds = new Set(stripDist.flatMap((d) => d.scatterPanelIds));
+      const refPanels = scatterPanels.filter((p) => stripScatterIds.has(p.id));
+      mountDistGrid(distBlock, stripDist, false, refPanels.length ? refPanels : scatterPanels);
+    }
   }
 
   opts.attachFacetLayoutSplitter(facet);
