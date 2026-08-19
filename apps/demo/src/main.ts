@@ -2812,13 +2812,26 @@ function appendComparePanelCell(grid: HTMLElement, panel: ScatterPanelSpec): voi
 
 function appendDistPanelCell(grid: HTMLElement, panel: DistPanelSpec): void {
   const spec = activeViewLayoutSpec;
-  const scatterPanel = panel.scatterPanelIds[0] ? scatterPanelById.get(panel.scatterPanelIds[0]) : undefined;
   const cell = document.createElement("div");
   cell.className = "panel-cell panel-cell-dist";
   const title = document.createElement("div");
   title.className = "panel-cell-title";
-  if (spec && scatterPanel) {
-    title.textContent = columnTitleForPanel(scatterPanel, spec);
+  // Title from the dist panel's OWN facet key: the strip collapses over
+  // endpoints (ADR-0012 dedup), so naming the first linked scatter panel's
+  // endpoint would claim an endpoint the strip does not belong to.
+  if (spec) {
+    const parts = spec.colDimensions
+      .filter((dim) => dim.kind !== "endpoints")
+      .map((dim) =>
+        dim.kind === "xMetrics"
+          ? exposureLabel(panel.xVariableId)
+          : (() => {
+              const raw = panel.facetKey[dim.variableId];
+              const name = covariateLabel(dim.variableId);
+              return raw != null && String(raw).length ? `${name}: ${raw}` : name;
+            })()
+      );
+    title.textContent = parts.length ? parts.join(" · ") : exposureLabel(panel.xVariableId);
   } else {
     title.textContent = exposureLabel(panel.xVariableId);
   }
