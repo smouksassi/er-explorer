@@ -109,6 +109,7 @@ export type {
 } from "./cellContext";
 export { resolveCellContext } from "./cellContext";
 export type { DistGroupRef, ViewSelection } from "./viewSelection";
+export type { EndpointFamilyAdapter, ObservedGroupSummary } from "./endpointFamily";
 export {
   emptyViewSelection,
   formatDistGroupId,

@@ -85,6 +85,7 @@ import {
   type ViewSelection
 } from "@er-explorer/domain";
 import { policyForLayoutChrome } from "./layout/resolvePanelStyle";
+import { linearFamily, logisticFamily } from "./endpointFamilies";
 import {
   type ByodSessionPayload,
   buildByodPayload,
@@ -4427,12 +4428,10 @@ function updateReadout(
       const fitResult = tryFitForCohort(metric, endpoint, fitRows);
       if (!fitResult) continue;
       const fit = fitResult.fit;
-      const continuous = isContinuousEndpoint(endpoint);
-      const decimals = continuous ? 1 : 3;
-      const fitAt = (x: number) =>
-        fit.kind === "linear"
-          ? fit.model.intercept + fit.model.slope * x
-          : 1 / (1 + Math.exp(-(fit.model.intercept + fit.model.slope * x)));
+      // ADR-0013: family math via the adapter — no family branching in pipelines.
+      const family = fit.kind === "linear" ? linearFamily : logisticFamily;
+      const decimals = family.readoutDecimals;
+      const fitAt = (x: number) => family.fittedAt(fit.model as never, x);
       const lineColor = spec?.color.kind === "endpoints" ? endpointColor(endpoint) : groupColor;
       const lineLabel = lineEndpoints.length > 1 || endpoints.length > 1 ? ds.endpointLabel(endpoint) : label;
       const endpointN = rows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).length;
