@@ -3363,9 +3363,13 @@ function paintRegularScatterIntoWrap(
 
     // ADR-0012 curve groups: continuous endpoints fit per color level like every
     // other model family (this was the "BRLS not fit separately by sex" gap).
+    // Canonical model order (I1), never row-iteration order (same defect as the
+    // binary branch: Set-insertion order varies per panel cohort).
     const presentLevels =
       colorByVariable && colorVarId && colorModel
-        ? [...new Set(recordRows.map((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId)).filter(Boolean))]
+        ? colorModel.levels.filter((l) =>
+            recordRows.some((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === l)
+          )
         : [];
     let levelCurves: Array<{ curve: PredictionResult; color: string; level?: string }> | undefined;
     if (colorByVariable && colorVarId && colorModel && presentLevels.length) {
@@ -3505,7 +3509,12 @@ function paintRegularScatterIntoWrap(
     const refLines = computeDisplayReferenceLines(metric, endpoint, cohort);
     if (colorByVariable && colorVarId && colorModel) {
       const paletteLevels = colorModel.levels;
-      const levels = [...new Set(recordRows.map((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId)).filter(Boolean))];
+      // Canonical model order (I1), never row-iteration order: Set-insertion order
+      // made "first curve" differ per panel (blue hosted the projection on the
+      // left, orange on the right).
+      const levels = paletteLevels.filter((l) =>
+        recordRows.some((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === l)
+      );
       const pointColors: Record<string | number, string> = {};
       for (const level of levels) pointColors[level] = variableColorForLevel(colorVarId, level, paletteLevels);
 
@@ -3515,14 +3524,16 @@ function paintRegularScatterIntoWrap(
         spec,
         colorOverride: rowPaint.fixedColor
       });
-      // A clicked group projects ONLY onto its own level's curve: attaching the
-      // full array to every curve painted the blue group's band on the orange
-      // curve and duplicated every callout once per curve.
+      // Level groups project ONLY onto their own level's curve. A pooled-arm
+      // (plain dose) group has no single curve: its exposure window renders on
+      // EVERY curve — same x, per-curve y, the reference-split rule — in neutral
+      // (matching the pooled strip row), with the observed callout drawn once.
       const projectedForCurve = (level: string, isFirst: boolean): ProjectedGroup[] =>
-        doseProjected.filter((g) => {
+        doseProjected.flatMap((g) => {
           const { suffix } = parseDistGroupId(String(g.groupId));
-          if (!suffix || selectedEndpoints().includes(suffix as Endpoint)) return isFirst;
-          return suffix === level;
+          const isLevelGroup = !!suffix && !selectedEndpoints().includes(suffix as Endpoint);
+          if (isLevelGroup) return suffix === level ? [g] : [];
+          return [isFirst ? g : { ...g, observed: undefined, observedMean: undefined }];
         });
 
       const fitSeparate = !!spec?.fitByColor && levels.length > 1;
