@@ -1231,6 +1231,32 @@ function distGroupIdsForProjections(endpoint: Endpoint): string[] {
   return [];
 }
 
+/**
+ * Granularity rule (ADR-0012/0013): projections resolve at the panel's CURVE
+ * granularity. With per-level curves (fitByColor + covariate channel), a pooled
+ * dose selection expands to dose×level groups — each on its own curve with its
+ * own color and stats. A pooled window never rides a level curve; empty groups
+ * drop out via the stats guard downstream.
+ */
+function projectionGidsAtCurveGranularity(
+  gids: string[],
+  spec: ViewLayoutSpec | null,
+  colorModel: ColorBinModel | null
+): string[] {
+  const splitCurves =
+    !!spec?.fitByColor && spec.color.kind === "variable" && !!colorModel && colorModel.levels.length > 1;
+  if (!splitCurves) return gids;
+  return [
+    ...new Set(
+      gids.flatMap((gid) => {
+        const { dose, suffix } = parseDistGroupId(gid);
+        if (suffix && !selectedEndpoints().includes(suffix as Endpoint)) return [gid];
+        return colorModel!.levels.map((level) => `${dose}|${level}`);
+      })
+    )
+  ];
+}
+
 function rowsForDistGroupId(
   gid: string,
   active: Set<number>,
@@ -1324,7 +1350,7 @@ function projectedGroupsForDistSelection(
       ? { variableId: spec.color.variableId, model: colorModel }
       : undefined;
 
-  const gids = distGroupIdsForProjections(endpoint);
+  const gids = projectionGidsAtCurveGranularity(distGroupIdsForProjections(endpoint), spec ?? null, colorModel);
   const out: ProjectedGroup[] = [];
   for (const gid of gids) {
     // Endpoint-finite rows only (same as the linear twin): the band and x/N must
@@ -1374,7 +1400,7 @@ function projectedLinearGroupsForDistSelection(
       ? { variableId: spec.color.variableId, model: colorModel }
       : undefined;
 
-  const gids = distGroupIdsForProjections(endpoint);
+  const gids = projectionGidsAtCurveGranularity(distGroupIdsForProjections(endpoint), spec ?? null, colorModel);
   const out: LinearProjectedGroup[] = [];
   for (const gid of gids) {
     const rows = rowsForDistGroupId(gid, active, cohortRowIndices, endpoint, colorCtx).filter((i) =>
@@ -1944,11 +1970,15 @@ function renderContinuousScatterViaRenderer(
     : [{ samples: toCurveSamples(curve), color: "#64748b", band: "#94a3b8", level: undefined as string | undefined }];
   const allSamples = curveOverlays.flatMap((c) => c.samples);
   const curveSamples = curveOverlays[0]!.samples;
-  // A clicked group projects onto ITS OWN level's curve; groups without a level
-  // suffix (whole-dose clicks) fall back to the first curve.
+  // A clicked group projects onto ITS OWN curve: level-suffixed groups match
+  // level curves; plain dose groups match per-arm curves (level = dose). The
+  // granularity rule (projections resolve at curve granularity) guarantees a
+  // match whenever curves are split; single pooled curve is the only fallback.
   const samplesForGroup = (groupId: string | number) => {
-    const { suffix } = parseDistGroupId(String(groupId));
-    const match = suffix ? curveOverlays.find((c) => c.level === suffix) : undefined;
+    const { dose, suffix } = parseDistGroupId(String(groupId));
+    const match =
+      (suffix ? curveOverlays.find((c) => c.level === suffix) : undefined) ??
+      curveOverlays.find((c) => c.level === dose);
     return (match ?? curveOverlays[0]!).samples;
   };
   const yDomain = computeContinuousYDomain(points, allSamples);
@@ -3285,69 +3315,21 @@ function paintRegularScatterIntoWrap(
           ? () => endpointColor(endpoint)
           : undefined;
 
-    const groupStats: Record<
-      string,
-      {
-        q1: number;
-        q3: number;
-        median: number;
-        whiskerLow: number;
-        whiskerHigh: number;
-        min: number;
-        max: number;
-        n: number;
-        observedSummary?: ObservedGroupSummary;
-      }
-    > = {};
-    // Projection stats on the PANEL cohort (ADR-0012): the projected band must
-    // span the same rows as the facet-filtered boxplot the user clicked.
-    const cohortSet = new Set(cohort);
-    for (const dose of DOSE_ORDER()) {
-      const doseRecords = recordsWithEndpoint(endpoint).filter(
-        (i) => cohortSet.has(i) && active.has(ds.patientId(i)) && ds.doseLabel(i) === dose
-      );
-      const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
-      if (!vals.length) continue;
-      const s = summarizeDistribution(vals);
-      if (!s) continue;
-      groupStats[dose] = {
-        q1: s.q1,
-        q3: s.q3,
-        median: s.median,
-        whiskerLow: s.whiskerLow,
-        whiskerHigh: s.whiskerHigh,
-        min: s.min,
-        max: s.max,
-        n: vals.length,
-        observedSummary:
-          observedFamilyFor(endpoint).observedSummary(doseRecords.map((i) => endpointValue(i, endpoint))) ??
-          undefined
-      };
-    }
 
-    // Projection follows the CLICKED dist row (one color channel + one cohort):
-    // split-row clicks resolve their own rows/stats/color via the shared
-    // selection pipeline; whole-dose clicks use the panel-cohort dose stats with
-    // the strip row's paint.
+    // ONE projection pipeline (ADR-0012/0013): every selection — split row or
+    // pooled dose — resolves through the shared dist-selection path (rows =
+    // clicked group ∩ panel cohort; color via colorForDistGroupId under the
+    // one-channel law; pooled selections expand to curve granularity). The old
+    // dose-branch mapping fell through to resolveDoseColor under split strips —
+    // the recurring "magenta vestigial".
     const rowPaint = resolveDoseRowPaint(spec ?? null, panel);
-    const projected: LinearProjectedGroup[] = state.selectedDistGroupIds.size
-      ? projectedLinearGroupsForDistSelection(metric, endpoint, active, cohort, {
-          spec,
-          colorOverride: rowPaint.fixedColor
-        })
-      : [...selectedDosesForEndpoint(endpoint)]
-          .filter((dose) => groupStats[dose])
-          .map((dose) => {
-            const { observedSummary, ...rest } = groupStats[dose]!;
-            const accent =
-              rowPaint.fixedColor ?? (rowPaint.neutral ? DOSE_SELECTION_NEUTRAL : resolveDoseColor(dose));
-            return {
-              groupId: dose,
-              color: accent,
-              ...rest,
-              observedSummary: state.showDoseObserved ? observedSummary : undefined
-            };
-          });
+    const projected: LinearProjectedGroup[] = projectedLinearGroupsForDistSelection(
+      metric,
+      endpoint,
+      active,
+      cohort,
+      { spec, colorOverride: rowPaint.fixedColor }
+    );
 
     scatterResult = renderContinuousScatterViaRenderer(
       points,
@@ -3381,17 +3363,11 @@ function paintRegularScatterIntoWrap(
         spec,
         colorOverride: rowPaint.fixedColor
       });
-      // Level groups project ONLY onto their own level's curve. A pooled-arm
-      // (plain dose) group has no single curve: its exposure window renders on
-      // EVERY curve — same x, per-curve y, the reference-split rule — in neutral
-      // (matching the pooled strip row), with the observed callout drawn once.
-      const projectedForCurve = (level: string, isFirst: boolean): ProjectedGroup[] =>
-        doseProjected.flatMap((g) => {
-          const { suffix } = parseDistGroupId(String(g.groupId));
-          const isLevelGroup = !!suffix && !selectedEndpoints().includes(suffix as Endpoint);
-          if (isLevelGroup) return suffix === level ? [g] : [];
-          return [isFirst ? g : { ...g, observedSummary: undefined }];
-        });
+      // Granularity rule: with split curves every projected group is level-scoped
+      // (pooled selections were expanded upstream), so association is strict —
+      // a group renders only on its own level's curve. No pooled hosting.
+      const projectedForCurve = (level: string): ProjectedGroup[] =>
+        doseProjected.filter((g) => parseDistGroupId(String(g.groupId)).suffix === level);
 
       const fitSeparate = !!spec?.fitByColor && levels.length > 1;
       let curves: BinaryCurveOverlay[];
@@ -3405,7 +3381,7 @@ function paintRegularScatterIntoWrap(
             curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
             color: variableColorForLevel(colorVarId, level, paletteLevels),
             dash: "",
-            projected: projectedForCurve(level, built.length === 0)
+            projected: projectedForCurve(level)
           });
         }
         curves = built.length
@@ -3508,7 +3484,8 @@ function paintRegularScatterIntoWrap(
                   curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
                   color: resolveDoseColor(dose),
                   dash: "",
-                  projected
+                  // Granularity rule: an arm's projection rides only its own arm curve.
+                  projected: projected.filter((p) => parseDistGroupId(String(p.groupId)).dose === dose)
                 }
               ]
             : [];
