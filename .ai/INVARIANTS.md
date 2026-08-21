@@ -129,3 +129,24 @@ not a manual QA question.
 Related: [`ENCODING_V2_RETHINK.md`](./ENCODING_V2_RETHINK.md) (design record),
 `docs/DECISIONS.md` ADR-0012 (grammar) and ADR-0013 (family adapters),
 [`CONTINUE_HERE.md`](./CONTINUE_HERE.md) (slice progress).
+
+## I8 — Projection granularity rule (QA round 11, "once and for all")
+
+**Rule:** a projection resolves to groups at the panel's CURVE granularity.
+Split curves (fit-per-level / fit-per-arm) → a pooled dose selection expands to
+`dose×level` (or per-arm) groups, each on its own curve with its own color and
+stats. Pooled curve → pooled group. A pooled window NEVER rides a split curve,
+and no projection color is ever decided outside `colorForDistGroupId`.
+
+**Bug history:** pooled-window-on-every-curve existed for binary only (I7
+violation — BRLS showed nothing on the orange curve); "first curve" hosting
+flipped per panel; the continuous dose-branch mapping fell through to
+`resolveDoseColor` under split strips — the thrice-recurring "magenta vestigial".
+
+**Guard:** `projectionGidsAtCurveGranularity` (the only expansion point) inside
+the two dist-selection functions; strict level↔curve association in both
+renderers (`projectedForCurve(level)`, `samplesForGroup` level/dose match); the
+dose-branch fallback mappings are DELETED — every selection routes through the
+one dist-selection pipeline. **Prevention:** any new projection source that maps
+`selectedDoses` directly to colors/stats without `rowsForDistGroupId` +
+`colorForDistGroupId` is a violation.
