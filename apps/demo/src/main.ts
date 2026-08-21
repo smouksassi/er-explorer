@@ -81,11 +81,19 @@ import {
   resolveLegendShowsEndpoints,
   resolveOverlayCohortPolicy,
   resolvePanelVisualPolicy,
+  type ObservedGroupSummary,
   type OverlayCohortPolicy,
   type ViewSelection
 } from "@er-explorer/domain";
 import { policyForLayoutChrome } from "./layout/resolvePanelStyle";
 import { linearFamily, logisticFamily } from "./endpointFamilies";
+
+/** Observed summaries are endpoint-TYPE driven (user decision 4a): a binary
+ * endpoint reports x/N even under a smoother fit. Fitted math keys off the
+ * fitted model's own kind instead. */
+function observedFamilyFor(endpoint: Endpoint) {
+  return isContinuousEndpoint(endpoint) ? linearFamily : logisticFamily;
+}
 import {
   type ByodSessionPayload,
   buildByodPayload,
@@ -141,6 +149,9 @@ interface ScatterPoint {
   selected?: boolean;
 }
 
+/** ADR-0013: one projected-group shape for every model family. The observed
+ * summary is produced by the endpoint-TYPE family adapter (x/N Wilson for
+ * binary, mean±CI for continuous) — consumers never branch on family. */
 interface ProjectedGroup {
   groupId: string | number;
   color: string;
@@ -151,29 +162,11 @@ interface ProjectedGroup {
   whiskerHigh: number;
   min?: number;
   max?: number;
-  observed?: { proportion: number; ciLower: number; ciUpper: number; n: number; responders: number };
-  observedMean?: {
-    mean: number;
-    ciLower: number;
-    ciUpper: number;
-    n: number;
-    primaryLabel?: string;
-    secondaryLabel?: string;
-  };
+  observedSummary?: ObservedGroupSummary;
 }
 
-interface LinearProjectedGroup {
-  groupId: string | number;
-  color: string;
-  q1: number;
-  median: number;
-  q3: number;
-  whiskerLow: number;
-  whiskerHigh: number;
-  min?: number;
-  max?: number;
-  observedMean?: { mean: number; ciLower: number; ciUpper: number; n: number };
-}
+/** @deprecated ADR-0013 unified the shapes — alias kept while call sites migrate. */
+type LinearProjectedGroup = ProjectedGroup;
 
 interface ObservedResponseBin {
   x: number;
@@ -1284,8 +1277,8 @@ function computeBinaryStatsFromRows(
   if (!vals.length) return null;
   const s = summarizeDistribution(vals);
   if (!s) return null;
-  const responders = rows.filter((i) => endpointValue(i, endpoint) === 1).length;
-  const ci = wilsonScoreInterval(responders, rows.length);
+  const observedSummary =
+    observedFamilyFor(endpoint).observedSummary(rows.map((i) => endpointValue(i, endpoint))) ?? undefined;
   return {
     q1: s.q1,
     q3: s.q3,
@@ -1295,7 +1288,7 @@ function computeBinaryStatsFromRows(
     min: s.min,
     max: s.max,
     n: vals.length,
-    observed: { proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper, n: rows.length, responders }
+    observedSummary
   };
 }
 
@@ -1354,12 +1347,12 @@ function projectedGroupsForDistSelection(
     );
     const stats = computeBinaryStatsFromRows(rows, metric, endpoint);
     if (!stats) continue;
-    const { observed, ...rest } = stats;
+    const { observedSummary, ...rest } = stats;
     out.push({
       groupId: gid,
       color: colorForDistGroupId(gid, endpoint, spec, colorModel, opts?.colorOverride),
       ...rest,
-      observed: state.showDoseObserved ? observed : undefined
+      observedSummary: state.showDoseObserved ? observedSummary : undefined
     });
   }
   return out;
@@ -1406,7 +1399,7 @@ function projectedLinearGroupsForDistSelection(
       .sort((a, b) => a - b);
     const s = summarizeDistribution(vals);
     if (!s) continue;
-    const mci = meanConfidenceInterval(rows.map((i) => endpointValue(i, endpoint)));
+    const summary = observedFamilyFor(endpoint).observedSummary(rows.map((i) => endpointValue(i, endpoint)));
     out.push({
       groupId: gid,
       color: colorForDistGroupId(gid, endpoint, spec, colorModel, opts?.colorOverride),
@@ -1417,9 +1410,7 @@ function projectedLinearGroupsForDistSelection(
       whiskerHigh: s.whiskerHigh,
       min: s.min,
       max: s.max,
-      observedMean: state.showDoseObserved
-        ? { mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n }
-        : undefined
+      observedSummary: state.showDoseObserved ? summary ?? undefined : undefined
     });
   }
   return out;
@@ -2026,27 +2017,27 @@ function renderContinuousScatterViaRenderer(
       );
     });
 
-    const observedMeanStats = projected
-      .filter((p): p is LinearProjectedGroup & { observedMean: NonNullable<LinearProjectedGroup["observedMean"]> } => Boolean(p.observedMean))
+    // ADR-0013: labels come from the family adapter's summary — no family
+    // branching here. Capital N = the clicked group's own observed count.
+    const observedStats = projected
+      .filter((p): p is ProjectedGroup & { observedSummary: ObservedGroupSummary } => Boolean(p.observedSummary))
       .map((p) => ({
         x: p.median,
-        center: p.observedMean.mean,
-        lower: p.observedMean.ciLower,
-        upper: p.observedMean.ciUpper,
-        n: p.observedMean.n,
-        primaryLabel: p.observedMean.mean.toFixed(1),
-        // Capital N - this is the clicked dose's own total observed count, not a quartile-bin
-        // sub-count (see computeSplitAnnotations' "n=" for that).
-        secondaryLabel: `N=${p.observedMean.n} · @ ${formatExposureForReadout(p.median)}`,
+        center: p.observedSummary.center,
+        lower: p.observedSummary.lower,
+        upper: p.observedSummary.upper,
+        n: p.observedSummary.n,
+        primaryLabel: p.observedSummary.primaryLabel,
+        secondaryLabel: `N=${p.observedSummary.n} · @ ${formatExposureForReadout(p.median)}`,
         color: p.color,
         tooltip: observedMarkerTooltip(
           exposureLabel(metric),
           p.median,
-          `Observed mean ${p.observedMean.mean.toFixed(1)}`,
-          `95% CI · N=${p.observedMean.n}`
+          `Observed ${p.observedSummary.primaryLabel} (${p.observedSummary.secondaryLabel})`,
+          `95% CI · N=${p.observedSummary.n}`
         )
       }));
-    if (observedMeanStats.length) layers.push(new ObservedStatLayer({ id: "projection-observed", bins: observedMeanStats }));
+    if (observedStats.length) layers.push(new ObservedStatLayer({ id: "projection-observed", bins: observedStats }));
   }
 
   if (referenceLines.length) {
@@ -2216,44 +2207,28 @@ function renderBinaryScatterOverlay(
       })
     );
 
+    // ADR-0013: ONE observed block for every family — values, CI, and labels come
+    // from the adapter's summary (x/N Wilson, mean±CI, later P(Y≥k)). The former
+    // binary/continuous twin blocks branched on shape; consumers no longer may.
     const observedStats = projected
-      .filter((p): p is ProjectedGroup & { observed: NonNullable<ProjectedGroup["observed"]> } => Boolean(p.observed))
-      .map((p) => {
-        const pct = Math.round(p.observed.proportion * 100);
-        return {
-          x: p.median,
-          center: p.observed.proportion,
-          lower: p.observed.ciLower,
-          upper: p.observed.ciUpper,
-          n: p.observed.n,
-          primaryLabel: `${pct}%`,
-          secondaryLabel: `${p.observed.responders}/${p.observed.n} · @ ${formatExposureForReadout(p.median)}`,
-          color: p.color,
-          tooltip: observedMarkerTooltip(
-            xAxisLabel,
-            p.median,
-            `${pct}% observed (${p.observed.responders}/${p.observed.n})`,
-            `Wilson 95% CI ${(p.observed.ciLower * 100).toFixed(0)}–${(p.observed.ciUpper * 100).toFixed(0)}%`
-          )
-        };
-      });
-    if (observedStats.length) layers.push(new ObservedStatLayer({ id: `projection-observed-${i}`, bins: observedStats }));
-
-    const observedMeanStats = projected
-      .filter((p): p is ProjectedGroup & { observedMean: NonNullable<ProjectedGroup["observedMean"]> } => Boolean(p.observedMean))
+      .filter((p): p is ProjectedGroup & { observedSummary: ObservedGroupSummary } => Boolean(p.observedSummary))
       .map((p) => ({
         x: p.median,
-        center: p.observedMean.mean,
-        lower: p.observedMean.ciLower,
-        upper: p.observedMean.ciUpper,
-        n: p.observedMean.n,
-        primaryLabel: p.observedMean.primaryLabel ?? p.observedMean.mean.toFixed(1),
-        secondaryLabel: p.observedMean.secondaryLabel ?? `N=${p.observedMean.n}`,
-        color: p.color
+        center: p.observedSummary.center,
+        lower: p.observedSummary.lower,
+        upper: p.observedSummary.upper,
+        n: p.observedSummary.n,
+        primaryLabel: p.observedSummary.primaryLabel,
+        secondaryLabel: `${p.observedSummary.secondaryLabel} · @ ${formatExposureForReadout(p.median)}`,
+        color: p.color,
+        tooltip: observedMarkerTooltip(
+          xAxisLabel,
+          p.median,
+          `Observed ${p.observedSummary.primaryLabel} (${p.observedSummary.secondaryLabel})`,
+          `95% CI · N=${p.observedSummary.n}`
+        )
       }));
-    if (observedMeanStats.length) {
-      layers.push(new ObservedStatLayer({ id: `projection-observed-mean-${i}`, bins: observedMeanStats }));
-    }
+    if (observedStats.length) layers.push(new ObservedStatLayer({ id: `projection-observed-${i}`, bins: observedStats }));
   });
 
   if (referenceLines.length) {
@@ -3016,7 +2991,7 @@ interface BinaryDoseGroupStats {
   min: number;
   max: number;
   n: number;
-  observed: { proportion: number; ciLower: number; ciUpper: number; n: number; responders: number };
+  observedSummary?: ObservedGroupSummary;
 }
 
 /** Per-dose exposure quantiles (Q1/median/Q3/whiskers/min/max) + observed responder rate (95%
@@ -3041,8 +3016,6 @@ function computeBinaryDoseGroupStats(
     if (!vals.length) continue;
     const s = summarizeDistribution(vals);
     if (!s) continue;
-    const responders = doseRecords.filter((i) => endpointValue(i, endpoint) === 1).length;
-    const ci = wilsonScoreInterval(responders, doseRecords.length);
     groupStats[dose] = {
       q1: s.q1,
       q3: s.q3,
@@ -3052,7 +3025,9 @@ function computeBinaryDoseGroupStats(
       min: s.min,
       max: s.max,
       n: vals.length,
-      observed: { proportion: ci.proportion, ciLower: ci.lower, ciUpper: ci.upper, n: doseRecords.length, responders }
+      observedSummary:
+        observedFamilyFor(endpoint).observedSummary(doseRecords.map((i) => endpointValue(i, endpoint))) ??
+        undefined
     };
   }
   return groupStats;
@@ -3078,7 +3053,6 @@ function computeContinuousDoseGroupStats(
     if (!vals.length) continue;
     const s = summarizeDistribution(vals);
     if (!s) continue;
-    const mci = meanConfidenceInterval(doseRecords.map((i) => endpointValue(i, endpoint)));
     groupStats[dose] = {
       q1: s.q1,
       q3: s.q3,
@@ -3087,7 +3061,9 @@ function computeContinuousDoseGroupStats(
       whiskerHigh: s.whiskerHigh,
       min: s.min,
       max: s.max,
-      observedMean: { mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n }
+      observedSummary:
+        observedFamilyFor(endpoint).observedSummary(doseRecords.map((i) => endpointValue(i, endpoint))) ??
+        undefined
     };
   }
   return groupStats;
@@ -3103,24 +3079,23 @@ function projectedLinearGroupsFor(
   return [...doseFilter]
     .filter((dose) => groupStats[dose])
     .map((dose) => {
-      const { observedMean: rawObservedMean, ...rest } = groupStats[dose]!;
-      let observedMean = rawObservedMean;
-      if (state.showDoseObserved && rawObservedMean && compareNormalizeEndpoint) {
-        const fmt = (v: number) => (Number.isFinite(v) ? v.toFixed(1) : "—");
-        observedMean = {
-          mean: normCompareValue(rawObservedMean.mean, compareNormalizeEndpoint),
-          ciLower: normCompareValue(rawObservedMean.ciLower, compareNormalizeEndpoint),
-          ciUpper: normCompareValue(rawObservedMean.ciUpper, compareNormalizeEndpoint),
-          n: rawObservedMean.n,
-          primaryLabel: fmt(rawObservedMean.mean),
-          secondaryLabel: `[${fmt(rawObservedMean.ciLower)}–${fmt(rawObservedMean.ciUpper)}] N=${rawObservedMean.n}`
+      const { observedSummary: raw, ...rest } = groupStats[dose]!;
+      let observedSummary = raw;
+      if (state.showDoseObserved && raw && compareNormalizeEndpoint) {
+        // Compare overlay: GEOMETRY on the normalized 0–1 axis, labels in native
+        // units (decision 1a) — the adapter's labels already are.
+        observedSummary = {
+          ...raw,
+          center: normCompareValue(raw.center, compareNormalizeEndpoint),
+          lower: normCompareValue(raw.lower, compareNormalizeEndpoint),
+          upper: normCompareValue(raw.upper, compareNormalizeEndpoint)
         };
       }
       return {
         groupId: dose,
         color: colorOverride ?? resolveDoseColor(dose),
         ...rest,
-        observedMean: state.showDoseObserved ? observedMean : undefined
+        observedSummary: state.showDoseObserved ? observedSummary : undefined
       };
     });
 }
@@ -3159,13 +3134,13 @@ function projectedGroupsFor(
   return [...doseFilter]
     .filter((dose) => groupStats[dose])
     .map((dose) => {
-      const { observed, ...rest } = groupStats[dose]!;
+      const { observedSummary, ...rest } = groupStats[dose]!;
       const color = colorOverride ?? doseProjectionAccent(endpoint) ?? resolveDoseColor(dose);
       return {
         groupId: dose,
         color,
         ...rest,
-        observed: state.showDoseObserved ? observed : undefined
+        observedSummary: state.showDoseObserved ? observedSummary : undefined
       };
     });
 }
@@ -3211,7 +3186,7 @@ function renderScatterPanel(
         min: number;
         max: number;
         n: number;
-        observedMean: { mean: number; ciLower: number; ciUpper: number; n: number };
+        observedSummary?: ObservedGroupSummary;
       }
     > = {};
     for (const dose of DOSE_ORDER()) {
@@ -3220,7 +3195,6 @@ function renderScatterPanel(
       if (!vals.length) continue;
       const s = summarizeDistribution(vals);
       if (!s) continue;
-      const mci = meanConfidenceInterval(doseRecords.map((i) => endpointValue(i, endpoint)));
       groupStats[dose] = {
         q1: s.q1,
         q3: s.q3,
@@ -3230,19 +3204,21 @@ function renderScatterPanel(
         min: s.min,
         max: s.max,
         n: vals.length,
-        observedMean: { mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n }
+        observedSummary:
+          observedFamilyFor(endpoint).observedSummary(doseRecords.map((i) => endpointValue(i, endpoint))) ??
+          undefined
       };
     }
 
     const projected: LinearProjectedGroup[] = [...state.selectedDoses]
       .filter((dose) => groupStats[dose])
       .map((dose) => {
-        const { observedMean, ...rest } = groupStats[dose]!;
+        const { observedSummary, ...rest } = groupStats[dose]!;
         return {
           groupId: dose,
           color: resolveDoseColor(dose),
           ...rest,
-          observedMean: state.showDoseObserved ? observedMean : undefined
+          observedSummary: state.showDoseObserved ? observedSummary : undefined
         };
       });
 
@@ -3440,7 +3416,7 @@ function paintRegularScatterIntoWrap(
         min: number;
         max: number;
         n: number;
-        observedMean: { mean: number; ciLower: number; ciUpper: number; n: number };
+        observedSummary?: ObservedGroupSummary;
       }
     > = {};
     // Projection stats on the PANEL cohort (ADR-0012): the projected band must
@@ -3454,7 +3430,6 @@ function paintRegularScatterIntoWrap(
       if (!vals.length) continue;
       const s = summarizeDistribution(vals);
       if (!s) continue;
-      const mci = meanConfidenceInterval(doseRecords.map((i) => endpointValue(i, endpoint)));
       groupStats[dose] = {
         q1: s.q1,
         q3: s.q3,
@@ -3464,7 +3439,9 @@ function paintRegularScatterIntoWrap(
         min: s.min,
         max: s.max,
         n: vals.length,
-        observedMean: { mean: mci.mean, ciLower: mci.lower, ciUpper: mci.upper, n: mci.n }
+        observedSummary:
+          observedFamilyFor(endpoint).observedSummary(doseRecords.map((i) => endpointValue(i, endpoint))) ??
+          undefined
       };
     }
 
@@ -3481,14 +3458,14 @@ function paintRegularScatterIntoWrap(
       : [...selectedDosesForEndpoint(endpoint)]
           .filter((dose) => groupStats[dose])
           .map((dose) => {
-            const { observedMean, ...rest } = groupStats[dose]!;
+            const { observedSummary, ...rest } = groupStats[dose]!;
             const accent =
               rowPaint.fixedColor ?? (rowPaint.neutral ? DOSE_SELECTION_NEUTRAL : resolveDoseColor(dose));
             return {
               groupId: dose,
               color: accent,
               ...rest,
-              observedMean: state.showDoseObserved ? observedMean : undefined
+              observedSummary: state.showDoseObserved ? observedSummary : undefined
             };
           });
 
@@ -3533,7 +3510,7 @@ function paintRegularScatterIntoWrap(
           const { suffix } = parseDistGroupId(String(g.groupId));
           const isLevelGroup = !!suffix && !selectedEndpoints().includes(suffix as Endpoint);
           if (isLevelGroup) return suffix === level ? [g] : [];
-          return [isFirst ? g : { ...g, observed: undefined, observedMean: undefined }];
+          return [isFirst ? g : { ...g, observedSummary: undefined }];
         });
 
       const fitSeparate = !!spec?.fitByColor && levels.length > 1;

@@ -18,6 +18,7 @@ export interface LogisticParams {
 export const logisticFamily: EndpointFamilyAdapter<LogisticParams> = {
   familyId: "logistic",
   readoutDecimals: 3,
+  formatValue: (v) => `${Math.round(v * 100)}%`,
   fittedAt: (m, x) => 1 / (1 + Math.exp(-(m.intercept + m.slope * x))),
   observedSummary(responses): ObservedGroupSummary | null {
     if (!responses.length) return null;
@@ -37,6 +38,7 @@ export const logisticFamily: EndpointFamilyAdapter<LogisticParams> = {
 export const linearFamily: EndpointFamilyAdapter<LinearParams> = {
   familyId: "linear",
   readoutDecimals: 1,
+  formatValue: (v) => (Number.isFinite(v) ? v.toFixed(1) : "—"),
   fittedAt: (m, x) => m.intercept + m.slope * x,
   observedSummary(responses): ObservedGroupSummary | null {
     if (!responses.length) return null;

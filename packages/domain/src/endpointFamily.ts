@@ -31,4 +31,6 @@ export interface EndpointFamilyAdapter<Model = unknown> {
   fittedAt(model: Model, x: number): number;
   /** Observed summary of raw responses (x/N Wilson for binary, mean±CI for continuous, P(Y≥k) set later for ordinal). */
   observedSummary(responses: number[]): ObservedGroupSummary | null;
+  /** Response-scale value formatting for tooltips/CI text ("46%" vs "23.4"). */
+  formatValue(v: number): string;
 }
