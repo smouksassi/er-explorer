@@ -384,6 +384,61 @@ async function run() {
         .join(", ")})`
     );
 
+    console.log("\n7) CONFORMANCE MATRIX (ADR-0013/I7): same scenario per family → same structure");
+    // Scenario: color=wt (median bins), fit separately ON, split boxplots OFF,
+    // pooled 2400 mg click. Granularity rule (I8): expands to dose×level groups,
+    // one per level curve. Structure must be IDENTICAL for binary and continuous.
+    const familyStructures = [];
+    for (const ep of ["icgi", "brls"]) {
+      await setSelectedEndpoints(page, [ep]);
+      await openStyleDrawer(page);
+      await setSelectValue(page, "advancedColorBy", "wt");
+      await setCheckbox(page, "advancedFitByColor", true);
+      await setCheckbox(page, "advancedColorDistShapes", false);
+      await openDrawerRail(page, "analysis");
+      await page.locator("#resetBtn").click();
+      await page.waitForTimeout(300);
+      await openDrawerRail(page, "plot");
+      await page.evaluate(() => {
+        const g = [...document.querySelectorAll("g.er-ridge")].find(
+          (el) => el.getAttribute("data-group") === "2400 mg"
+        );
+        g?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await page.waitForTimeout(600);
+      const structure = await page.$$eval(".metric-stack-scatter svg", (svgs) => {
+        const svg = svgs[0];
+        if (!svg) return null;
+        const markerGroups = svg.querySelectorAll(".er-dose-projection").length;
+        const markerColors = [
+          ...new Set(
+            [...svg.querySelectorAll(".er-dose-projection circle")]
+              .map((c) => (c.getAttribute("fill") || c.getAttribute("stroke") || "").toLowerCase())
+              .filter((f) => f && f !== "#ffffff" && f !== "#111827" && f !== "transparent" && f !== "none")
+          )
+        ].sort();
+        const observedCallouts = [...svg.querySelectorAll(".er-marker-hit")].filter((el) =>
+          (el.getAttribute("data-er-marker-tip") || "").includes("Observed")
+        ).length;
+        return { markerGroups, markerColors, observedCallouts };
+      });
+      if (!structure) fail(`conformance(${ep}): no scatter svg`);
+      familyStructures.push({ ep, ...structure });
+    }
+    const [bin, cont] = familyStructures;
+    console.log(`  binary:     ${JSON.stringify(bin)}`);
+    console.log(`  continuous: ${JSON.stringify(cont)}`);
+    if (bin.markerGroups !== 2 || cont.markerGroups !== 2) {
+      fail("conformance: pooled click with 2 level curves must yield exactly 2 projection groups per family");
+    }
+    if (JSON.stringify(bin.markerColors) !== JSON.stringify(cont.markerColors)) {
+      fail(`conformance: families disagree on projection colors: ${bin.markerColors} vs ${cont.markerColors}`);
+    }
+    if (bin.observedCallouts !== cont.observedCallouts) {
+      fail(`conformance: families disagree on callout count: ${bin.observedCallouts} vs ${cont.observedCallouts}`);
+    }
+    ok(`families structurally identical (${bin.markerGroups} groups, colors [${bin.markerColors.join(", ")}], ${bin.observedCallouts} callouts)`);
+
     console.log("\nui-smoke: ALL CHECKS PASSED\n");
   } finally {
     await browser.close();

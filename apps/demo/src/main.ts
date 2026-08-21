@@ -6,12 +6,11 @@ import {
   kernelDensityEstimate,
   silvermanBandwidth,
   quantile,
-  wilsonScoreInterval,
   createModelDefinition,
   type LogisticModel,
   type PredictionResult
 } from "@er-explorer/analysis";
-import { linearAnalysisModel, meanConfidenceInterval, type LinearParams } from "@er-explorer/model-linear";
+import { linearAnalysisModel, type LinearParams } from "@er-explorer/model-linear";
 import {
   SVGRenderer,
   GridLayer,
@@ -4167,28 +4166,24 @@ function updateKpis(activeCount: number, endpoints: Endpoint[]): void {
 
   const placeboRows = rowIndicesPlacebo();
   const dosedRows = rowIndicesDosed();
-  const pct = (n: number, total: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
 
+  // ADR-0013: family math via adapters only. Endpoint-finite rows for every
+  // family (the old binary branch counted endpoint-missing rows in denominators).
   kpiRespondersBody.innerHTML = endpoints
     .map((endpoint) => {
-      if (isContinuousEndpoint(endpoint)) {
-        const placeboVals = placeboRows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).map((i) => endpointValue(i, endpoint));
-        const dosedVals = dosedRows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).map((i) => endpointValue(i, endpoint));
-        const placeboMci = meanConfidenceInterval(placeboVals);
-        const dosedMci = meanConfidenceInterval(dosedVals);
-        const fmt = (m: { mean: number; lower: number; upper: number }) => `${m.mean.toFixed(1)} [${m.lower.toFixed(1)}-${m.upper.toFixed(1)}]`;
-        return `<div class="responder-row">
-          <span class="responder-endpoint">${endpoint.toUpperCase()}</span>
-          <span class="responder-group"><span class="muted">Placebo</span> <strong>${fmt(placeboMci)}</strong> <span class="muted">(n=${placeboMci.n})</span></span>
-          <span class="responder-group"><span class="muted">Dosed</span> <strong>${fmt(dosedMci)}</strong> <span class="muted">(n=${dosedMci.n})</span></span>
-        </div>`;
-      }
-      const placeboResponders = placeboRows.filter((i) => endpointValue(i, endpoint) === 1).length;
-      const dosedResponders = dosedRows.filter((i) => endpointValue(i, endpoint) === 1).length;
+      const family = observedFamilyFor(endpoint);
+      const summarize = (rows: number[]) =>
+        family.observedSummary(
+          rows.map((i) => endpointValue(i, endpoint)).filter((v) => Number.isFinite(v))
+        );
+      const cell = (label: string, s: ObservedGroupSummary | null) =>
+        s
+          ? `<span class="responder-group"><span class="muted">${label}</span> <strong>${s.primaryLabel}</strong> <span class="muted">(${s.secondaryLabel})</span></span>`
+          : `<span class="responder-group"><span class="muted">${label}</span> <span class="muted">—</span></span>`;
       return `<div class="responder-row">
         <span class="responder-endpoint">${endpoint.toUpperCase()}</span>
-        <span class="responder-group"><span class="muted">Placebo</span> <strong>${pct(placeboResponders, placeboRows.length)}%</strong> <span class="muted">(${placeboResponders}/${placeboRows.length})</span></span>
-        <span class="responder-group"><span class="muted">Dosed</span> <strong>${pct(dosedResponders, dosedRows.length)}%</strong> <span class="muted">(${dosedResponders}/${dosedRows.length})</span></span>
+        ${cell("Placebo", summarize(placeboRows))}
+        ${cell("Dosed", summarize(dosedRows))}
       </div>`;
     })
     .join("");
