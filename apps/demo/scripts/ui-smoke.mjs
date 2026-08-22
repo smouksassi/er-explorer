@@ -384,29 +384,37 @@ async function run() {
         .join(", ")})`
     );
 
-    console.log("\n7) CONFORMANCE MATRIX (ADR-0013/I7): same scenario per family → same structure");
-    // Scenario: color=wt (median bins), fit separately ON, split boxplots OFF,
-    // pooled 2400 mg click. Granularity rule (I8): expands to dose×level groups,
-    // one per level curve. Structure must be IDENTICAL for binary and continuous.
-    const familyStructures = [];
-    for (const ep of ["icgi", "brls"]) {
-      await setSelectedEndpoints(page, [ep]);
-      await openStyleDrawer(page);
-      await setSelectValue(page, "advancedColorBy", "wt");
-      await setCheckbox(page, "advancedFitByColor", true);
-      await setCheckbox(page, "advancedColorDistShapes", false);
-      await openDrawerRail(page, "analysis");
-      await page.locator("#resetBtn").click();
-      await page.waitForTimeout(300);
-      await openDrawerRail(page, "plot");
-      await page.evaluate(() => {
-        const g = [...document.querySelectorAll("g.er-ridge")].find(
-          (el) => el.getAttribute("data-group") === "2400 mg"
-        );
-        g?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-      });
-      await page.waitForTimeout(600);
-      const structure = await page.$$eval(".metric-stack-scatter svg", (svgs) => {
+    console.log("\n7) CONFORMANCE MATRIX (ADR-0013/I7): same scenarios per family → same structure");
+    // Every scenario runs against a binary AND a continuous endpoint; structure
+    // (projection group count, colors under the one-channel law, callout count)
+    // must be IDENTICAL across families. I8: split curves expand pooled clicks
+    // to level groups; pooled curve keeps the pooled group in neutral.
+    const CONFORMANCE_SCENARIOS = [
+      {
+        name: "fit-per-level, pooled 2400mg click → level expansion",
+        fitByColor: true,
+        splitBoxplots: false,
+        clickGroup: "2400 mg",
+        expectGroups: 2
+      },
+      {
+        name: "fit-per-level, single level-row click → one group on its curve",
+        fitByColor: true,
+        splitBoxplots: true,
+        clickGroup: "2400 mg|≤ median",
+        expectGroups: 1
+      },
+      {
+        name: "pooled curve, pooled click → one neutral group",
+        fitByColor: false,
+        splitBoxplots: false,
+        clickGroup: "2400 mg",
+        expectGroups: 1,
+        expectColors: ["#475569"]
+      }
+    ];
+    const captureStructure = () =>
+      page.$$eval(".metric-stack-scatter svg", (svgs) => {
         const svg = svgs[0];
         if (!svg) return null;
         const markerGroups = svg.querySelectorAll(".er-dose-projection").length;
@@ -422,22 +430,49 @@ async function run() {
         ).length;
         return { markerGroups, markerColors, observedCallouts };
       });
-      if (!structure) fail(`conformance(${ep}): no scatter svg`);
-      familyStructures.push({ ep, ...structure });
+    for (const sc of CONFORMANCE_SCENARIOS) {
+      const familyStructures = [];
+      for (const ep of ["icgi", "brls"]) {
+        await setSelectedEndpoints(page, [ep]);
+        await openStyleDrawer(page);
+        await setSelectValue(page, "advancedColorBy", "wt");
+        await setCheckbox(page, "advancedFitByColor", sc.fitByColor);
+        await setCheckbox(page, "advancedColorDistShapes", sc.splitBoxplots);
+        await openDrawerRail(page, "analysis");
+        await page.locator("#resetBtn").click();
+        await page.waitForTimeout(300);
+        await openDrawerRail(page, "plot");
+        const clicked = await page.evaluate((group) => {
+          const g = [...document.querySelectorAll("g.er-ridge")].find(
+            (el) => el.getAttribute("data-group") === group
+          );
+          if (!g) return false;
+          g.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+          return true;
+        }, sc.clickGroup);
+        if (!clicked) fail(`conformance(${ep}, ${sc.name}): row "${sc.clickGroup}" not rendered`);
+        await page.waitForTimeout(600);
+        const structure = await captureStructure();
+        if (!structure) fail(`conformance(${ep}, ${sc.name}): no scatter svg`);
+        familyStructures.push({ ep, ...structure });
+      }
+      const [bin, cont] = familyStructures;
+      if (bin.markerGroups !== sc.expectGroups || cont.markerGroups !== sc.expectGroups) {
+        fail(
+          `conformance "${sc.name}": expected ${sc.expectGroups} group(s), got binary=${bin.markerGroups} continuous=${cont.markerGroups}`
+        );
+      }
+      if (JSON.stringify(bin.markerColors) !== JSON.stringify(cont.markerColors)) {
+        fail(`conformance "${sc.name}": color mismatch ${bin.markerColors} vs ${cont.markerColors}`);
+      }
+      if (sc.expectColors && JSON.stringify(bin.markerColors) !== JSON.stringify(sc.expectColors)) {
+        fail(`conformance "${sc.name}": expected colors ${sc.expectColors}, got ${bin.markerColors}`);
+      }
+      if (bin.observedCallouts !== cont.observedCallouts) {
+        fail(`conformance "${sc.name}": callout mismatch ${bin.observedCallouts} vs ${cont.observedCallouts}`);
+      }
+      ok(`${sc.name} — identical (${bin.markerGroups} group(s), [${bin.markerColors.join(", ")}], ${bin.observedCallouts} callouts)`);
     }
-    const [bin, cont] = familyStructures;
-    console.log(`  binary:     ${JSON.stringify(bin)}`);
-    console.log(`  continuous: ${JSON.stringify(cont)}`);
-    if (bin.markerGroups !== 2 || cont.markerGroups !== 2) {
-      fail("conformance: pooled click with 2 level curves must yield exactly 2 projection groups per family");
-    }
-    if (JSON.stringify(bin.markerColors) !== JSON.stringify(cont.markerColors)) {
-      fail(`conformance: families disagree on projection colors: ${bin.markerColors} vs ${cont.markerColors}`);
-    }
-    if (bin.observedCallouts !== cont.observedCallouts) {
-      fail(`conformance: families disagree on callout count: ${bin.observedCallouts} vs ${cont.observedCallouts}`);
-    }
-    ok(`families structurally identical (${bin.markerGroups} groups, colors [${bin.markerColors.join(", ")}], ${bin.observedCallouts} callouts)`);
 
     console.log("\nui-smoke: ALL CHECKS PASSED\n");
   } finally {
