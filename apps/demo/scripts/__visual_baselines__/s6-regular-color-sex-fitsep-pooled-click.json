@@ -33,7 +33,7 @@
   }
  ],
  "readouts": [
-  "2400 mg   Min AUC = 107.8   Q1 = 140.4   Median = 166.7   Q3 = 205.1   Max = 342.7   N=372400 mg — fit @ Min 0.805 · Q1 0.868 · Med 0.906 · Q3 0.944 · Max 0.992"
+  "2400 mg · 1   Min AUC = 111.0   Q1 = 131.2   Median = 142.5   Q3 = 159.2   Max = 342.7   N=132400 mg · 1 — fit @ Min 0.807 · Q1 0.857 · Med 0.880 · Q3 0.908 · Max 0.9962400 mg · 2   Min AUC = 107.8   Q1 = 159.6   Median = 180.3   Q3 = 218.5   Max = 275.3   N=242400 mg · 2 — fit @ Min 0.817 · Q1 0.895 · Med 0.918 · Q3 0.947 · Max 0.974"
  ],
  "status": ""
 }

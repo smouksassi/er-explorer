@@ -45,7 +45,7 @@ export function guidedToViewLayoutSpec(input: GuidedLayoutInput): ViewLayoutSpec
       rowDimensions: [],
       colDimensions: [xMetricsDim(metrics, input.exposureColumnOrder)],
       color: { kind: "endpoints" },
-      fitByColor: false,
+      grouping: { variableIds: [] },
       endpointOverlay: true,
       distribution: {
         linkage: input.compareDistByEndpoint ? "mirror_scatter_grid" : "shared_by_x_column",
@@ -60,7 +60,7 @@ export function guidedToViewLayoutSpec(input: GuidedLayoutInput): ViewLayoutSpec
       rowDimensions: [xMetricsDim(metrics, input.exposureColumnOrder)],
       colDimensions: [endpointsDim(endpoints, input.endpointColumnOrder)],
       color: { kind: "dose" },
-      fitByColor: false,
+      grouping: { variableIds: [] },
       distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
     };
   }
@@ -70,7 +70,7 @@ export function guidedToViewLayoutSpec(input: GuidedLayoutInput): ViewLayoutSpec
     rowDimensions: [endpointsDim(endpoints, input.endpointColumnOrder)],
     colDimensions: [xMetricsDim(metrics, input.exposureColumnOrder)],
     color: { kind: "dose" },
-    fitByColor: false,
+    grouping: { variableIds: [] },
     distribution: { linkage: "shared_by_x_column", colorDistShapes: false }
   };
 }

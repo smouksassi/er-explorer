@@ -13,10 +13,15 @@
  * Layers must not consult globals (filtered indices, fit caches) or re-derive
  * grouping from ad hoc flags. Dataset access stays outside `domain`: callers
  * inject the color-level accessor, keeping every function here pure.
+ *
+ * Rethink §J (adopted 2026-08-21): curve/fit units come from the EXPLICIT
+ * `grouping` spec — channels are paint, never statistics. The constancy theorem
+ * decides what a curve wears: a curve carries a channel's encoding iff the
+ * channel's variable is constant within the curve's group; otherwise neutral ink.
  */
 
 import type { ScatterPanelSpec, ViewLayoutSpec } from "./viewLayout";
-import { panelEndpointMode } from "./viewLayout";
+import { DOSE_GROUPING_ID, panelEndpointMode, resolveGrouping } from "./viewLayout";
 
 /**
  * One categorical color channel per view (ADR-0012): what the palette means.
@@ -27,14 +32,23 @@ export type ResolvedColorChannel =
   | { kind: "endpoints"; endpointIds: string[] }
   | { kind: "variable"; variableId: string; levels: string[] };
 
-/** A fit unit: one curve = one (endpoint × optional color level) within the cell cohort. */
+/** Composite grouping keys join levels with this separator (single-var keys are the bare level). */
+export const GROUP_KEY_SEPARATOR = " · ";
+
+/** A fit unit: one curve = one (endpoint × declared group) within the cell cohort. */
 export interface CurveGroup {
   endpointId: string;
-  /** Color-variable level when fitting per level; undefined = pooled over levels. */
+  /** Composite grouping key ("" = pooled: no grouping declared). */
+  groupKey: string;
+  /** Human label for the group (undefined when pooled). */
   level?: string;
-  /** Rows this curve is fitted on (subset of facetCohort; missing-level rows excluded). */
+  /** Rows this curve is fitted on (subset of facetCohort). */
   rows: number[];
-  /** Palette key: endpoint id under color=endpoints, level under color=variable, "" = neutral/default. */
+  /**
+   * Constancy theorem: the channel's palette key when the channel variable is
+   * constant within this group's rows (level under color=variable, arm under
+   * color=dose, endpoint id under color=endpoints); "" = neutral ink.
+   */
   colorKey: string;
 }
 
@@ -98,13 +112,20 @@ export interface CellResolutionInput {
    */
   levelForRow?: (variableId: string, rowIndex: number) => string | null;
   /**
-   * Dose arms in display order. Dose is an ordinary categorical channel (ADR-0012 —
-   * no exceptions): with `color.kind === "dose"` and `fitByColor`, curves are fitted
-   * per arm. Required for that combination only.
+   * Dose arms in display order. Dose is an ordinary categorical channel/grouping
+   * variable (ADR-0012 — no exceptions). Required when the grouping declares
+   * {@link DOSE_GROUPING_ID} or the dose channel needs constancy checks.
    */
   doseLevels?: readonly string[];
   /** Dose arm for a row; `null` = missing. Required with doseLevels. */
   doseForRow?: (rowIndex: number) => string | null;
+  /**
+   * Ordered levels (base-cohort model, "(missing)" last) of a declared grouping
+   * variable other than dose. Required when `spec.grouping` names covariates.
+   */
+  groupingLevels?: (variableId: string) => readonly string[] | undefined;
+  /** Grouping-variable level for a row; `null` = ungrouped (joins no curve). */
+  groupingLevelForRow?: (variableId: string, rowIndex: number) => string | null;
 }
 
 function endpointIdsForCell(input: CellResolutionInput): string[] {
@@ -137,6 +158,88 @@ function presentColorLevels(input: CellResolutionInput, variableId: string): str
   return declared.filter((level) => levelRows(input, variableId, level).length > 0);
 }
 
+/** One partition of the cell cohort per declared-group level combination. */
+interface GroupPartition {
+  key: string;
+  /** Level chosen per grouping variable — lets constancy short-circuit when the channel is grouped. */
+  values: ReadonlyMap<string, string>;
+  rows: number[];
+}
+
+function groupingLevelsFor(input: CellResolutionInput, variableId: string): readonly string[] | undefined {
+  if (variableId === DOSE_GROUPING_ID) return input.doseLevels;
+  const declared = input.groupingLevels?.(variableId);
+  if (declared?.length) return declared;
+  // Grouping by the color variable shares the color model when no dedicated
+  // accessor was injected (they are the same variable — cuts must agree).
+  if (input.spec.color.kind === "variable" && input.spec.color.variableId === variableId) {
+    return input.colorLevels;
+  }
+  return undefined;
+}
+
+function groupingValueFor(input: CellResolutionInput, variableId: string, rowIndex: number): string | null {
+  if (variableId === DOSE_GROUPING_ID) return input.doseForRow?.(rowIndex) ?? null;
+  if (input.groupingLevelForRow) return input.groupingLevelForRow(variableId, rowIndex);
+  if (input.spec.color.kind === "variable" && input.spec.color.variableId === variableId) {
+    return input.levelForRow?.(variableId, rowIndex) ?? null;
+  }
+  return null;
+}
+
+/**
+ * Partition the cell cohort by the declared grouping (§J). No grouping — or a
+ * grouping variable without injected accessors — contributes no split; rows whose
+ * grouping value is null join no curve (they remain cohort points).
+ */
+export function partitionCellByGrouping(input: CellResolutionInput): GroupPartition[] {
+  let parts: GroupPartition[] = [{ key: "", values: new Map(), rows: [...input.panel.rowIndices] }];
+  for (const variableId of resolveGrouping(input.spec)) {
+    const levels = groupingLevelsFor(input, variableId);
+    if (!levels?.length) continue;
+    parts = parts.flatMap((p) =>
+      levels
+        .map((level) => ({
+          key: p.key ? `${p.key}${GROUP_KEY_SEPARATOR}${level}` : level,
+          values: new Map(p.values).set(variableId, level),
+          rows: p.rows.filter((i) => groupingValueFor(input, variableId, i) === level)
+        }))
+        .filter((q) => q.rows.length > 0)
+    );
+  }
+  return parts;
+}
+
+/** "" unless `valueOf` yields one identical non-null value across all rows. */
+function constantChannelValue(rows: number[], valueOf: (rowIndex: number) => string | null): string {
+  let seen: string | null = null;
+  for (const i of rows) {
+    const v = valueOf(i);
+    if (v === null || v === undefined) return "";
+    if (seen === null) seen = v;
+    else if (seen !== v) return "";
+  }
+  return seen ?? "";
+}
+
+/** The constancy theorem (§J): what channel encoding this group's curve wears. */
+function curveColorKey(input: CellResolutionInput, endpointId: string, part: GroupPartition): string {
+  const color = input.spec.color;
+  if (color.kind === "endpoints") return endpointId;
+  if (color.kind === "variable") {
+    const grouped = part.values.get(color.variableId);
+    if (grouped !== undefined) return grouped;
+    const accessor = input.levelForRow;
+    if (!accessor) return "";
+    return constantChannelValue(part.rows, (i) => accessor(color.variableId, i));
+  }
+  const groupedArm = part.values.get(DOSE_GROUPING_ID);
+  if (groupedArm !== undefined) return groupedArm;
+  const doseAccessor = input.doseForRow;
+  if (!doseAccessor) return "";
+  return constantChannelValue(part.rows, (i) => doseAccessor(i));
+}
+
 /**
  * Resolve one cell of the layout into the context every layer consumes.
  * Pure: all dataset knowledge arrives via {@link CellResolutionInput}.
@@ -147,8 +250,21 @@ export function resolveCellContext(input: CellResolutionInput): ResolvedCellCont
   const facetCohort = [...panel.rowIndices];
   const color = spec.color;
 
+  // Curves: endpoint × declared group, channel encoding by constancy (§J) — one
+  // law for every channel kind, including the degenerate facet+color cell (a
+  // single-level cohort is constant, so the pooled curve keeps its level color).
+  const partitions = partitionCellByGrouping(input);
+  const curveGroups: CurveGroup[] = endpointIds.flatMap((endpointId) =>
+    partitions.map((part) => ({
+      endpointId,
+      groupKey: part.key,
+      level: part.key || undefined,
+      rows: part.rows,
+      colorKey: curveColorKey(input, endpointId, part)
+    }))
+  );
+
   let colorChannel: ResolvedColorChannel;
-  let curveGroups: CurveGroup[];
   let observedGroups: ObservedGroup[];
   let distRows: DistRowPolicy;
 
@@ -166,25 +282,6 @@ export function resolveCellContext(input: CellResolutionInput): ResolvedCellCont
       }))
     );
 
-    const fitPerLevel = spec.fitByColor && levels.length > 1;
-    curveGroups = endpointIds.flatMap((endpointId) =>
-      fitPerLevel
-        ? levels.map((level) => ({
-            endpointId,
-            level,
-            rows: levelRows(input, variableId, level),
-            colorKey: level
-          }))
-        : [
-            {
-              endpointId,
-              rows: facetCohort,
-              // Degenerate facet+color: a single-level cell keeps its level color.
-              colorKey: levels.length === 1 ? levels[0]! : ""
-            }
-          ]
-    );
-
     // One channel: rows split by level wear the level palette; a single-level cell
     // keeps its level color; unsplit multi-level rows are grouped by dose only and
     // therefore render NEUTRAL (dose palette would be a second color channel).
@@ -195,11 +292,6 @@ export function resolveCellContext(input: CellResolutionInput): ResolvedCellCont
         : { splitLevels: [], palette: "neutral" };
   } else if (color.kind === "endpoints") {
     colorChannel = { kind: "endpoints", endpointIds };
-    curveGroups = endpointIds.map((endpointId) => ({
-      endpointId,
-      rows: facetCohort,
-      colorKey: endpointId
-    }));
     observedGroups = endpointIds.map((endpointId) => ({
       endpointId,
       rows: facetCohort,
@@ -209,33 +301,7 @@ export function resolveCellContext(input: CellResolutionInput): ResolvedCellCont
     // rows render neutral; dose identity is the row label (ADR-0012).
     distRows = { splitLevels: [], palette: "neutral" };
   } else {
-    // Dose is an ordinary categorical channel — no exceptions (ADR-0012, user
-    // decision 2026-08-16). fitByColor fits one curve per arm; whether a per-arm
-    // fit is meaningful over that arm's narrow exposure range is the analyst's call.
     colorChannel = { kind: "dose" };
-    const doseAccessor = input.doseForRow;
-    const arms =
-      spec.fitByColor && doseAccessor
-        ? (input.doseLevels ?? []).filter((arm) =>
-            panel.rowIndices.some((i) => doseAccessor(i) === arm)
-          )
-        : [];
-    curveGroups = endpointIds.flatMap((endpointId) =>
-      arms.length > 1
-        ? arms.map((arm) => ({
-            endpointId,
-            level: arm,
-            rows: panel.rowIndices.filter((i) => doseAccessor!(i) === arm),
-            colorKey: arm
-          }))
-        : [
-            {
-              endpointId,
-              rows: facetCohort,
-              colorKey: ""
-            }
-          ]
-    );
     observedGroups = endpointIds.map((endpointId) => ({
       endpointId,
       rows: facetCohort,

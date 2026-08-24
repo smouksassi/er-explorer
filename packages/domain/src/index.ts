@@ -70,10 +70,12 @@ export type {
   FacetKey,
   ScatterPanelSpec,
   DistPanelSpec,
-  GroupKey
+  GroupKey,
+  GroupingSpec
 } from "./viewLayout";
 
 export {
+  DOSE_GROUPING_ID,
   colDimensionsAreOnlyXMetrics,
   dedupeFacetDimensions,
   distEndpointColorSplit,
@@ -82,7 +84,9 @@ export {
   isGuidedCompareTopology,
   layoutHasEndpointFacet,
   panelEndpointMode,
-  usesEndpointColorOverlay
+  resolveGrouping,
+  usesEndpointColorOverlay,
+  withResolvedGrouping
 } from "./viewLayout";
 export type { PanelEndpointMode } from "./viewLayout";
 export type {
@@ -107,7 +111,7 @@ export type {
   ResolvedCellContext,
   ResolvedColorChannel
 } from "./cellContext";
-export { resolveCellContext } from "./cellContext";
+export { GROUP_KEY_SEPARATOR, partitionCellByGrouping, resolveCellContext } from "./cellContext";
 export type { DistGroupRef, ViewSelection } from "./viewSelection";
 export type { EndpointFamilyAdapter, ObservedGroupSummary } from "./endpointFamily";
 export {

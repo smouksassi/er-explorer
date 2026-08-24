@@ -130,26 +130,34 @@ Related: [`ENCODING_V2_RETHINK.md`](./ENCODING_V2_RETHINK.md) (design record),
 `docs/DECISIONS.md` ADR-0012 (grammar) and ADR-0013 (family adapters),
 [`CONTINUE_HERE.md`](./CONTINUE_HERE.md) (slice progress).
 
-## I8 — Projection granularity rule (QA round 11, "once and for all")
+## I8 — Projection granularity = declared grouping (QA round 11; restated §J, E2)
 
-**Rule:** a projection resolves to groups at the panel's CURVE granularity.
-Split curves (fit-per-level / fit-per-arm) → a pooled dose selection expands to
-`dose×level` (or per-arm) groups, each on its own curve with its own color and
-stats. Pooled curve → pooled group. A pooled window NEVER rides a split curve,
-and no projection color is ever decided outside `colorForDistGroupId`.
+**Rule:** a projection resolves to groups at the panel's CURVE granularity, and
+curve granularity IS the declared `grouping` (§J). Each selected strip row's
+rows are PARTITIONED by the grouping — one projected group per curve group
+present, associated with its curve STRUCTURALLY via `curveKey` (never by parsing
+group-id strings). No grouping → one pooled partition on the pooled curve. A
+pooled window NEVER rides a group curve. Projection color follows the constancy
+theorem (one law with curves): channel encoding iff the channel variable is
+constant within the projection's rows; neutral otherwise. The READOUT mirrors
+the same granularity — one exposure+fit line pair per partition, fit values from
+that partition's own fit cohort (never a pooled fit under split curves).
 
 **Bug history:** pooled-window-on-every-curve existed for binary only (I7
 violation — BRLS showed nothing on the orange curve); "first curve" hosting
 flipped per panel; the continuous dose-branch mapping fell through to
-`resolveDoseColor` under split strips — the thrice-recurring "magenta vestigial".
+`resolveDoseColor` under split strips — the thrice-recurring "magenta
+vestigial"; the pre-E2 readout printed a POOLED fit line under split curves —
+values from a curve that was never drawn.
 
-**Guard:** `projectionGidsAtCurveGranularity` (the only expansion point) inside
-the two dist-selection functions; strict level↔curve association in both
-renderers (`projectedForCurve(level)`, `samplesForGroup` level/dose match); the
-dose-branch fallback mappings are DELETED — every selection routes through the
-one dist-selection pipeline. **Prevention:** any new projection source that maps
-`selectedDoses` directly to colors/stats without `rowsForDistGroupId` +
-`colorForDistGroupId` is a violation.
+**Guard:** `partitionSelectionByGrouping` (the only partition point) inside
+`projectedSelectionGroups`; `curveKey` association in both renderers
+(`projectedForCurveKey`, `samplesForGroup` curveKey match); unit conformance
+matrix scenario "grouped curves + pooled dose click". **Prevention:** any new
+projection source that maps `selectedDoses` directly to colors/stats without
+`rowsForDistGroupId` + the partition step is a violation; any curve↔projection
+association by id-string parsing (rather than `curveKey`/`groupKey`) is a
+violation.
 
 ## I9 — Missing is an explicit level (QA rounds 12–13)
 
@@ -167,3 +175,29 @@ labels made cuts unverifiable — all caught by the user's external R cross-chec
 **Guard:** `variableBins.test.ts` (missing never in cuts; explicit level ordered
 last; value-bearing labels); snapshot s4 carries the (missing) panels with Ns
 matching the user's R NA rows (56/67/53).
+
+## I10 — Grouping is explicit statistics; channels are paint (§J, E2)
+
+**Rule:** the spec's `grouping: { variableIds }` is the ONE authority on fit
+units: curves/fits exist per endpoint × declared group (any variable or dose,
+under any channel; empty = pooled). Channels (color, later linetype) partition
+MARKS only — points, strip sub-rows, observed markers — never fits. What a
+curve wears is derived, never chosen: the CONSTANCY THEOREM (a curve carries a
+channel's encoding iff the channel variable is constant within its group's
+rows; else neutral ink) — this one law yields the neutral pooled curve with
+colored points, the degenerate facet+color level-colored curve (variables AND
+dose), and endpoint-colored group curves under color=endpoints. `fitByColor` is
+DELETED from every consumer; `resolveGrouping` migrates persisted legacy specs
+at the resolve boundary.
+
+**Bug history:** "fit separately per color group" entangled statistics with
+paint — grouping was impossible without a visual channel, dose needed a special
+branch, endpoints color silently stripped the flag, and adding linetype would
+have forced a third flag.
+
+**Guard:** `cellContext.test.ts` (grouping partitions, constancy incl. the
+mixed-group-neutral case, legacy migration); unit conformance matrix (grouping
+scenarios per family); domain type has no required `fitByColor`. **Prevention:**
+any code that decides fit cohorts from `spec.color` (rather than
+`resolveGrouping`) — or paints a curve without a constancy check — is a
+violation.

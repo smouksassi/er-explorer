@@ -3,8 +3,15 @@
  *
  * ONE implementation for every model family: which rows a clicked dist group
  * means (dose ∩ level/endpoint ∩ panel cohort), which curve-granularity groups a
- * selection resolves to (I8 expansion), what color a group wears (one-channel
- * law), and the exposure-quantile + observed-summary stats a projection carries.
+ * selection resolves to, what color a group wears, and the exposure-quantile +
+ * observed-summary stats a projection carries.
+ *
+ * Rethink §J: projection granularity = the DECLARED GROUPING (I8 restated).
+ * Each selected strip row's rows are partitioned by the grouping — one projected
+ * group per curve group present — and `curveKey` associates a projection with
+ * its curve structurally (no id-string parsing). Color follows the constancy
+ * theorem: a projection wears the channel encoding iff the channel variable is
+ * constant within its rows; otherwise neutral ink.
  *
  * Dataset access, palettes, and the family adapter are INJECTED — this module
  * imports domain types only, so the unit-level conformance matrix can execute it
@@ -39,6 +46,13 @@ export interface SelectionProjectionCtx {
   showObservedSummary: boolean;
   /** Color-variable level model built on the BASE cohort (I1) — null when color ≠ variable. */
   colorModel: SelectionLevelModel | null;
+  /**
+   * Ordered composite keys of the declared grouping on the BASE cohort
+   * (curve granularity, I8); empty = no grouping (pooled curves).
+   */
+  groupingKeys: readonly string[];
+  /** Composite grouping key for a row; null = joins no curve group. */
+  groupingKeyForRow(rowIndex: number): string | null;
   rowIndicesForDose(dose: string): number[];
   /** Active-set membership for a row (brush/filter), by row index. */
   isActiveRow(rowIndex: number): boolean;
@@ -47,6 +61,8 @@ export interface SelectionProjectionCtx {
   endpointValue(rowIndex: number, endpointId: string): number;
   /** Color-variable level of a row under the base-cohort model; null = missing or no channel. */
   levelForRow(rowIndex: number): string | null;
+  /** Dose arm of a row (channel constancy under color=dose); null = unknown. */
+  doseForRow(rowIndex: number): string | null;
   summarizeExposures(sortedFiniteValues: number[]): ExposureSummary | null;
   colorForLevel(level: string): string;
   colorForEndpoint(endpointId: string): string;
@@ -57,6 +73,10 @@ export interface SelectionProjectionCtx {
 /** One projected group at curve granularity — family-agnostic. */
 export interface ProjectedSelectionGroup extends ExposureSummary {
   groupId: string;
+  /** Curve association (I4/I8): matches `CurveGroup.groupKey`; "" rides the pooled curve. */
+  curveKey: string;
+  /** Readout label: clicked row, plus the group key when the grouping refines it. */
+  label: string;
   color: string;
   n: number;
   observedSummary?: ObservedGroupSummary;
@@ -82,28 +102,6 @@ export function selectionGids(ctx: SelectionProjectionCtx, endpointId: string): 
   return [];
 }
 
-/**
- * I8 — granularity rule: with per-level curves (explicit grouping / legacy
- * fitByColor on a covariate channel), pooled dose selections expand to
- * dose×level groups; a pooled window never rides a level curve.
- */
-export function gidsAtCurveGranularity(ctx: SelectionProjectionCtx, gids: string[]): string[] {
-  const spec = ctx.spec;
-  const splitCurves =
-    !!spec?.fitByColor && spec.color.kind === "variable" && !!ctx.colorModel && ctx.colorModel.levels.length > 1;
-  if (!splitCurves) return gids;
-  const levels = ctx.colorModel!.levels;
-  return [
-    ...new Set(
-      gids.flatMap((gid) => {
-        const { dose, suffix } = parseGid(gid);
-        if (suffix && !ctx.knownEndpointIds.includes(suffix)) return [gid];
-        return levels.map((level) => `${dose}|${level}`);
-      })
-    )
-  ];
-}
-
 /** Rows a dist group id means: dose ∩ active ∩ panel cohort ∩ (level | endpoint-finite) — I3. */
 export function rowsForGroup(
   ctx: SelectionProjectionCtx,
@@ -111,10 +109,10 @@ export function rowsForGroup(
   endpointId: string,
   cohortRowIndices?: number[]
 ): number[] {
-  const { dose, suffix } = parseGid(gid);
+  const { suffix } = parseGid(gid);
   const cohortSet = cohortRowIndices ? new Set(cohortRowIndices) : null;
   const rows = ctx
-    .rowIndicesForDose(dose)
+    .rowIndicesForDose(parseGid(gid).dose)
     .filter((i) => ctx.isActiveRow(i) && (!cohortSet || cohortSet.has(i)));
   if (!suffix) return rows;
   if (ctx.knownEndpointIds.includes(suffix)) {
@@ -123,27 +121,77 @@ export function rowsForGroup(
   return rows.filter((i) => ctx.levelForRow(i) === suffix);
 }
 
-/** One-channel law for a group's color (I2): level palette for level rows,
- * endpoint palette for endpoint rows, dose palette ONLY when color IS dose,
- * neutral otherwise. */
-export function colorForGroup(
+/**
+ * I8 — granularity rule: a selection's rows are partitioned by the declared
+ * grouping so every projected group rides exactly one curve (a pooled window
+ * never rides a group curve). No grouping — one pooled partition (key "").
+ */
+export function partitionSelectionByGrouping(
   ctx: SelectionProjectionCtx,
-  gid: string,
-  colorOverride?: string
-): string {
-  const { dose, suffix } = parseGid(gid);
-  if (colorOverride) return colorOverride;
-  if (suffix && ctx.spec?.color.kind === "variable" && ctx.colorModel) {
-    return ctx.colorForLevel(suffix);
+  rows: number[]
+): Array<{ key: string; rows: number[] }> {
+  if (!ctx.groupingKeys.length) return [{ key: "", rows }];
+  const byKey = new Map<string, number[]>();
+  for (const i of rows) {
+    const key = ctx.groupingKeyForRow(i);
+    if (key === null) continue;
+    const bucket = byKey.get(key);
+    if (bucket) bucket.push(i);
+    else byKey.set(key, [i]);
   }
-  if (suffix && ctx.knownEndpointIds.includes(suffix)) return ctx.colorForEndpoint(suffix);
-  if (ctx.spec && ctx.spec.color.kind !== "dose") return ctx.neutralColor;
-  return ctx.colorForDose(dose);
+  return ctx.groupingKeys
+    .filter((key) => byKey.has(key))
+    .map((key) => ({ key, rows: byKey.get(key)! }));
 }
 
 /**
- * The full pipeline for one panel: selection → curve-granularity groups →
- * endpoint-finite rows → exposure quantiles + family observed summary + color.
+ * Constancy theorem for projection color (I2, one law with curves): the channel
+ * encoding when the channel variable is constant within `rows`; endpoint palette
+ * for endpoint-scoped rows; neutral otherwise.
+ */
+export function colorForGroup(
+  ctx: SelectionProjectionCtx,
+  gid: string,
+  rows: number[],
+  colorOverride?: string
+): string {
+  if (colorOverride) return colorOverride;
+  const { dose, suffix } = parseGid(gid);
+  if (suffix && ctx.knownEndpointIds.includes(suffix)) return ctx.colorForEndpoint(suffix);
+  const color = ctx.spec?.color;
+  if (!color) return ctx.colorForDose(dose);
+  if (color.kind === "variable") {
+    const level = constantValue(rows, (i) => ctx.levelForRow(i));
+    return level ? ctx.colorForLevel(level) : ctx.neutralColor;
+  }
+  if (color.kind === "dose") return ctx.colorForDose(dose);
+  return ctx.neutralColor;
+}
+
+function constantValue(rows: number[], valueOf: (rowIndex: number) => string | null): string {
+  let seen: string | null = null;
+  for (const i of rows) {
+    const v = valueOf(i);
+    if (v === null || v === undefined) return "";
+    if (seen === null) seen = v;
+    else if (seen !== v) return "";
+  }
+  return seen ?? "";
+}
+
+/** Readout label: the clicked row, refined by the group key when it adds information. */
+export function selectionGroupLabel(ctx: SelectionProjectionCtx, gid: string, curveKey: string): string {
+  const { dose, suffix } = parseGid(gid);
+  const suffixIsEndpoint = !!suffix && ctx.knownEndpointIds.includes(suffix);
+  const base = suffix && !suffixIsEndpoint ? `${dose} · ${suffix}` : dose;
+  if (!curveKey || curveKey === suffix) return base;
+  return `${base} · ${curveKey}`;
+}
+
+/**
+ * The full pipeline for one panel: selection → rows per clicked group →
+ * grouping partitions (curve granularity, I8) → endpoint-finite rows →
+ * exposure quantiles + family observed summary + constancy color.
  */
 export function projectedSelectionGroups(
   ctx: SelectionProjectionCtx,
@@ -152,26 +200,29 @@ export function projectedSelectionGroups(
   cohortRowIndices?: number[],
   colorOverride?: string
 ): ProjectedSelectionGroup[] {
-  const gids = gidsAtCurveGranularity(ctx, selectionGids(ctx, endpointId));
   const out: ProjectedSelectionGroup[] = [];
-  for (const gid of gids) {
-    const rows = rowsForGroup(ctx, gid, endpointId, cohortRowIndices).filter((i) =>
+  for (const gid of selectionGids(ctx, endpointId)) {
+    const groupRows = rowsForGroup(ctx, gid, endpointId, cohortRowIndices).filter((i) =>
       Number.isFinite(ctx.endpointValue(i, endpointId))
     );
-    const vals = rows
-      .map((i) => ctx.exposureValue(i))
-      .filter((v) => Number.isFinite(v))
-      .sort((a, b) => a - b);
-    const s = ctx.summarizeExposures(vals);
-    if (!s) continue;
-    const summary = family.observedSummary(rows.map((i) => ctx.endpointValue(i, endpointId)));
-    out.push({
-      groupId: gid,
-      color: colorForGroup(ctx, gid, colorOverride),
-      ...s,
-      n: vals.length,
-      observedSummary: ctx.showObservedSummary ? summary ?? undefined : undefined
-    });
+    for (const part of partitionSelectionByGrouping(ctx, groupRows)) {
+      const vals = part.rows
+        .map((i) => ctx.exposureValue(i))
+        .filter((v) => Number.isFinite(v))
+        .sort((a, b) => a - b);
+      const s = ctx.summarizeExposures(vals);
+      if (!s) continue;
+      const summary = family.observedSummary(part.rows.map((i) => ctx.endpointValue(i, endpointId)));
+      out.push({
+        groupId: gid,
+        curveKey: part.key,
+        label: selectionGroupLabel(ctx, gid, part.key),
+        color: colorForGroup(ctx, gid, part.rows, colorOverride),
+        ...s,
+        n: vals.length,
+        observedSummary: ctx.showObservedSummary ? summary ?? undefined : undefined
+      });
+    }
   }
   return out;
 }

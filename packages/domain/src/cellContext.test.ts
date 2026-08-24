@@ -16,7 +16,7 @@ const base: ViewLayoutSpec = {
   rowDimensions: [],
   colDimensions: [{ kind: "xMetrics", ids: ["auc"], order: ["auc"] }],
   color: { kind: "dose" },
-  fitByColor: false,
+  grouping: { variableIds: [] },
   distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
 };
 
@@ -43,11 +43,11 @@ describe("resolveCellContext — color = dose (default)", () => {
     expect(ctx.xDomainKey).toBe("auc");
   });
 
-  it("fitByColor with dose → one curve per arm (dose is not special)", () => {
+  it("grouping by dose → one curve per arm (dose is not special)", () => {
     const doseOf = (i: number): string | null => (i < 4 ? "Placebo" : i < 7 ? "600 mg" : "1200 mg");
     const ctx = resolveCellContext(
       input({
-        spec: { ...base, fitByColor: true },
+        spec: { ...base, grouping: { variableIds: ["dose"] } },
         doseLevels: ["Placebo", "600 mg", "1200 mg"],
         doseForRow: doseOf
       })
@@ -103,7 +103,9 @@ describe("resolveCellContext — color = endpoints", () => {
       })
     );
     expect(ctx.endpointIds).toEqual(["icgi2"]);
-    expect(ctx.curveGroups).toEqual([{ endpointId: "icgi2", rows: ROWS, colorKey: "icgi2" }]);
+    expect(ctx.curveGroups).toEqual([
+      { endpointId: "icgi2", groupKey: "", level: undefined, rows: ROWS, colorKey: "icgi2" }
+    ]);
     // ADR-0012 one-channel rule: the strip describes exposure — never endpoint-tinted.
     expect(ctx.distRows.palette).toBe("neutral");
   });
@@ -126,18 +128,42 @@ describe("resolveCellContext — color = variable (sex)", () => {
     expect(grouped).toHaveLength(9);
   });
 
-  it("fitByColor off → one pooled curve over the full cohort", () => {
+  it("no grouping → one pooled curve over the full cohort", () => {
     const ctx = resolveCellContext(input({ spec, ...vars }));
     expect(ctx.curveGroups).toHaveLength(1);
     expect(ctx.curveGroups[0]!.rows).toEqual(ROWS);
     expect(ctx.curveGroups[0]!.level).toBeUndefined();
   });
 
-  it("fitByColor on → one curve per level with that level's rows (every model family)", () => {
-    const ctx = resolveCellContext(input({ spec: { ...spec, fitByColor: true }, ...vars }));
+  it("grouping by the color variable → one curve per level with that level's rows (every model family)", () => {
+    const ctx = resolveCellContext(input({ spec: { ...spec, grouping: { variableIds: ["sex"] } }, ...vars }));
     expect(ctx.curveGroups.map((g) => g.level)).toEqual(["1", "2"]);
     expect(ctx.curveGroups[0]!.rows).toEqual([0, 2, 4, 6, 8]);
     expect(ctx.curveGroups[1]!.rows).toEqual([1, 3, 5, 7]);
+    // Constancy: each group is single-level, so each curve wears its level color.
+    expect(ctx.curveGroups.map((g) => g.colorKey)).toEqual(["1", "2"]);
+  });
+
+  it("legacy fitByColor spec migrates to grouping-by-color-variable (persisted sessions)", () => {
+    const legacy = { ...spec, fitByColor: true } as ViewLayoutSpec;
+    delete legacy.grouping;
+    const ctx = resolveCellContext(input({ spec: legacy, ...vars }));
+    expect(ctx.curveGroups.map((g) => g.level)).toEqual(["1", "2"]);
+  });
+
+  it("constancy theorem: grouping by dose with color=sex → mixed groups render NEUTRAL", () => {
+    const doseOf = (i: number): string | null => (i < 5 ? "Placebo" : "600 mg");
+    const ctx = resolveCellContext(
+      input({
+        spec: { ...spec, grouping: { variableIds: ["dose"] } },
+        doseLevels: ["Placebo", "600 mg"],
+        doseForRow: doseOf,
+        ...vars
+      })
+    );
+    expect(ctx.curveGroups.map((g) => g.level)).toEqual(["Placebo", "600 mg"]);
+    // Both sexes inside each arm — the sex channel is not constant → neutral ink.
+    expect(ctx.curveGroups.map((g) => g.colorKey)).toEqual(["", ""]);
   });
 
   it("colorDistShapes on → dist rows split by present levels with variable palette", () => {
@@ -152,10 +178,10 @@ describe("resolveCellContext — color = variable (sex)", () => {
     expect(ctx.distRows).toEqual({ splitLevels: [], palette: "neutral" });
   });
 
-  it("overlay endpoints × fitByColor → cartesian curve groups (endpoint × level)", () => {
+  it("overlay endpoints × grouping → cartesian curve groups (endpoint × level)", () => {
     const ctx = resolveCellContext(
       input({
-        spec: { ...spec, fitByColor: true },
+        spec: { ...spec, grouping: { variableIds: ["sex"] } },
         panel: {
           id: "p1",
           facetKey: { xMetric: "auc" },

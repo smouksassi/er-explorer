@@ -40,12 +40,33 @@ export interface DistributionLayoutSpec {
   colorDistShapes: boolean;
 }
 
+/** Reserved grouping id for the dose role (dose is a design variable, not a data column id). */
+export const DOSE_GROUPING_ID = "dose";
+
+/**
+ * Explicit statistical grouping (rethink §J, adopted 2026-08-21 — ggplot2 `group`
+ * analog): curves/fits exist per endpoint × declared group. CHANNELS (color,
+ * later linetype) are paint, never statistics — they partition marks, not fits.
+ * Endpoint is not a grouping choice (it is the y variable). Empty = one pooled
+ * curve per endpoint per cell.
+ */
+export interface GroupingSpec {
+  /** Covariate column ids and/or {@link DOSE_GROUPING_ID}, in nesting order. */
+  variableIds: string[];
+}
+
 export interface ViewLayoutSpec {
   mode: "guided" | "advanced";
   rowDimensions: LayoutDimension[];
   colDimensions: LayoutDimension[];
   color: ColorEncoding;
-  fitByColor: boolean;
+  /** Statistical grouping of curves/fits. Resolve via {@link resolveGrouping} (handles legacy specs). */
+  grouping?: GroupingSpec;
+  /**
+   * @deprecated Superseded by {@link GroupingSpec} (rethink §J). Read only by
+   * {@link resolveGrouping} to migrate persisted sessions; never written anew.
+   */
+  fitByColor?: boolean;
   /** Compare-endpoints overlay: one scatter row, multiple endpoints on same axes. */
   endpointOverlay?: boolean;
   distribution: DistributionLayoutSpec;
@@ -211,3 +232,25 @@ export function ensureScaleBearingFacets(
 
 /** Open grouping key for stats shared between scatter and distribution. */
 export type GroupKey = Record<string, string | number>;
+
+/**
+ * The one reader of curve grouping. Migrates legacy `fitByColor` specs
+ * (persisted sessions): fit-by-color with a variable channel grouped by that
+ * variable; with the dose channel, by dose; otherwise pooled.
+ */
+export function resolveGrouping(spec: ViewLayoutSpec | null | undefined): string[] {
+  if (!spec) return [];
+  if (spec.grouping) return spec.grouping.variableIds;
+  if (!spec.fitByColor) return [];
+  if (spec.color.kind === "variable") return [spec.color.variableId];
+  if (spec.color.kind === "dose") return [DOSE_GROUPING_ID];
+  return [];
+}
+
+/** Normalize a (possibly legacy) spec to carry explicit `grouping` and no `fitByColor`. */
+export function withResolvedGrouping(spec: ViewLayoutSpec): ViewLayoutSpec {
+  const variableIds = resolveGrouping(spec);
+  if (spec.grouping && spec.fitByColor === undefined) return spec;
+  const { fitByColor: _legacy, ...rest } = spec;
+  return { ...rest, grouping: { variableIds } };
+}

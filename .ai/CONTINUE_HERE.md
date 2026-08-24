@@ -1,6 +1,27 @@
 # Continue here (session handoff)
 
-**Last updated:** 2026-08-16 (uncommitted: policy fix + ADR-0012 + rethink docs)  
+**Last updated:** 2026-08-24 — **E2a LANDED: grouping model cutover (§J / I10).**
+`grouping: { variableIds }` replaces `fitByColor` everywhere (UI "Group curves
+by" select; `resolveGrouping` migrates persisted legacy specs at
+`resolveViewLayoutSpec`); curves = endpoint × grouping partition; constancy
+theorem paints curves AND projections (one law — `constantOver`/`curveColorKey`);
+projections associate with curves structurally via `curveKey` (id-string parsing
+removed from the association path); readout mirrors curve granularity (only
+snapshot diff: s6 readout — the old pooled fit line under split curves was a
+latent I8 violation, re-baselined). New capabilities now legal by grammar:
+grouping by a NON-painted variable (identical-looking curves — user's
+responsibility), grouping under color=endpoints, dose-faceted degenerate
+arm-colored curves. Invariants I8 restated + I10 added.
+**E2b NEXT (user-confirmed bugs):** (1) axis desync fires ONLY when Overlays →
+"Show readout" is checked (readout strip height change mid-paint — re-measure/
+repaint after readout render); (2) facet-ROWS-by-variable overlaps the mirrored
+dist panels (user screenshot 2026-08-24: three dist blocks collide) — add a
+snapshot scenario, then fix; (3) then converged painter (delete
+paintCompareScatterIntoWrap, one styleFor(group), user-owned response scale).
+Also logged: "recode value as missing" data-prep mapping (race=99) — future
+Data-panel feature, NOT grammar.
+
+**Older context below (2026-08-16 era; superseded where it conflicts):**  
 **Theme:** **ENCODING V2 APPROVED** — unified grammar (ADR-0012 in `docs/DECISIONS.md`); full design record in [`ENCODING_V2_RETHINK.md`](./ENCODING_V2_RETHINK.md). The Phase-2 backlog below is **subsumed** by the v2 implementation sequence (rethink §F). Old plan kept for reference only.  
 **Git:** Uncommitted on `main`: `panelVisualPolicy` multiCurve fix (+test), ADR-0012, `.ai` updates; exclude local `claudetwoexposureoneendpoint.R` from commits.
 

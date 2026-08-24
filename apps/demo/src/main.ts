@@ -74,9 +74,12 @@ import {
 } from "@er-explorer/data";
 import type { DistPanelSpec, ScatterPanelSpec, ViewLayoutSpec } from "@er-explorer/domain";
 import {
+  DOSE_GROUPING_ID,
+  GROUP_KEY_SEPARATOR,
   dedupeFacetDimensions,
   distEndpointColorSplit,
   formatDistGroupId,
+  resolveGrouping,
   isGuidedCompareTopology,
   layoutHasEndpointFacet,
   parseDistGroupId as parseDistGroupRef,
@@ -158,6 +161,10 @@ interface ScatterPoint {
  * binary, mean±CI for continuous) — consumers never branch on family. */
 interface ProjectedGroup {
   groupId: string | number;
+  /** Curve association (I8): matches a curve group's key; "" = pooled; absent on legacy compare paths. */
+  curveKey?: string;
+  /** Readout label from the pipeline (clicked row, refined by group key). */
+  label?: string;
   color: string;
   q1: number;
   median: number;
@@ -616,7 +623,7 @@ const advancedRowFacetsEl = $<HTMLSelectElement>("advancedRowFacets");
 const advancedColFacetsEl = $<HTMLSelectElement>("advancedColFacets");
 const advancedColorByEl = $<HTMLSelectElement>("advancedColorBy");
 const advancedColorBinningEl = $<HTMLSelectElement>("advancedColorBinning");
-const advancedFitByColorEl = $<HTMLInputElement>("advancedFitByColor");
+const advancedGroupCurvesEl = $<HTMLSelectElement>("advancedGroupCurves");
 const advancedEndpointOverlayEl = $<HTMLInputElement>("advancedEndpointOverlay");
 const advancedDistLinkageEl = $<HTMLSelectElement>("advancedDistLinkage");
 const advancedColorDistShapesEl = $<HTMLInputElement>("advancedColorDistShapes");
@@ -652,6 +659,21 @@ function refreshAdvancedColorOptions(): void {
     advancedColorByEl.appendChild(opt);
   }
   if ([...advancedColorByEl.options].some((o) => o.value === keep)) advancedColorByEl.value = keep;
+
+  // Group curves by (§J): none, dose, or any covariate — grouping is statistics,
+  // independent of what the color channel paints.
+  const keepGroup = advancedGroupCurvesEl.value;
+  advancedGroupCurvesEl.innerHTML =
+    `<option value="">(none — one pooled curve per endpoint)</option><option value="${DOSE_GROUPING_ID}">Dose</option>`;
+  for (const col of filterColumnOptions()) {
+    const opt = document.createElement("option");
+    opt.value = col.id;
+    opt.textContent = col.label;
+    advancedGroupCurvesEl.appendChild(opt);
+  }
+  if ([...advancedGroupCurvesEl.options].some((o) => o.value === keepGroup)) {
+    advancedGroupCurvesEl.value = keepGroup;
+  }
 }
 
 /**
@@ -727,7 +749,7 @@ function pullAdvancedSpecFromUi(): ViewLayoutSpec {
     advancedColFacetsEl,
     advancedColorByEl.value,
     advancedColorBinningEl.value,
-    advancedFitByColorEl.checked,
+    advancedGroupCurvesEl.value,
     // ADR-0012: distribution layout is derived (collapse over endpoints, mirror
     // non-endpoint facets) — the linkage field is pinned, the control hidden.
     "mirror_scatter_grid",
@@ -783,11 +805,8 @@ function syncAdvancedColorDistShapesUi(spec: ViewLayoutSpec | null): void {
 }
 
 function syncAdvancedFitByColorUi(spec: ViewLayoutSpec | null): void {
-  // ADR-0012: dose is an ordinary channel — fit-per-arm is the analyst's call.
-  // Only color=endpoints disables it (curves are already one per endpoint).
-  const allowed = spec?.color.kind === "variable" || spec?.color.kind === "dose";
-  advancedFitByColorEl.disabled = !allowed;
-  if (!allowed) advancedFitByColorEl.checked = false;
+  // §J: grouping is statistics, legal with ANY channel — the constancy theorem,
+  // not the UI, decides what a group's curve wears. Nothing to disable.
   const epFacet = spec ? layoutHasEndpointFacet(spec) : false;
   advancedEndpointOverlayEl.disabled = epFacet;
   if (epFacet) advancedEndpointOverlayEl.checked = false;
@@ -867,7 +886,7 @@ function syncLayoutModeUi(options?: { refreshAdvancedControls?: boolean }): void
         advancedColFacetsEl,
         advancedColorByEl,
         advancedColorBinningEl,
-        advancedFitByColorEl,
+        advancedGroupCurvesEl,
         advancedDistLinkageEl,
         advancedColorDistShapesEl,
         advancedEndpointOverlayEl
@@ -957,7 +976,7 @@ function renderLayoutColorLegend(spec: ViewLayoutSpec): void {
 }
 
 function renderVariableColorLegend(variableId: string): void {
-  renderLayoutColorLegend({ mode: "advanced", rowDimensions: [], colDimensions: [], color: { kind: "variable", variableId }, fitByColor: false, distribution: { linkage: "shared_by_x_column", colorDistShapes: false } });
+  renderLayoutColorLegend({ mode: "advanced", rowDimensions: [], colDimensions: [], color: { kind: "variable", variableId }, grouping: { variableIds: [] }, distribution: { linkage: "shared_by_x_column", colorDistShapes: false } });
 }
 
 let pendingCsvRows: Array<Record<string, import("@er-explorer/data").RawCellValue>> | null = null;
@@ -1246,6 +1265,63 @@ function baseColorModelFor(spec: ViewLayoutSpec | null): ColorBinModel | null {
     : null;
 }
 
+/**
+ * Base-cohort accessors for the DECLARED grouping (§J): ordered composite keys
+ * (curve granularity, I8) and a per-row key. Level models are built with the
+ * same binning as the color channel would use, so grouping-by-the-color-variable
+ * shares its cuts exactly.
+ */
+function groupingAccessFor(spec: ViewLayoutSpec | null): {
+  keys: string[];
+  keyForRow: (rowIndex: number) => string | null;
+} {
+  const ids = resolveGrouping(spec);
+  if (!ids.length || !dataset) return { keys: [], keyForRow: () => null };
+  const ds = requireDataset();
+  const base = dataFilteredRowIndices();
+  const parts: Array<{ levels: string[]; forRow: (i: number) => string | null }> = [];
+  for (const vid of ids) {
+    if (vid === DOSE_GROUPING_ID) {
+      parts.push({ levels: DOSE_ORDER(), forRow: (i) => ds.doseLabel(i) || null });
+    } else {
+      const binning =
+        (spec?.color.kind === "variable" && spec.color.variableId === vid ? spec.color.binning : undefined) ??
+        spec?.continuousBinning;
+      const model = buildColorBinModel(ds.loaded, vid, base, binning);
+      parts.push({
+        levels: model.levels,
+        forRow: (i) => colorLevelForRow(i, model, ds.loaded, vid) || null
+      });
+    }
+  }
+  let keys: string[] = [""];
+  for (const p of parts) {
+    keys = keys.flatMap((k) => p.levels.map((l) => (k ? `${k}${GROUP_KEY_SEPARATOR}${l}` : l)));
+  }
+  const keyForRow = (i: number): string | null => {
+    let key = "";
+    for (const p of parts) {
+      const v = p.forRow(i);
+      if (v === null) return null;
+      key = key ? `${key}${GROUP_KEY_SEPARATOR}${v}` : v;
+    }
+    return key;
+  };
+  return { keys, keyForRow };
+}
+
+/** "" unless `valueOf` yields one identical non-null value across all rows (constancy theorem). */
+function constantOver(rows: number[], valueOf: (rowIndex: number) => string | null): string {
+  let seen: string | null = null;
+  for (const i of rows) {
+    const v = valueOf(i);
+    if (v === null || v === undefined || v === "") return "";
+    if (seen === null) seen = v;
+    else if (seen !== v) return "";
+  }
+  return seen ?? "";
+}
+
 function selectionProjectionCtxFor(
   active: Set<number>,
   spec: ViewLayoutSpec | null,
@@ -1254,8 +1330,12 @@ function selectionProjectionCtxFor(
 ): SelectionProjectionCtx {
   const ds = requireDataset();
   const colorVarId = spec?.color.kind === "variable" ? spec.color.variableId : null;
+  const grouping = groupingAccessFor(spec);
   return {
     spec,
+    groupingKeys: grouping.keys,
+    groupingKeyForRow: grouping.keyForRow,
+    doseForRow: (i) => ds.doseLabel(i) || null,
     knownEndpointIds: selectedEndpoints(),
     selectedDistGroupIds: state.selectedDistGroupIds,
     selectedDoses: state.selectedDoses,
@@ -1317,10 +1397,11 @@ function colorForDistGroupId(
   _endpoint: Endpoint,
   spec: ViewLayoutSpec | null,
   colorModel: ColorBinModel | null,
+  rows: number[],
   colorOverride?: string
 ): string {
   const ctx = selectionProjectionCtxFor(activeSet(), spec, colorModel);
-  return colorForGroup(ctx, gid, colorOverride);
+  return colorForGroup(ctx, gid, rows, colorOverride);
 }
 
 function pointColorsMonochromeForEndpoint(endpoint: Endpoint): Record<string, string> {
@@ -1852,24 +1933,41 @@ function renderContinuousScatterViaRenderer(
   observedBins: ObservedBin[],
   height = SCATTER_CHART_HEIGHT,
   opts?: {
-    /** ADR-0012 curve groups (fit per color level); replaces the single pooled curve. */
-    curves?: Array<{ curve: PredictionResult; color: string; level?: string }>;
+    /** §J curve groups (one per grouping partition); replaces the single pooled curve. */
+    curves?: Array<{ curve: PredictionResult; color: string; key?: string; level?: string }>;
     /** Point color under the active color channel; default = dose palette. */
     pointColorFor?: (p: ScatterPoint) => string;
   }
 ): { content: string; metadata: ScatterMeta } {
   const ds = requireDataset();
   const curveOverlays = opts?.curves?.length
-    ? opts.curves.map((c) => ({ samples: toCurveSamples(c.curve), color: c.color, band: c.color, level: c.level }))
-    : [{ samples: toCurveSamples(curve), color: "#64748b", band: "#94a3b8", level: undefined as string | undefined }];
+    ? opts.curves.map((c) => ({
+        samples: toCurveSamples(c.curve),
+        color: c.color,
+        band: c.color,
+        key: c.key,
+        level: c.level
+      }))
+    : [
+        {
+          samples: toCurveSamples(curve),
+          color: "#64748b",
+          band: "#94a3b8",
+          key: undefined as string | undefined,
+          level: undefined as string | undefined
+        }
+      ];
   const allSamples = curveOverlays.flatMap((c) => c.samples);
   const curveSamples = curveOverlays[0]!.samples;
-  // A clicked group projects onto ITS OWN curve: level-suffixed groups match
-  // level curves; plain dose groups match per-arm curves (level = dose). The
-  // granularity rule (projections resolve at curve granularity) guarantees a
-  // match whenever curves are split; single pooled curve is the only fallback.
-  const samplesForGroup = (groupId: string | number) => {
-    const { dose, suffix } = parseDistGroupId(String(groupId));
+  // A projected group rides ITS OWN curve, matched structurally by curveKey
+  // (I4/I8). Legacy producers without curveKey (guided compare) fall back to
+  // suffix/dose matching; the single pooled curve is the last resort.
+  const samplesForGroup = (p: Pick<ProjectedGroup, "groupId" | "curveKey">) => {
+    if (p.curveKey !== undefined) {
+      const byKey = curveOverlays.find((c) => (c.key ?? "") === p.curveKey);
+      if (byKey) return byKey.samples;
+    }
+    const { dose, suffix } = parseDistGroupId(String(p.groupId));
     const match =
       (suffix ? curveOverlays.find((c) => c.level === suffix) : undefined) ??
       curveOverlays.find((c) => c.level === dose);
@@ -1907,10 +2005,10 @@ function renderContinuousScatterViaRenderer(
     const rangeSamplesFor = (p: LinearProjectedGroup) => {
       const lo = p.min ?? p.whiskerLow;
       const hi = p.max ?? p.whiskerHigh;
-      return samplesForGroup(p.groupId).filter((s) => s.exposure >= lo && s.exposure <= hi);
+      return samplesForGroup(p).filter((s) => s.exposure >= lo && s.exposure <= hi);
     };
     const coreSamplesFor = (p: LinearProjectedGroup) =>
-      samplesForGroup(p.groupId).filter((s) => s.exposure >= p.q1 && s.exposure <= p.q3);
+      samplesForGroup(p).filter((s) => s.exposure >= p.q1 && s.exposure <= p.q3);
 
     projected.forEach((p, i) => {
       layers.push(new ConfidenceRibbonLayer({ id: `proj-band-${i}`, samples: rangeSamplesFor(p), color: p.color, opacity: 0.1 }));
@@ -1922,7 +2020,7 @@ function renderContinuousScatterViaRenderer(
       layers.push(
         new DoseProjectionLayer({
           id: `projection-markers-${i}`,
-          curveSamples: samplesForGroup(p.groupId),
+          curveSamples: samplesForGroup(p),
           groups: [{ color: p.color, q1: p.q1, q3: p.q3, median: p.median, min: p.min, max: p.max }]
         })
       );
@@ -3137,70 +3235,58 @@ function paintRegularScatterIntoWrap(
 
   let scatterResult: { content: string; metadata: unknown };
 
+  // §J: curve units = partitions of the endpoint-finite cohort by the DECLARED
+  // grouping (one pooled partition when none). Each curve wears the channel
+  // encoding per the constancy theorem — the channel variable must be constant
+  // within the group's rows; otherwise neutral ink. One law for every channel
+  // (this subsumes the old fitByColor branches AND the degenerate facet+color
+  // single-level rule).
+  const grouping = groupingAccessFor(spec ?? null);
+  const curvePartitions = grouping.keys.length
+    ? grouping.keys
+        .map((key) => ({ key, rows: recordRows.filter((i) => grouping.keyForRow(i) === key) }))
+        .filter((p) => p.rows.length > 0)
+    : [{ key: "", rows: recordRows }];
+  const channelColorFor = (rows: number[]): string | undefined => {
+    if (colorByVariable && colorVarId && colorModel) {
+      const level = constantOver(rows, (i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) || null);
+      return level ? variableColorForLevel(colorVarId, level, colorModel.levels) : undefined;
+    }
+    if (colorSpec?.kind === "endpoints") return endpointColor(endpoint);
+    if (!colorSpec || colorSpec.kind === "dose") {
+      const arm = constantOver(rows, (i) => ds.doseLabel(i) || null);
+      return arm ? resolveDoseColor(arm) : undefined;
+    }
+    return undefined;
+  };
+  const projectedForCurveKey = (projected: ProjectedGroup[], key: string): ProjectedGroup[] =>
+    projected.filter((g) => (g.curveKey ?? "") === key);
+
   if (continuous) {
     const { fit, xs, ys } = fitForCohort(metric, endpoint, recordRows);
     const curve = curveFor(fit, xs, ys, xDomain);
 
-    // ADR-0012 curve groups: continuous endpoints fit per color level like every
-    // other model family (this was the "BRLS not fit separately by sex" gap).
-    // Canonical model order (I1), never row-iteration order (same defect as the
-    // binary branch: Set-insertion order varies per panel cohort).
-    const presentLevels =
-      colorByVariable && colorVarId && colorModel
-        ? colorModel.levels.filter((l) =>
-            recordRows.some((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === l)
-          )
-        : [];
-    let levelCurves: Array<{ curve: PredictionResult; color: string; level?: string }> | undefined;
-    if (colorByVariable && colorVarId && colorModel && presentLevels.length) {
-      const paletteLevels = colorModel.levels;
-      if (spec?.fitByColor && presentLevels.length > 1) {
-        const built = presentLevels.flatMap((level) => {
-          const sub = recordRows.filter((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === level);
-          try {
-            const f = fitForCohort(metric, endpoint, sub);
-            return [
-              {
-                curve: curveFor(f.fit, f.xs, f.ys, xDomain),
-                color: variableColorForLevel(colorVarId, level, paletteLevels),
-                level
-              }
-            ];
-          } catch {
-            return [];
-          }
-        });
-        if (built.length) levelCurves = built;
-      } else if (presentLevels.length === 1) {
-        // Degenerate facet+color: the pooled curve wears the panel's level color.
-        levelCurves = [
-          {
-            curve,
-            color: variableColorForLevel(colorVarId, presentLevels[0]!, colorModel.levels),
-            level: presentLevels[0]!
-          }
-        ];
+    let levelCurves: Array<{ curve: PredictionResult; color: string; key?: string; level?: string }> | undefined;
+    const builtCurves = curvePartitions.flatMap((part) => {
+      let fitted: PredictionResult;
+      if (part.key === "") {
+        fitted = curve;
+      } else {
+        try {
+          const f = fitForCohort(metric, endpoint, part.rows);
+          fitted = curveFor(f.fit, f.xs, f.ys, xDomain);
+        } catch {
+          return [];
+        }
       }
-    } else if (colorSpec?.kind === "endpoints") {
-      // Endpoint channel: monochrome endpoint curve — never the pooled gray.
-      levelCurves = [{ curve, color: endpointColor(endpoint) }];
-    } else if (spec?.fitByColor) {
-      // Dose is an ordinary channel (ADR-0012): fit per arm when asked.
-      const arms = DOSE_ORDER().filter((dose) => recordRows.some((i) => ds.doseLabel(i) === dose));
-      if (arms.length > 1) {
-        const built = arms.flatMap((dose) => {
-          const sub = recordRows.filter((i) => ds.doseLabel(i) === dose);
-          try {
-            const f = fitForCohort(metric, endpoint, sub);
-            return [
-              { curve: curveFor(f.fit, f.xs, f.ys, xDomain), color: resolveDoseColor(dose), level: dose }
-            ];
-          } catch {
-            return [];
-          }
-        });
-        if (built.length) levelCurves = built;
-      }
+      const color = channelColorFor(part.rows);
+      return [{ curve: fitted, color, key: part.key, level: part.key || undefined }];
+    });
+    // A single unpainted pooled curve keeps the renderer's default neutral style.
+    const neutralPooled =
+      builtCurves.length === 1 && builtCurves[0]!.key === "" && builtCurves[0]!.color === undefined;
+    if (builtCurves.length && !neutralPooled) {
+      levelCurves = builtCurves.map((c) => ({ ...c, color: c.color ?? "#64748b" }));
     }
     const pointColorFor =
       colorByVariable && colorVarId && colorModel
@@ -3257,46 +3343,32 @@ function paintRegularScatterIntoWrap(
         spec,
         colorOverride: rowPaint.fixedColor
       });
-      // Granularity rule: with split curves every projected group is level-scoped
-      // (pooled selections were expanded upstream), so association is strict —
-      // a group renders only on its own level's curve. No pooled hosting.
-      const projectedForCurve = (level: string): ProjectedGroup[] =>
-        doseProjected.filter((g) => parseDistGroupId(String(g.groupId)).suffix === level);
 
-      const fitSeparate = !!spec?.fitByColor && levels.length > 1;
-      let curves: BinaryCurveOverlay[];
-      if (fitSeparate) {
-        const built: BinaryCurveOverlay[] = [];
-        for (const level of levels) {
-          const sub = recordRows.filter((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === level);
-          const fitResult = tryFitForCohort(metric, endpoint, sub);
-          if (!fitResult) continue;
-          built.push({
+      // §J: one curve per grouping partition; constancy paints it; projections
+      // associate structurally by curveKey (I8: a group rides only its own curve).
+      let curves: BinaryCurveOverlay[] = curvePartitions.flatMap((part) => {
+        const fitResult = tryFitForCohort(metric, endpoint, part.rows);
+        if (!fitResult) return [];
+        return [
+          {
             curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
-            color: variableColorForLevel(colorVarId, level, paletteLevels),
+            color: channelColorFor(part.rows) ?? "#334155",
             dash: "",
-            projected: projectedForCurve(level)
-          });
-        }
-        curves = built.length
-          ? built
-          : (() => {
-              const fitResult = tryFitForCohort(metric, endpoint, recordRows);
-              return fitResult
-                ? [{ curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain), color: "#334155", dash: "", projected: doseProjected }]
-                : [];
-            })();
-      } else {
+            projected: projectedForCurveKey(doseProjected, part.key)
+          }
+        ];
+      });
+      if (!curves.length) {
         const fitResult = tryFitForCohort(metric, endpoint, recordRows);
         if (fitResult) {
-          const curve = curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain);
-          const curveColor =
-            levels.length === 1
-              ? variableColorForLevel(colorVarId, levels[0]!, paletteLevels)
-              : "#334155";
-          curves = [{ curve, color: curveColor, dash: "", projected: doseProjected }];
-        } else {
-          curves = [];
+          curves = [
+            {
+              curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
+              color: channelColorFor(recordRows) ?? "#334155",
+              dash: "",
+              projected: doseProjected
+            }
+          ];
         }
       }
 
@@ -3331,17 +3403,20 @@ function paintRegularScatterIntoWrap(
         cohortRowIndices: cohort,
         spec
       });
-      const fitResult = tryFitForCohort(metric, endpoint, recordRows);
-      const curves: BinaryCurveOverlay[] = fitResult
-        ? [
-            {
-              curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
-              color: epColor,
-              dash: endpointDash(endpoint),
-              projected
-            }
-          ]
-        : [];
+      // §J: grouping is legal under the endpoints channel too — one curve per
+      // group, each wearing the endpoint color (endpoint is constant per curve).
+      const curves: BinaryCurveOverlay[] = curvePartitions.flatMap((part) => {
+        const fitResult = tryFitForCohort(metric, endpoint, part.rows);
+        if (!fitResult) return [];
+        return [
+          {
+            curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
+            color: epColor,
+            dash: endpointDash(endpoint),
+            projected: projectedForCurveKey(projected, part.key)
+          }
+        ];
+      });
 
       scatterResult = renderBinaryScatterOverlay(
         state.showPoints ? points : [],
@@ -3363,31 +3438,37 @@ function paintRegularScatterIntoWrap(
         cohortRowIndices: cohort,
         spec
       });
-      // Dose is an ordinary channel (ADR-0012): fit per arm when asked.
+      // Dose is an ordinary channel (ADR-0012); §J: one curve per grouping
+      // partition, arm-colored only when the arm is constant within the group.
       let curves: BinaryCurveOverlay[];
-      const fitArms = spec?.fitByColor
-        ? DOSE_ORDER().filter((dose) => recordRows.some((i) => ds.doseLabel(i) === dose))
-        : [];
-      if (fitArms.length > 1) {
-        curves = fitArms.flatMap((dose) => {
-          const sub = recordRows.filter((i) => ds.doseLabel(i) === dose);
-          const fitResult = tryFitForCohort(metric, endpoint, sub);
-          return fitResult
-            ? [
-                {
-                  curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
-                  color: resolveDoseColor(dose),
-                  dash: "",
-                  // Granularity rule: an arm's projection rides only its own arm curve.
-                  projected: projected.filter((p) => parseDistGroupId(String(p.groupId)).dose === dose)
-                }
-              ]
-            : [];
+      const splitCurves = curvePartitions.length > 1 || curvePartitions[0]!.key !== "";
+      if (splitCurves) {
+        curves = curvePartitions.flatMap((part) => {
+          const fitResult = tryFitForCohort(metric, endpoint, part.rows);
+          if (!fitResult) return [];
+          return [
+            {
+              curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
+              color: channelColorFor(part.rows) ?? "#334155",
+              dash: "",
+              // Granularity rule (I8): a group's projection rides only its own curve.
+              projected: projectedForCurveKey(projected, part.key)
+            }
+          ];
         });
       } else {
         const fitResult = tryFitForCohort(metric, endpoint, recordRows);
+        // Degenerate facet+dose-color: a single-arm cell keeps its arm color
+        // (constancy — same rule variables already have); multi-arm stays neutral.
+        const armColor = channelColorFor(recordRows);
         curves = fitResult
-          ? [{ curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain), projected }]
+          ? [
+              {
+                curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
+                ...(armColor ? { color: armColor } : {}),
+                projected
+              }
+            ]
           : [];
       }
 
@@ -4123,57 +4204,60 @@ function updateReadout(
 
   const gids = state.selectedDistGroupIds.size ? [...state.selectedDistGroupIds] : [...state.selectedDoses];
   const blocks: string[] = [];
+  const grouping = groupingAccessFor(spec ?? null);
   for (const gid of gids) {
     const { dose, suffix } = parseDistGroupId(gid);
     const suffixIsEndpoint = !!suffix && selectedEndpoints().includes(suffix as Endpoint);
     const lineEndpoints = suffixIsEndpoint ? [suffix as Endpoint] : endpoints;
     const refEndpoint = lineEndpoints[0] ?? endpoints[0]!;
     const rows = rowsForDistGroupId(gid, active, cohort, refEndpoint, colorCtx);
-    const vals = rows
-      .map((i) => exposureValue(i, metric))
-      .filter((v) => Number.isFinite(v))
-      .sort((a, b) => a - b);
-    const s = summarizeDistribution(vals);
-    if (!s) continue;
-    const groupColor = colorForDistGroupId(gid, refEndpoint, spec, colorModel);
-    const label = suffix && !suffixIsEndpoint ? `${dose} · ${suffix}` : dose;
-    blocks.push(
-      `<div class="readout-line-exposure"><strong style="color:${groupColor}">${escapeHtml(label)}</strong> &nbsp; Min ${exposureLabel(metric)} = ${s.min.toFixed(1)} &nbsp; Q1 = ${s.q1.toFixed(1)} &nbsp; Median = ${s.median.toFixed(1)} &nbsp; Q3 = ${s.q3.toFixed(1)} &nbsp; Max = ${s.max.toFixed(1)} &nbsp; N=${rows.length}</div>`
-    );
-
-    if (omitEndpointFit) continue;
-
-    for (const endpoint of lineEndpoints) {
-      // Fit rows mirror the plotted curve group: per-level under fitByColor with a
-      // covariate channel, per-arm under fitByColor with the dose channel, panel
-      // cohort pooled otherwise.
-      const fitBase = (cohort ?? dataFilteredRowIndices()).filter((i) =>
-        Number.isFinite(endpointValue(i, endpoint))
-      );
-      let fitRows = fitBase;
-      if (spec?.fitByColor && colorCtx && suffix && !suffixIsEndpoint) {
-        fitRows = fitBase.filter(
-          (i) => colorLevelForRow(i, colorCtx.model, ds.loaded, colorCtx.variableId) === suffix
-        );
-      } else if (spec?.fitByColor && spec.color.kind === "dose") {
-        fitRows = fitBase.filter((i) => ds.doseLabel(i) === dose);
-      }
-      const fitResult = tryFitForCohort(metric, endpoint, fitRows);
-      if (!fitResult) continue;
-      const fit = fitResult.fit;
-      // ADR-0013: family math via the adapter — no family branching in pipelines.
-      const family = fit.kind === "linear" ? linearFamily : logisticFamily;
-      const decimals = family.readoutDecimals;
-      const fitAt = (x: number) => family.fittedAt(fit.model as never, x);
-      const lineColor = spec?.color.kind === "endpoints" ? endpointColor(endpoint) : groupColor;
-      const lineLabel = lineEndpoints.length > 1 || endpoints.length > 1 ? ds.endpointLabel(endpoint) : label;
-      const endpointN = rows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).length;
-      const missing = rows.length - endpointN;
-      const nNote =
-        missing === 0 ? "" : ` &nbsp; <span class="muted">${missing} missing from N=${rows.length}</span>`;
+    // §J/I8: the readout mirrors curve granularity — a clicked row splits into
+    // one line pair per grouping partition (pooled = one, as before).
+    const partitions = grouping.keys.length
+      ? grouping.keys
+          .map((key) => ({ key, rows: rows.filter((i) => grouping.keyForRow(i) === key) }))
+          .filter((p) => p.rows.length > 0)
+      : [{ key: "", rows }];
+    for (const part of partitions) {
+      const vals = part.rows
+        .map((i) => exposureValue(i, metric))
+        .filter((v) => Number.isFinite(v))
+        .sort((a, b) => a - b);
+      const s = summarizeDistribution(vals);
+      if (!s) continue;
+      const groupColor = colorForDistGroupId(gid, refEndpoint, spec, colorModel, part.rows);
+      const baseLabel = suffix && !suffixIsEndpoint ? `${dose} · ${suffix}` : dose;
+      const label = part.key && part.key !== suffix ? `${baseLabel} · ${part.key}` : baseLabel;
       blocks.push(
-        `<div class="readout-line-fit"><span style="color:${lineColor}">${escapeHtml(lineLabel)}</span> — fit @ Min ${fitAt(s.min).toFixed(decimals)} · Q1 ${fitAt(s.q1).toFixed(decimals)} · Med ${fitAt(s.median).toFixed(decimals)} · Q3 ${fitAt(s.q3).toFixed(decimals)} · Max ${fitAt(s.max).toFixed(decimals)}${nNote}</div>`
+        `<div class="readout-line-exposure"><strong style="color:${groupColor}">${escapeHtml(label)}</strong> &nbsp; Min ${exposureLabel(metric)} = ${s.min.toFixed(1)} &nbsp; Q1 = ${s.q1.toFixed(1)} &nbsp; Median = ${s.median.toFixed(1)} &nbsp; Q3 = ${s.q3.toFixed(1)} &nbsp; Max = ${s.max.toFixed(1)} &nbsp; N=${part.rows.length}</div>`
       );
+
+      if (omitEndpointFit) continue;
+
+      for (const endpoint of lineEndpoints) {
+        // Fit rows mirror the plotted curve group (§J): the panel cohort filtered
+        // to this partition's group — pooled when no grouping is declared.
+        const fitBase = (cohort ?? dataFilteredRowIndices()).filter((i) =>
+          Number.isFinite(endpointValue(i, endpoint))
+        );
+        const fitRows = part.key ? fitBase.filter((i) => grouping.keyForRow(i) === part.key) : fitBase;
+        const fitResult = tryFitForCohort(metric, endpoint, fitRows);
+        if (!fitResult) continue;
+        const fit = fitResult.fit;
+        // ADR-0013: family math via the adapter — no family branching in pipelines.
+        const family = fit.kind === "linear" ? linearFamily : logisticFamily;
+        const decimals = family.readoutDecimals;
+        const fitAt = (x: number) => family.fittedAt(fit.model as never, x);
+        const lineColor = spec?.color.kind === "endpoints" ? endpointColor(endpoint) : groupColor;
+        const lineLabel = lineEndpoints.length > 1 || endpoints.length > 1 ? ds.endpointLabel(endpoint) : label;
+        const endpointN = part.rows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).length;
+        const missing = part.rows.length - endpointN;
+        const nNote =
+          missing === 0 ? "" : ` &nbsp; <span class="muted">${missing} missing from N=${part.rows.length}</span>`;
+        blocks.push(
+          `<div class="readout-line-fit"><span style="color:${lineColor}">${escapeHtml(lineLabel)}</span> — fit @ Min ${fitAt(s.min).toFixed(decimals)} · Q1 ${fitAt(s.q1).toFixed(decimals)} · Med ${fitAt(s.median).toFixed(decimals)} · Q3 ${fitAt(s.q3).toFixed(decimals)} · Max ${fitAt(s.max).toFixed(decimals)}${nNote}</div>`
+        );
+      }
     }
   }
   if (!blocks.length) {
@@ -5335,7 +5419,7 @@ function bindAdvancedLayoutInput(el: HTMLElement): void {
   advancedColFacetsEl,
   advancedColorByEl,
   advancedColorBinningEl,
-  advancedFitByColorEl,
+  advancedGroupCurvesEl,
   advancedEndpointOverlayEl,
   advancedDistLinkageEl,
   advancedColorDistShapesEl

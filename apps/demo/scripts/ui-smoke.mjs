@@ -331,7 +331,7 @@ async function run() {
     await openStyleDrawer(page);
     await setSelectValue(page, "advancedColorBy", sexValue);
     await setCheckbox(page, "advancedColorDistShapes", false);
-    await setCheckbox(page, "advancedFitByColor", true);
+    await setSelectValue(page, "advancedGroupCurves", sexValue);
     await openDrawerRail(page, "plot");
     await page.waitForTimeout(400);
 
@@ -391,22 +391,22 @@ async function run() {
     // to level groups; pooled curve keeps the pooled group in neutral.
     const CONFORMANCE_SCENARIOS = [
       {
-        name: "fit-per-level, pooled 2400mg click → level expansion",
-        fitByColor: true,
+        name: "grouped curves, pooled 2400mg click → group partition",
+        groupBy: "wt",
         splitBoxplots: false,
         clickGroup: "2400 mg",
         expectGroups: 2
       },
       {
-        name: "fit-per-level, single level-row click → one group on its curve",
-        fitByColor: true,
+        name: "grouped curves, single level-row click → one group on its curve",
+        groupBy: "wt",
         splitBoxplots: true,
         clickPrefix: "2400 mg|",
         expectGroups: 1
       },
       {
         name: "pooled curve, pooled click → one neutral group",
-        fitByColor: false,
+        groupBy: "",
         splitBoxplots: false,
         clickGroup: "2400 mg",
         expectGroups: 1,
@@ -436,7 +436,7 @@ async function run() {
         await setSelectedEndpoints(page, [ep]);
         await openStyleDrawer(page);
         await setSelectValue(page, "advancedColorBy", "wt");
-        await setCheckbox(page, "advancedFitByColor", sc.fitByColor);
+        await setSelectValue(page, "advancedGroupCurves", sc.groupBy);
         await setCheckbox(page, "advancedColorDistShapes", sc.splitBoxplots);
         await openDrawerRail(page, "analysis");
         await page.locator("#resetBtn").click();

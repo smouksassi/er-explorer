@@ -195,7 +195,7 @@ const SCENARIOS = [
     name: "s6-regular-color-sex-fitsep-pooled-click",
     run: async () => {
       await setSel("advancedColorBy", "sex");
-      await setCb("advancedFitByColor", true);
+      await setSel("advancedGroupCurves", "sex");
       await settle();
       await clickRow("2400 mg");
       await settle();

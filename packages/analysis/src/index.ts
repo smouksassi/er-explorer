@@ -100,8 +100,9 @@ export {
   type SelectionLevelModel,
   type SelectionProjectionCtx,
   colorForGroup,
-  gidsAtCurveGranularity,
+  partitionSelectionByGrouping,
   projectedSelectionGroups,
   rowsForGroup,
-  selectionGids
+  selectionGids,
+  selectionGroupLabel
 } from "./selectionProjection";

@@ -1,5 +1,5 @@
 import type { DistributionLinkage, LayoutDimension, VariableColorBinning, ViewLayoutSpec } from "@er-explorer/domain";
-import { dedupeFacetDimensions } from "@er-explorer/domain";
+import { dedupeFacetDimensions, resolveGrouping } from "@er-explorer/domain";
 
 export function linkageFromSelectValue(value: string): DistributionLinkage {
   switch (value) {
@@ -89,7 +89,7 @@ export function readAdvancedSpecFromUi(
   colSelect: HTMLSelectElement,
   colorValue: string,
   colorBinningValue: string,
-  fitByColor: boolean,
+  groupCurvesValue: string,
   distLinkage: DistributionLinkage,
   colorDistShapes: boolean,
   _endpointOverlay: boolean
@@ -108,17 +108,16 @@ export function readAdvancedSpecFromUi(
     color = { kind: "variable", variableId: colorValue, binning };
   }
 
-  // ADR-0012: dose is an ordinary channel — fit-per-arm is legal. Only
-  // color=endpoints strips fitByColor (curves are already one per endpoint).
-  const fitByColorAllowed = color.kind === "variable" || color.kind === "dose";
-
   return dedupeFacetDimensions({
     mode: "advanced",
     rowDimensions,
     colDimensions,
     color,
     continuousBinning: binning,
-    fitByColor: fitByColorAllowed ? fitByColor : false,
+    // Rethink §J: explicit statistical grouping — any variable (or dose), with
+    // any channel. Whether the groups are visually distinguishable is the
+    // constancy theorem's job, not a UI restriction.
+    grouping: { variableIds: groupCurvesValue ? [groupCurvesValue] : [] },
     endpointOverlay: false,
     distribution: { linkage: distLinkage, colorDistShapes },
     observedGroupVariableId: color.kind === "variable" ? color.variableId : undefined
@@ -131,7 +130,7 @@ export function applyAdvancedSpecToUi(
   colSelect: HTMLSelectElement,
   colorSelect: HTMLSelectElement,
   colorBinningSelect: HTMLSelectElement,
-  fitByColorEl: HTMLInputElement,
+  groupCurvesEl: HTMLSelectElement,
   distLinkageEl: HTMLSelectElement,
   colorDistShapesEl: HTMLInputElement,
   endpointOverlayEl: HTMLInputElement
@@ -148,7 +147,13 @@ export function applyAdvancedSpecToUi(
   } else {
     colorBinningSelect.value = "median";
   }
-  fitByColorEl.checked = spec.fitByColor;
+  const groupIds = resolveGrouping(spec);
+  const groupValue = groupIds[0] ?? "";
+  if ([...groupCurvesEl.options].some((o) => o.value === groupValue)) {
+    groupCurvesEl.value = groupValue;
+  } else {
+    groupCurvesEl.value = "";
+  }
   distLinkageEl.value = spec.distribution.linkage;
   colorDistShapesEl.checked = spec.distribution.colorDistShapes;
   endpointOverlayEl.checked = !!spec.endpointOverlay;

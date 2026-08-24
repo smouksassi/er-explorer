@@ -1,5 +1,5 @@
 import type { LayoutDimension, ViewLayoutSpec } from "@er-explorer/domain";
-import { dedupeFacetDimensions, ensureScaleBearingFacets } from "@er-explorer/domain";
+import { dedupeFacetDimensions, ensureScaleBearingFacets, withResolvedGrouping } from "@er-explorer/domain";
 import { defaultAdvancedSpecFromGuided, guidedToViewLayoutSpec, type GuidedLayoutInput } from "./guidedViewLayout";
 
 export type LayoutMode = "guided" | "advanced";
@@ -51,15 +51,6 @@ export function syncAdvancedSpecWithAnalysis(
   return dedupeFacetDimensions(synced);
 }
 
-function normalizeAdvancedColorFit(spec: ViewLayoutSpec): ViewLayoutSpec {
-  // ADR-0012: fitByColor is legal for variable AND dose channels (fit per level /
-  // per arm — the analyst's call). Only color=endpoints strips it, where it is
-  // vacuous (curves are already one per endpoint).
-  if (spec.color.kind !== "endpoints") return spec;
-  if (!spec.fitByColor) return spec;
-  return { ...spec, fitByColor: false };
-}
-
 export function resolveViewLayoutSpec(
   mode: LayoutMode,
   guidedInput: GuidedLayoutInput,
@@ -72,10 +63,12 @@ export function resolveViewLayoutSpec(
   }
 ): ViewLayoutSpec {
   if (mode === "advanced" && advancedViewLayout) {
-    let spec = advancedViewLayout;
+    // Rethink §J: explicit grouping is the one fit-unit authority; legacy
+    // persisted fitByColor migrates here and never reaches a consumer.
+    let spec = withResolvedGrouping(advancedViewLayout);
     if (analysis) {
       spec = syncAdvancedSpecWithAnalysis(
-        advancedViewLayout,
+        spec,
         analysis.endpointIds,
         analysis.endpointOrder,
         analysis.xMetricIds,
@@ -85,7 +78,7 @@ export function resolveViewLayoutSpec(
       // play must facet — implicitly if the user placed no facet for them.
       spec = ensureScaleBearingFacets(spec, analysis.xMetricIds, analysis.endpointIds);
     }
-    return normalizeAdvancedColorFit(spec);
+    return spec;
   }
   return guidedToViewLayoutSpec(guidedInput);
 }
@@ -102,7 +95,7 @@ export function defaultAdvancedLayout(
     rowDimensions: [],
     colDimensions: [],
     color: { kind: "dose" },
-    fitByColor: false,
+    grouping: { variableIds: [] },
     continuousBinning: "median",
     distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
   };

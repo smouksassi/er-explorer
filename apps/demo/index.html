@@ -512,8 +512,12 @@
           </select>
           <p class="field-hint">Same encoding for scatter curves/points and distribution strips (dose, endpoints, or a covariate).</p>
         </div>
-        <div class="field"><label><input type="checkbox" id="advancedFitByColor" /> Fit separately per color group</label>
-          <p class="field-hint">One curve per color group (covariate level or dose arm). With Endpoints color, curves are always one per endpoint. Per-arm fits over a narrow exposure range are the analyst's judgment.</p>
+        <div class="field"><label for="advancedGroupCurves">Group curves by</label>
+          <select id="advancedGroupCurves">
+            <option value="">(none — one pooled curve per endpoint)</option>
+            <option value="dose">Dose</option>
+          </select>
+          <p class="field-hint">Statistical grouping: one fitted curve per group (per endpoint). Color stays paint — a curve wears the color only when its group has a single color level. Per-arm fits over a narrow exposure range are the analyst's judgment.</p>
         </div>
         <div class="field" hidden aria-hidden="true"><label><input type="checkbox" id="advancedEndpointOverlay" /> Overlay endpoints (compare)</label></div>
         <!-- ADR-0012: distribution layout is DERIVED — strips collapse over endpoints
