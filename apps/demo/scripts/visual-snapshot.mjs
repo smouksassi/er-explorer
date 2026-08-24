@@ -92,6 +92,8 @@ async function setFacets(rows, cols) {
     };
     apply("advancedRowFacets", rows);
     apply("advancedColFacets", cols);
+    const all=[...document.getElementById("advancedRowFacets").options,...document.getElementById("advancedColFacets").options].map(o=>o.value);
+    for(const w of [...rows,...cols]) if(!all.includes(w)) throw new Error("facet option not found: "+w);
   }, { rows, cols });
 }
 async function resetSelection() {
@@ -171,7 +173,7 @@ const SCENARIOS = [
     run: async () => {
       await setMode("advanced");
       await setSel("advancedColorBy", "endpoints");
-      await setFacets([], ["crcl"]);
+      await setFacets([], ["var:crcl"]);
       await resetSelection();
       await settle();
       await clickRow("2400 mg");

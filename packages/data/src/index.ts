@@ -75,6 +75,7 @@ export {
   levelForRow,
   isNumericCovariateColumn,
   binLabelsFor,
+  binLabelsForCuts,
   effectiveVariableBinning
 } from "./variableBins";
 export {

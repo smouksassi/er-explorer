@@ -41,6 +41,8 @@ export function effectiveVariableBinning(
   return binning ?? "median";
 }
 
+/** @deprecated cut-value-bearing labels (binLabelsForCuts) replaced the opaque
+ * "≤ median" labels — the user could not verify which cut was used (QA round 13). */
 export function binLabelsFor(binning: VariableColorBinning): string[] {
   switch (binning) {
     case "median":
@@ -52,11 +54,32 @@ export function binLabelsFor(binning: VariableColorBinning): string[] {
   }
 }
 
+/** One decimal keeps the cut faithful (105.5 must not display as 106 — a row at
+ * 105.8 would read as inside "≤ 106" while being above the real cut). */
+function fmtCut(v: number): string {
+  return v.toFixed(1).replace(/\.0$/, "");
+}
+
+/** Transparent bin labels carrying the actual cut values ("≤ 105.5", "92.7–119.2",
+ * "> 119.2") so the binning is verifiable against external tools. */
+export function binLabelsForCuts(cuts: number[]): string[] {
+  if (!cuts.length) return [];
+  const labels: string[] = [`≤ ${fmtCut(cuts[0]!)}`];
+  for (let i = 1; i < cuts.length; i++) labels.push(`${fmtCut(cuts[i - 1]!)}–${fmtCut(cuts[i]!)}`);
+  labels.push(`> ${fmtCut(cuts[cuts.length - 1]!)}`);
+  return labels;
+}
+
 function numericValuesForRows(loaded: LoadedDataset, variableId: string, rowIndices: number[]): number[] {
   const col = getColumn(loaded, variableId);
   const out: number[] = [];
   for (const i of rowIndices) {
-    const n = Number(col[i]);
+    const raw = col[i];
+    // Missing stays missing: Number(null) and Number("") are 0, which silently
+    // dragged every cut point toward zero (crcl "median" 92.5 vs true 105.5 with
+    // 25% missingness — caught by the user's R cross-check, QA round 13).
+    if (raw === null || raw === undefined || String(raw).trim() === "") continue;
+    const n = Number(raw);
     if (Number.isFinite(n)) out.push(n);
   }
   return out;
@@ -91,7 +114,7 @@ export function buildVariableLevelModel(
   if (effective) {
     const vals = numericValuesForRows(loaded, variableId, rowIndices).sort((a, b) => a - b);
     const cuts = cutpointsFor(effective, vals);
-    return { binning: effective, levels: binLabelsFor(effective), cuts };
+    return { binning: effective, levels: binLabelsForCuts(cuts), cuts };
   }
   const col = getColumn(loaded, variableId);
   const set = new Set<string>();
@@ -112,7 +135,9 @@ export function levelForRow(
 ): string {
   const col = getColumn(loaded, variableId);
   const raw = col[i];
-  if (raw === null || raw === undefined) return "";
+  // "" is missing too — Number("") is 0 and would misassign missing rows to the
+  // lowest bin instead of excluding them.
+  if (raw === null || raw === undefined || String(raw).trim() === "") return "";
   if (model.binning && model.cuts) {
     const n = Number(raw);
     if (!Number.isFinite(n)) return "";

@@ -95,10 +95,10 @@ describe("viewLayoutEnumerate", () => {
         .filter((p) => p.facetKey.study === study && p.facetKey.wt === wtLevel)
         .flatMap((p) => p.rowIndices);
     // Global cut: study A is entirely ≤ median, study B entirely > median.
-    expect(rowsOf("A", "≤ median")).toHaveLength(16);
-    expect(rowsOf("A", "> median")).toHaveLength(0);
-    expect(rowsOf("B", "> median")).toHaveLength(16);
-    expect(rowsOf("B", "≤ median")).toHaveLength(0);
+    expect(rowsOf("A", "≤ 16.5")).toHaveLength(16);
+    expect(rowsOf("A", "> 16.5")).toHaveLength(0);
+    expect(rowsOf("B", "> 16.5")).toHaveLength(16);
+    expect(rowsOf("B", "≤ 16.5")).toHaveLength(0);
   });
 
   it("guided endpoint rows × x columns", () => {

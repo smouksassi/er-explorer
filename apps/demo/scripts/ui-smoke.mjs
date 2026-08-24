@@ -401,7 +401,7 @@ async function run() {
         name: "fit-per-level, single level-row click → one group on its curve",
         fitByColor: true,
         splitBoxplots: true,
-        clickGroup: "2400 mg|≤ median",
+        clickPrefix: "2400 mg|",
         expectGroups: 1
       },
       {
@@ -442,15 +442,16 @@ async function run() {
         await page.locator("#resetBtn").click();
         await page.waitForTimeout(300);
         await openDrawerRail(page, "plot");
-        const clicked = await page.evaluate((group) => {
-          const g = [...document.querySelectorAll("g.er-ridge")].find(
-            (el) => el.getAttribute("data-group") === group
-          );
+        const clicked = await page.evaluate(({ group, prefix }) => {
+          const g = [...document.querySelectorAll("g.er-ridge")].find((el) => {
+            const id = el.getAttribute("data-group") ?? "";
+            return group ? id === group : id.startsWith(prefix) && id.length > prefix.length;
+          });
           if (!g) return false;
           g.dispatchEvent(new MouseEvent("click", { bubbles: true }));
           return true;
-        }, sc.clickGroup);
-        if (!clicked) fail(`conformance(${ep}, ${sc.name}): row "${sc.clickGroup}" not rendered`);
+        }, { group: sc.clickGroup, prefix: sc.clickPrefix ?? "" });
+        if (!clicked) fail(`conformance(${ep}, ${sc.name}): row "${sc.clickGroup ?? sc.clickPrefix}" not rendered`);
         await page.waitForTimeout(600);
         const structure = await captureStructure();
         if (!structure) fail(`conformance(${ep}, ${sc.name}): no scatter svg`);
