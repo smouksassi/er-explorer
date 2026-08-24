@@ -4533,8 +4533,12 @@ function syncFiltersUi(): void {
         .join("");
       const distinct = col ? distinctColumnValues(dataset!.loaded, col.id, 50) : [];
       const selectedSet = new Set(rule.values);
-      const catPickers =
-        categorical && distinct.length
+      // Valueless operators (is missing / is not missing) take no value: hide the
+      // value editor and the categorical-mode toggle instead of showing dead inputs.
+      const valueless = rule.operator === "missing" || rule.operator === "notMissing";
+      const catPickers = valueless
+        ? ""
+        : categorical && distinct.length
           ? `<div class="filter-cat-values">${distinct
               .map(
                 (v) =>
@@ -4547,8 +4551,8 @@ function syncFiltersUi(): void {
           <button type="button" class="btn-reset-norm" data-remove-filter="${escapeAttr(rule.id)}">Remove</button></div>
         <div class="filter-rule-row">
           <select data-filter-col="${escapeAttr(rule.id)}">${colOptions}</select>
-          <div class="filter-mode-row"><label><input type="checkbox" data-filter-cat-mode="${escapeAttr(rule.id)}" ${categorical ? "checked" : ""} /> Categorical (pick values)</label></div>
-          <select data-filter-op="${escapeAttr(rule.id)}" ${categorical ? "" : ""}>${ops}</select>
+          <div class="filter-mode-row" ${valueless ? "hidden" : ""}><label><input type="checkbox" data-filter-cat-mode="${escapeAttr(rule.id)}" ${categorical ? "checked" : ""} /> Categorical (pick values)</label></div>
+          <select data-filter-op="${escapeAttr(rule.id)}">${ops}</select>
           ${catPickers}
         </div>
       </div>`;
@@ -4604,6 +4608,7 @@ function syncFiltersUi(): void {
       const rule = state.dataFilters.find((r) => r.id === id);
       if (!rule) return;
       rule.operator = sel.value as FilterOperator;
+      syncFiltersUi();
       render();
     };
   });
