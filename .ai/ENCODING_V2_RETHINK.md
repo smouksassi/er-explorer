@@ -199,3 +199,26 @@ Steps 2–3 are the rewrite core; 4–6 ride on it. The packages and renderer su
 - [`ARCHITECTURE_REVIEW.md`](./ARCHITECTURE_REVIEW.md) — Critical items (subsumed by §F sequence)
 - [`LAYOUT_AND_ENCODING.md`](./LAYOUT_AND_ENCODING.md) — prior target model (superseded by §C if approved)
 - [`docs/DECISIONS.md`](../docs/DECISIONS.md) — ADR-0010/0011; ADR-0012 to be drafted after §G answers
+
+## J. Grouping model — ADOPTED (2026-08-21, supersedes fitByColor)
+
+1. **GROUPING is explicit and statistical** (ggplot2 `group` analog): spec field
+   `grouping: { variableIds: string[] }`; curves/fits exist per endpoint × declared
+   group. Endpoint is not a grouping choice (it is the y variable). `fitByColor`
+   DELETED. Migration: `fitByColor && color=variable(v)` → `grouping:[v]`, else `[]`.
+2. **CHANNELS are paint, never statistics** — color/linetype partition marks
+   (points, strip rows, observed markers), never fits.
+3. **Constancy theorem:** a curve wears a channel's encoding iff the channel's
+   variable is constant within the curve's group. Derives: neutral pooled curve
+   with colored points; degenerate facet+color level-colored curve; group-without-
+   channel (identical-looking curves) is legal — user's responsibility.
+4. **Strip rule (provisional, user will re-challenge after grouping lands):**
+   strips are x-marginals with no fits → sub-rows stay CHANNEL-driven; curves are
+   GROUPING-driven; I8 bridges (a clicked dose×level row projects onto its group's
+   curve — pooled if the level is not in the grouping).
+5. **I8 restated:** projection granularity = declared grouping.
+6. **Callout density (decided):** control in Overlays, default **"Selected groups
+   only"** (plot = extraction tool: click the subgroup to read its number), "All"
+   on demand; persisted in session.
+7. Ordinal look-ahead: P(Y≥k) multiples are family-internal (adapter emits k
+   curves per endpoint × group), NOT user grouping.
