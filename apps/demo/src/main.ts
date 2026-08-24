@@ -8,7 +8,11 @@ import {
   quantile,
   createModelDefinition,
   type LogisticModel,
-  type PredictionResult
+  type PredictionResult,
+  projectedSelectionGroups,
+  rowsForGroup,
+  colorForGroup,
+  type SelectionProjectionCtx
 } from "@er-explorer/analysis";
 import { linearAnalysisModel, type LinearParams } from "@er-explorer/model-linear";
 import {
@@ -1217,111 +1221,55 @@ function parseDistGroupId(gid: string): { dose: string; suffix?: string } {
 }
 
 /** Dist row ids to project (plain dose or `dose|endpoint` / `dose|colorLevel`). */
-function distGroupIdsForProjections(endpoint: Endpoint): string[] {
-  if (state.selectedDistGroupIds.size) {
-    return [...state.selectedDistGroupIds].filter((gid) => {
-      const { suffix } = parseDistGroupId(gid);
-      if (!suffix) return true;
-      if (selectedEndpoints().includes(suffix as Endpoint)) return suffix === endpoint;
-      return true;
-    });
-  }
-  if (state.selectedDoses.size) return [...state.selectedDoses];
-  return [];
-}
-
 /**
- * Granularity rule (ADR-0012/0013): projections resolve at the panel's CURVE
- * granularity. With per-level curves (fitByColor + covariate channel), a pooled
- * dose selection expands to dose×level groups — each on its own curve with its
- * own color and stats. A pooled window never rides a level curve; empty groups
- * drop out via the stats guard downstream.
+ * E1 (ADR-0013): the selection → projection pipeline lives in
+ * `@er-explorer/analysis` (selectionProjection.ts) — ONE implementation for
+ * every family, unit-testable without the DOM. The demo builds the injected
+ * context from its dataset/state closures; the wrappers below preserve the
+ * historical call-site signatures.
  */
-function projectionGidsAtCurveGranularity(
-  gids: string[],
-  spec: ViewLayoutSpec | null,
-  colorModel: ColorBinModel | null
-): string[] {
-  const splitCurves =
-    !!spec?.fitByColor && spec.color.kind === "variable" && !!colorModel && colorModel.levels.length > 1;
-  if (!splitCurves) return gids;
-  return [
-    ...new Set(
-      gids.flatMap((gid) => {
-        const { dose, suffix } = parseDistGroupId(gid);
-        if (suffix && !selectedEndpoints().includes(suffix as Endpoint)) return [gid];
-        return colorModel!.levels.map((level) => `${dose}|${level}`);
-      })
-    )
-  ];
+function baseColorModelFor(spec: ViewLayoutSpec | null): ColorBinModel | null {
+  // Bin model on the BASE cohort (I1) — never a panel/branch/selection cohort.
+  return spec?.color.kind === "variable" && dataset
+    ? buildColorBinModel(
+        dataset.loaded,
+        spec.color.variableId,
+        dataFilteredRowIndices(),
+        spec.continuousBinning ?? spec.color.binning
+      )
+    : null;
 }
 
-function rowsForDistGroupId(
-  gid: string,
+function selectionProjectionCtxFor(
   active: Set<number>,
-  cohortRowIndices: number[] | undefined,
-  endpoint: Endpoint,
-  colorContext?: { variableId: string; model: ColorBinModel }
-): number[] {
-  const ds = requireDataset();
-  const { dose, suffix } = parseDistGroupId(gid);
-  const cohortSet = cohortRowIndices ? new Set(cohortRowIndices) : null;
-  let rows = rowIndicesForDose(dose).filter(
-    (i) => active.has(ds.patientId(i)) && (!cohortSet || cohortSet.has(i))
-  );
-  if (!suffix) return rows;
-  if (selectedEndpoints().includes(suffix as Endpoint)) {
-    return rows.filter((i) => Number.isFinite(endpointValue(i, suffix as Endpoint)));
-  }
-  if (colorContext) {
-    const { variableId, model } = colorContext;
-    return rows.filter((i) => colorLevelForRow(i, model, ds.loaded, variableId) === suffix);
-  }
-  return rows;
-}
-
-function computeBinaryStatsFromRows(
-  rows: number[],
-  metric: ExposureMetric,
-  endpoint: Endpoint
-): BinaryDoseGroupStats | null {
-  const vals = rows.map((i) => exposureValue(i, metric)).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
-  if (!vals.length) return null;
-  const s = summarizeDistribution(vals);
-  if (!s) return null;
-  const observedSummary =
-    observedFamilyFor(endpoint).observedSummary(rows.map((i) => endpointValue(i, endpoint))) ?? undefined;
-  return {
-    q1: s.q1,
-    q3: s.q3,
-    median: s.median,
-    whiskerLow: s.whiskerLow,
-    whiskerHigh: s.whiskerHigh,
-    min: s.min,
-    max: s.max,
-    n: vals.length,
-    observedSummary
-  };
-}
-
-function colorForDistGroupId(
-  gid: string,
-  endpoint: Endpoint,
   spec: ViewLayoutSpec | null,
   colorModel: ColorBinModel | null,
-  colorOverride?: string
-): string {
-  const { dose, suffix } = parseDistGroupId(gid);
-  if (colorOverride) return colorOverride;
-  // Split rows are grouped BY the color variable → they wear the palette.
-  if (suffix && spec?.color.kind === "variable" && colorModel) {
-    return variableColorForLevel(spec.color.variableId, suffix, colorModel.levels);
-  }
-  if (suffix && selectedEndpoints().includes(suffix as Endpoint)) return endpointColor(suffix as Endpoint);
-  // Plain dose rows: one-channel law — dose palette only when color IS dose,
-  // otherwise the projection matches the neutral strip row it came from.
-  if (spec && spec.color.kind !== "dose") return DOSE_SELECTION_NEUTRAL;
-  return resolveDoseColor(dose);
+  metric?: ExposureMetric
+): SelectionProjectionCtx {
+  const ds = requireDataset();
+  const colorVarId = spec?.color.kind === "variable" ? spec.color.variableId : null;
+  return {
+    spec,
+    knownEndpointIds: selectedEndpoints(),
+    selectedDistGroupIds: state.selectedDistGroupIds,
+    selectedDoses: state.selectedDoses,
+    showObservedSummary: state.showDoseObserved,
+    colorModel,
+    rowIndicesForDose,
+    isActiveRow: (i) => active.has(ds.patientId(i)),
+    exposureValue: (i) => (metric ? exposureValue(i, metric) : NaN),
+    endpointValue: (i, ep) => endpointValue(i, ep as Endpoint),
+    levelForRow: (i) =>
+      colorVarId && colorModel ? colorLevelForRow(i, colorModel, ds.loaded, colorVarId) || null : null,
+    summarizeExposures: (vals) => summarizeDistribution(vals),
+    colorForLevel: (level) =>
+      colorVarId && colorModel
+        ? variableColorForLevel(colorVarId, level, colorModel.levels)
+        : DOSE_SELECTION_NEUTRAL,
+    colorForEndpoint: (ep) => endpointColor(ep as Endpoint),
+    colorForDose: (dose) => resolveDoseColor(dose),
+    neutralColor: DOSE_SELECTION_NEUTRAL
+  };
 }
 
 function projectedGroupsForDistSelection(
@@ -1332,100 +1280,41 @@ function projectedGroupsForDistSelection(
   opts?: { colorOverride?: string; spec?: ViewLayoutSpec | null }
 ): ProjectedGroup[] {
   const spec = opts?.spec ?? resolveActiveViewLayoutSpec();
-  // Bin model on the BASE cohort (ADR-0012): binning on the panel cohort gives
-  // the panel its own median, so level membership diverges from the strip rows
-  // (clicked N=6 row projecting as 8/9). Rows still come from the panel cohort.
-  const colorModel =
-    spec?.color.kind === "variable" && dataset
-      ? buildColorBinModel(
-          dataset.loaded,
-          spec.color.variableId,
-          dataFilteredRowIndices(),
-          spec.continuousBinning ?? spec.color.binning
-        )
-      : null;
-  const colorCtx =
-    spec?.color.kind === "variable" && colorModel
-      ? { variableId: spec.color.variableId, model: colorModel }
-      : undefined;
-
-  const gids = projectionGidsAtCurveGranularity(distGroupIdsForProjections(endpoint), spec ?? null, colorModel);
-  const out: ProjectedGroup[] = [];
-  for (const gid of gids) {
-    // Endpoint-finite rows only (same as the linear twin): the band and x/N must
-    // describe the rows this endpoint's curve actually sees, not exposure-only rows.
-    const rows = rowsForDistGroupId(gid, active, cohortRowIndices, endpoint, colorCtx).filter((i) =>
-      Number.isFinite(endpointValue(i, endpoint))
-    );
-    const stats = computeBinaryStatsFromRows(rows, metric, endpoint);
-    if (!stats) continue;
-    const { observedSummary, ...rest } = stats;
-    out.push({
-      groupId: gid,
-      color: colorForDistGroupId(gid, endpoint, spec, colorModel, opts?.colorOverride),
-      ...rest,
-      observedSummary: state.showDoseObserved ? observedSummary : undefined
-    });
-  }
-  return out;
+  const colorModel = baseColorModelFor(spec ?? null);
+  const ctx = selectionProjectionCtxFor(active, spec ?? null, colorModel, metric);
+  return projectedSelectionGroups(
+    ctx,
+    endpoint,
+    observedFamilyFor(endpoint),
+    cohortRowIndices,
+    opts?.colorOverride
+  );
 }
 
-/**
- * Continuous analog of {@link projectedGroupsForDistSelection}: identical row
- * resolution (clicked row = dose ∩ level/endpoint ∩ panel cohort) and identical
- * one-channel color, with mean ± CI instead of x/N. Until this existed, a click
- * on a `dose|level` sub-row of a continuous panel collapsed to a whole-dose
- * projection with pooled stats and dose-palette colors.
- */
-function projectedLinearGroupsForDistSelection(
-  metric: ExposureMetric,
-  endpoint: Endpoint,
-  active: Set<number>,
-  cohortRowIndices?: number[],
-  opts?: { colorOverride?: string; spec?: ViewLayoutSpec | null }
-): LinearProjectedGroup[] {
-  const spec = opts?.spec ?? resolveActiveViewLayoutSpec();
-  const colorModel =
-    spec?.color.kind === "variable" && dataset
-      ? buildColorBinModel(
-          dataset.loaded,
-          spec.color.variableId,
-          dataFilteredRowIndices(),
-          spec.continuousBinning ?? spec.color.binning
-        )
-      : null;
-  const colorCtx =
-    spec?.color.kind === "variable" && colorModel
-      ? { variableId: spec.color.variableId, model: colorModel }
-      : undefined;
+/** @deprecated E1 unified the family twins — same pipeline for every family. */
+const projectedLinearGroupsForDistSelection = projectedGroupsForDistSelection;
 
-  const gids = projectionGidsAtCurveGranularity(distGroupIdsForProjections(endpoint), spec ?? null, colorModel);
-  const out: LinearProjectedGroup[] = [];
-  for (const gid of gids) {
-    const rows = rowsForDistGroupId(gid, active, cohortRowIndices, endpoint, colorCtx).filter((i) =>
-      Number.isFinite(endpointValue(i, endpoint))
-    );
-    const vals = rows
-      .map((i) => exposureValue(i, metric))
-      .filter((v) => Number.isFinite(v))
-      .sort((a, b) => a - b);
-    const s = summarizeDistribution(vals);
-    if (!s) continue;
-    const summary = observedFamilyFor(endpoint).observedSummary(rows.map((i) => endpointValue(i, endpoint)));
-    out.push({
-      groupId: gid,
-      color: colorForDistGroupId(gid, endpoint, spec, colorModel, opts?.colorOverride),
-      q1: s.q1,
-      q3: s.q3,
-      median: s.median,
-      whiskerLow: s.whiskerLow,
-      whiskerHigh: s.whiskerHigh,
-      min: s.min,
-      max: s.max,
-      observedSummary: state.showDoseObserved ? summary ?? undefined : undefined
-    });
-  }
-  return out;
+function rowsForDistGroupId(
+  gid: string,
+  active: Set<number>,
+  cohortRowIndices: number[] | undefined,
+  endpoint: Endpoint,
+  colorContext?: { variableId: string; model: ColorBinModel }
+): number[] {
+  const spec = resolveActiveViewLayoutSpec();
+  const ctx = selectionProjectionCtxFor(active, spec ?? null, colorContext?.model ?? baseColorModelFor(spec ?? null));
+  return rowsForGroup(ctx, gid, endpoint, cohortRowIndices);
+}
+
+function colorForDistGroupId(
+  gid: string,
+  _endpoint: Endpoint,
+  spec: ViewLayoutSpec | null,
+  colorModel: ColorBinModel | null,
+  colorOverride?: string
+): string {
+  const ctx = selectionProjectionCtxFor(activeSet(), spec, colorModel);
+  return colorForGroup(ctx, gid, colorOverride);
 }
 
 function pointColorsMonochromeForEndpoint(endpoint: Endpoint): Record<string, string> {

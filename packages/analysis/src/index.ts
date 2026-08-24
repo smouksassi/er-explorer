@@ -94,3 +94,14 @@ export {
   silvermanBandwidth,
   kernelDensityEstimate
 } from "./legacyStatistics";
+export {
+  type ExposureSummary,
+  type ProjectedSelectionGroup,
+  type SelectionLevelModel,
+  type SelectionProjectionCtx,
+  colorForGroup,
+  gidsAtCurveGranularity,
+  projectedSelectionGroups,
+  rowsForGroup,
+  selectionGids
+} from "./selectionProjection";
