@@ -222,3 +222,20 @@ Steps 2–3 are the rewrite core; 4–6 ride on it. The packages and renderer su
    on demand; persisted in session.
 7. Ordinal look-ahead: P(Y≥k) multiples are family-internal (adapter emits k
    curves per endpoint × group), NOT user grouping.
+
+## K. QA round 12 rulings (2026-08-22)
+
+1. **Covariate binning includes placebo** (confirmed): baseline covariates (crcl,
+   wt…) bin over ALL filtered rows; placebo exclusion applies only to EXPOSURE
+   splits (exposure ≡ 0 by design). Verified vs user's R: app median crcl = 105.5
+   over 528 non-missing ≡ R cut (0,106]; 176 missing ≡ R NA groups.
+2. **Missing is an explicit level** (user ruling): rows with a missing covariate
+   value form a first-class "(missing)" level — facet panel, strip sub-row, color
+   level — gray ink, ordered last, never silently dropped (25% of the demo data
+   was vanishing from crcl facets). Filters must make excluding missing EASY
+   (one-click "exclude missing <var>" in the Filters menu).
+3. **Cut-value transparency:** bin labels carry the number ("crcl ≤ 105.5") plus
+   binning-basis annotation; opaque "≤ median" labels are a defect.
+4. **Known bug (pre-existing, logged):** axis desync after boxplot click until a
+   splitter resize forces re-measure — suspected scrollbar/readout-height width
+   change mid-repaint; reproduce headlessly and fix in/before E2.
