@@ -21,18 +21,53 @@ describe("variableBins — missing values never enter cut points (QA round 13)",
   it("median cut computed on non-missing values only; label carries the value", () => {
     const model = buildVariableLevelModel(loaded, "crcl", rows, "median");
     expect(model.cuts).toEqual([10.5]);
-    expect(model.levels).toEqual(["≤ 10.5", "> 10.5"]);
+    expect(model.levels).toEqual(["≤ 10.5", "> 10.5", "(missing)"]);
   });
 
-  it("missing rows get NO level — excluded, never the lowest bin", () => {
+  it("missing rows land in the explicit (missing) level, never the lowest bin", () => {
     const model = buildVariableLevelModel(loaded, "crcl", rows, "median");
     expect(levelForRow(0, model, loaded, "crcl")).toBe("≤ 10.5");
     expect(levelForRow(19, model, loaded, "crcl")).toBe("> 10.5");
-    expect(levelForRow(25, model, loaded, "crcl")).toBe("");
+    expect(levelForRow(25, model, loaded, "crcl")).toBe("(missing)");
   });
 
   it("tertile/quartile labels carry all cut values", () => {
     expect(binLabelsForCuts([92.7, 119.2])).toEqual(["≤ 92.7", "92.7–119.2", "> 119.2"]);
     expect(binLabelsForCuts([87])).toEqual(["≤ 87", "> 87"]);
+  });
+});
+
+describe("explicit missing level (QA round 12 ruling)", () => {
+  const vals: Array<number | null> = [
+    ...Array.from({ length: 20 }, (_, i) => i + 1),
+    ...Array<null>(10).fill(null)
+  ];
+  const loaded = loadDataset(
+    new Map<string, Array<number | null>>([
+      ["id", vals.map((_, i) => i + 1)],
+      ["crcl", vals]
+    ])
+  );
+  const rows = vals.map((_, i) => i);
+
+  it("(missing) is a first-class level, ordered LAST; missing rows are assigned to it", () => {
+    const model = buildVariableLevelModel(loaded, "crcl", rows, "median");
+    expect(model.levels).toEqual(["≤ 10.5", "> 10.5", "(missing)"]);
+    expect(model.hasMissing).toBe(true);
+    expect(levelForRow(25, model, loaded, "crcl")).toBe("(missing)");
+    // Cut points still exclude missing (the QA round 13 rule is independent).
+    expect(model.cuts).toEqual([10.5]);
+  });
+
+  it("no missing level when the cohort has none", () => {
+    const clean = loadDataset(
+      new Map<string, number[]>([
+        ["id", Array.from({ length: 20 }, (_, i) => i + 1)],
+        ["crcl", Array.from({ length: 20 }, (_, i) => i + 1)]
+      ])
+    );
+    const model = buildVariableLevelModel(clean, "crcl", Array.from({ length: 20 }, (_, i) => i), "median");
+    expect(model.levels).toEqual(["≤ 10.5", "> 10.5"]);
+    expect(model.hasMissing).toBeFalsy();
   });
 });

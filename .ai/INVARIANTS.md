@@ -150,3 +150,20 @@ dose-branch fallback mappings are DELETED — every selection routes through the
 one dist-selection pipeline. **Prevention:** any new projection source that maps
 `selectedDoses` directly to colors/stats without `rowsForDistGroupId` +
 `colorForDistGroupId` is a violation.
+
+## I9 — Missing is an explicit level (QA rounds 12–13)
+
+**Rule:** every categorical/binned variable whose cohort contains missingness has
+a first-class "(missing)" level — facet panel, strip sub-row, color level, curve
+group — reserved gray ink (never a palette slot), ordered LAST. Cut points are
+computed on non-missing values of the analysis base cohort only; bin labels carry
+the cut values ("crcl: ≤ 105.5"). One-click `missing`/`notMissing` filter
+operators exclude/inspect missingness explicitly.
+
+**Bug history:** Number(null)=0 poisoned every cut toward zero (crcl 92.5 vs true
+105.5); 176/704 patients silently vanished from crcl facets; opaque "≤ median"
+labels made cuts unverifiable — all caught by the user's external R cross-check.
+
+**Guard:** `variableBins.test.ts` (missing never in cuts; explicit level ordered
+last; value-bearing labels); snapshot s4 carries the (missing) panels with Ns
+matching the user's R NA rows (56/67/53).

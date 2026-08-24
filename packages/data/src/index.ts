@@ -76,6 +76,7 @@ export {
   isNumericCovariateColumn,
   binLabelsFor,
   binLabelsForCuts,
+  MISSING_LEVEL,
   effectiveVariableBinning
 } from "./variableBins";
 export {

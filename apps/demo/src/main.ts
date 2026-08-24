@@ -65,6 +65,7 @@ import {
   rowsFromLoaded
 } from "./datasetContext";
 import {
+  MISSING_LEVEL,
   buildCellResolutionInput,
   enumerateDistPanels,
   enumerateScatterPanels,
@@ -1058,7 +1059,12 @@ function fitForCohort(
   return { fit: { kind: "logistic", model }, xs, ys };
 }
 
+/** Reserved missing-level ink: gray, never a palette slot — missingness must not
+ * read as a data category (rule, QA round 12). */
+const MISSING_LEVEL_COLOR = "#9ca3af";
+
 function variableColorForLevel(variableId: string, level: string, levels: string[]): string {
+  if (level === MISSING_LEVEL) return MISSING_LEVEL_COLOR;
   const idx = levels.indexOf(level);
   const palette = COLOR_SCHEME_PALETTES.tableau;
   return palette[(idx >= 0 ? idx : 0) % palette.length]!;

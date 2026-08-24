@@ -98,10 +98,24 @@ function binIndex(value: number, cuts: number[]): number {
   return b;
 }
 
+/**
+ * The explicit missing level (user ruling, QA round 12): rows with a missing
+ * covariate value form a first-class level — facet panel, strip sub-row, color
+ * level, curve group — never silently dropped (25% of the demo cohort was
+ * vanishing from crcl views). Reserved gray ink everywhere; ordered last.
+ */
+export const MISSING_LEVEL = "(missing)";
+
 export interface VariableLevelModel {
   binning?: VariableColorBinning;
   levels: string[];
   cuts?: number[];
+  /** True when `levels` ends with {@link MISSING_LEVEL}. */
+  hasMissing?: boolean;
+}
+
+function isMissingRaw(raw: unknown): boolean {
+  return raw === null || raw === undefined || String(raw).trim() === "";
 }
 
 export function buildVariableLevelModel(
@@ -110,21 +124,25 @@ export function buildVariableLevelModel(
   rowIndices: number[],
   binning?: VariableColorBinning
 ): VariableLevelModel {
+  const col = getColumn(loaded, variableId);
+  const hasMissing = rowIndices.some((i) => isMissingRaw(col[i]));
   const effective = effectiveVariableBinning(loaded, variableId, rowIndices, binning);
   if (effective) {
     const vals = numericValuesForRows(loaded, variableId, rowIndices).sort((a, b) => a - b);
     const cuts = cutpointsFor(effective, vals);
-    return { binning: effective, levels: binLabelsForCuts(cuts), cuts };
+    const levels = binLabelsForCuts(cuts);
+    if (hasMissing) levels.push(MISSING_LEVEL);
+    return { binning: effective, levels, cuts, hasMissing };
   }
-  const col = getColumn(loaded, variableId);
   const set = new Set<string>();
   for (const i of rowIndices) {
     const raw = col[i];
-    if (raw === null || raw === undefined) continue;
+    if (isMissingRaw(raw)) continue;
     set.add(String(raw).trim());
   }
   const levels = [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  return { levels };
+  if (hasMissing) levels.push(MISSING_LEVEL);
+  return { levels, hasMissing };
 }
 
 export function levelForRow(
@@ -135,14 +153,12 @@ export function levelForRow(
 ): string {
   const col = getColumn(loaded, variableId);
   const raw = col[i];
-  // "" is missing too — Number("") is 0 and would misassign missing rows to the
-  // lowest bin instead of excluding them.
-  if (raw === null || raw === undefined || String(raw).trim() === "") return "";
+  if (isMissingRaw(raw)) return model.hasMissing ? MISSING_LEVEL : "";
   if (model.binning && model.cuts) {
     const n = Number(raw);
-    if (!Number.isFinite(n)) return "";
+    if (!Number.isFinite(n)) return model.hasMissing ? MISSING_LEVEL : "";
     const idx = binIndex(n, model.cuts);
-    return model.levels[idx] ?? model.levels[model.levels.length - 1] ?? "";
+    return model.levels[idx] ?? "";
   }
   return String(raw).trim();
 }

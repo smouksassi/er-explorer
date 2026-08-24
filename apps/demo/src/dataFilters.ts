@@ -10,7 +10,11 @@ export type FilterOperator =
   | "lt"
   | "lte"
   | "gt"
-  | "gte";
+  | "gte"
+  /** One-click missingness filters (user ruling QA round 12): missing is an
+   * explicit level, and excluding it must be one action — no value needed. */
+  | "missing"
+  | "notMissing";
 
 export interface DataFilterRule {
   id: string;
@@ -88,6 +92,9 @@ function cellNumber(raw: RawCellValue): number {
 
 export function rowMatchesFilter(rowIndex: number, rule: DataFilterRule, loaded: LoadedDataset): boolean {
   const raw = getColumn(loaded, rule.column)[rowIndex];
+  // Missingness operators take no value and must precede the empty-values guard.
+  if (rule.operator === "missing") return isMissing(raw);
+  if (rule.operator === "notMissing") return !isMissing(raw);
   const numeric = rule.categorical ? false : inferNumericColumn(loaded, rule.column);
   const vals = rule.values.map((v) => v.trim()).filter((v) => v.length > 0);
   if (!vals.length) return true;
@@ -140,14 +147,18 @@ export function filterOperatorsForColumn(numeric: boolean): { value: FilterOpera
       { value: "gte", label: "≥" },
       { value: "eq", label: "equals" },
       { value: "neq", label: "not equal" },
-      { value: "in", label: "in list" }
+      { value: "in", label: "in list" },
+      { value: "notMissing", label: "is not missing" },
+      { value: "missing", label: "is missing" }
     ];
   }
   return [
     { value: "in", label: "is any of" },
     { value: "notIn", label: "is not" },
     { value: "eq", label: "equals" },
-    { value: "neq", label: "not equal" }
+    { value: "neq", label: "not equal" },
+    { value: "notMissing", label: "is not missing" },
+    { value: "missing", label: "is missing" }
   ];
 }
 
@@ -162,9 +173,11 @@ const OP_SYMBOL: Partial<Record<FilterOperator, string>> = {
 
 /** Human-readable one-liner for the plot status bar. */
 export function describeFilterRule(rule: DataFilterRule, columnLabel: string): string {
+  const col = columnLabel || rule.column;
+  if (rule.operator === "missing") return `${col} is missing`;
+  if (rule.operator === "notMissing") return `${col} not missing`;
   const vals = rule.values.map((v) => v.trim()).filter((v) => v.length > 0);
   if (!vals.length) return "";
-  const col = columnLabel || rule.column;
   if (rule.operator === "in") {
     return vals.length === 1 ? `${col} = ${vals[0]}` : `${col} ∈ {${vals.join(", ")}}`;
   }
