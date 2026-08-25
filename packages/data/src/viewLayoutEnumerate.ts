@@ -241,16 +241,19 @@ function facetKeyMatchesSubset(full: FacetKey, subset: FacetKey): boolean {
 }
 
 /**
- * ADR-0012 dist dedup: the strip describes exposure of a cohort — it varies by
- * facet slice (and color split) but NOT by endpoint, so per-endpoint mirror
- * strips are exact duplicates by construction. Dist cells collapse over the
- * endpoint dimension and keep every non-endpoint facet slice. This replaces the
- * user-facing "distribution layout" linkage choice: shared-by-column is now the
- * derived outcome when no non-endpoint facets exist.
+ * ADR-0012 dist dedup, refined by strip rule P1 (E3): the strip describes
+ * exposure of a cohort — it varies by facet slice (and color split) but NOT by
+ * endpoint, so endpoint ROW facets collapse (vertical mirror strips would be
+ * exact duplicates). Endpoint COLUMNS are different: each column is its own
+ * x-axis INSTANCE, so each gets its own strip — same data, but column-aligned
+ * (one full-width strip under half-width scatter columns broke the mirror; the
+ * per-column readout also fits that column's endpoint). Shared-by-column stays
+ * the derived outcome when no facets exist.
  */
-function distCollapseKey(panel: ScatterPanelSpec): string {
+function distCollapseKey(spec: ViewLayoutSpec, panel: ScatterPanelSpec): string {
+  const endpointsOnColumns = spec.colDimensions.some((d) => d.kind === "endpoints");
   const parts = Object.keys(panel.facetKey)
-    .filter((k) => k !== "endpoint" && k !== "xMetric")
+    .filter((k) => (k === "endpoint" ? endpointsOnColumns : k !== "xMetric"))
     .sort()
     .map((k) => `${k}=${panel.facetKey[k]}`);
   return [`x=${panel.xVariableId}`, ...parts].join("|");
@@ -278,12 +281,15 @@ export function enumerateDistPanels(
     }
   >();
 
+  const endpointsOnColumns = spec.colDimensions.some((d) => d.kind === "endpoints");
   for (const panel of scatterPanels) {
-    const key = distCollapseKey(panel);
+    const key = distCollapseKey(spec, panel);
     let existing = groups.get(key);
     if (!existing) {
       const facetKey: FacetKey = { ...panel.facetKey };
-      delete facetKey.endpoint;
+      // Endpoint COLUMN strips keep their endpoint (column identity + readout);
+      // endpoint ROW strips collapse over it (P1/P2).
+      if (!endpointsOnColumns) delete facetKey.endpoint;
       facetKey.xMetric = panel.xVariableId;
       existing = {
         facetKey,
@@ -312,8 +318,15 @@ export function enumerateDistPanels(
       xVariableId: g.xVariableId,
       readoutEndpointId: g.readoutEndpointId || readoutEndpointId,
       // Every endpoint sharing the strip: the readout lists a fit line per
-      // endpoint; row shapes stay endpoint-agnostic (one-channel rule).
-      readoutEndpointIds: g.endpointIds.length > 1 ? g.endpointIds : readoutEndpointIds,
+      // endpoint; row shapes stay endpoint-agnostic (one-channel rule). A
+      // per-column strip (P1: endpoint on columns) reads out ONLY its column's
+      // endpoint — never the whole selected list.
+      readoutEndpointIds:
+        g.endpointIds.length > 1
+          ? g.endpointIds
+          : endpointsOnColumns && g.facetKey.endpoint
+            ? [g.facetKey.endpoint]
+            : readoutEndpointIds,
       rowIndices: g.rowIndices,
       scatterPanelIds: g.scatterPanelIds
     });

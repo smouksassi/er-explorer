@@ -200,6 +200,23 @@ const SCENARIOS = [
       await clickRow("2400 mg");
       await settle();
     }
+  },
+  {
+    // Strip rule P1 (E3): endpoint COLUMNS get one column-aligned strip each,
+    // whose readout fits only that column's endpoint; grouping partitions the
+    // pooled click per sex on both.
+    name: "s7-endpoint-columns-per-column-strips-pooled-click",
+    run: async () => {
+      await setEndpoints(["icgi", "icgi7"]);
+      await setMode("advanced");
+      await setFacets([], ["endpoints"]);
+      await setSel("advancedColorBy", "sex");
+      await setSel("advancedGroupCurves", "sex");
+      await resetSelection();
+      await settle();
+      await clickRow("2400 mg");
+      await settle();
+    }
   }
 ];
 

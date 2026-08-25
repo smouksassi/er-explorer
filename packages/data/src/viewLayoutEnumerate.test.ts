@@ -149,12 +149,13 @@ describe("viewLayoutEnumerate", () => {
     };
     const scatter = enumerateScatterPanels(loaded, [], spec, input);
     expect(scatter).toHaveLength(8);
-    // ADR-0012 dedup: strips collapse over endpoints → one per (sex × metric),
-    // each linking both endpoint panels and listing both readout endpoints.
+    // Strip rule P1 (E3): endpoint COLUMNS are distinct x-axis instances — one
+    // strip per column (endpoint × sex × metric), column-aligned, readout fits
+    // that column's endpoint. (Endpoint ROWS still collapse — see the row test.)
     const dist = enumerateDistPanels(spec, scatter, "icgi");
-    expect(dist).toHaveLength(4);
-    expect(dist.every((d) => d.scatterPanelIds.length === 2)).toBe(true);
-    expect(dist.every((d) => (d.readoutEndpointIds ?? []).length === 2)).toBe(true);
+    expect(dist).toHaveLength(8);
+    expect(dist.every((d) => d.scatterPanelIds.length === 1)).toBe(true);
+    expect(new Set(dist.map((d) => d.facetKey.endpoint))).toEqual(new Set(["icgi", "icgi2"]));
   });
 
   it("countPanelsForGuidedTopology matches endpoint-rows shared dist", () => {
@@ -190,11 +191,13 @@ describe("viewLayoutEnumerate", () => {
     expect(scatter.every((p) => !p.endpointIds || p.endpointIds.length <= 1)).toBe(true);
     const byEp = new Set(scatter.map((p) => p.endpointId));
     expect(byEp).toEqual(new Set(["icgi", "icgi2"]));
-    // ADR-0012 dedup: one strip per metric, spanning both endpoint columns.
+    // Strip rule P1 (E3): one strip PER endpoint column per metric — the mirror
+    // stays column-aligned and each readout fits its own column's endpoint.
     const dist = enumerateDistPanels(spec, scatter, "icgi", ["icgi", "icgi2"], 2);
-    expect(dist).toHaveLength(2);
+    expect(dist).toHaveLength(4);
     expect(new Set(dist.map((d) => d.xVariableId))).toEqual(new Set(["auc", "cmax"]));
-    expect(dist.every((d) => (d.readoutEndpointIds ?? []).length === 2)).toBe(true);
+    expect(dist.every((d) => d.scatterPanelIds.length === 1)).toBe(true);
+    expect(new Set(dist.map((d) => d.readoutEndpointId))).toEqual(new Set(["icgi", "icgi2"]));
   });
 
   it("advanced color endpoints cols=x only uses facet grid with multi-curve cells", () => {

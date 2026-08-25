@@ -1685,6 +1685,16 @@ function distPaintContextForStack(
   const compareRaw = stack.dataset.compareEndpoints;
   if (compareRaw) {
     const eps = compareRaw.split("|").filter(Boolean) as Endpoint[];
+    if (eps.length === 1) {
+      // Per-column strip (P1): the readout fits ONLY this column's endpoint —
+      // never the whole selected list.
+      return {
+        endpoint: eps[0]!,
+        splitByEndpoints: undefined,
+        readoutEndpoints: eps,
+        omitEndpointFit: false
+      };
+    }
     if (eps.length > 1) {
       if (spec) {
         const ctx = resolveDistVisualContext(
@@ -2795,16 +2805,19 @@ function appendDistPanelCell(grid: HTMLElement, panel: DistPanelSpec): void {
   // endpoint would claim an endpoint the strip does not belong to.
   if (spec) {
     const parts = spec.colDimensions
-      .filter((dim) => dim.kind !== "endpoints")
-      .map((dim) =>
-        dim.kind === "xMetrics"
-          ? exposureLabel(panel.xVariableId)
-          : (() => {
-              const raw = panel.facetKey[dim.variableId];
-              const name = covariateLabel(dim.variableId);
-              return raw != null && String(raw).length ? `${name}: ${raw}` : name;
-            })()
-      );
+      .map((dim) => {
+        if (dim.kind === "xMetrics") return exposureLabel(panel.xVariableId);
+        if (dim.kind === "endpoints") {
+          // Strip rule P1 (E3): endpoint COLUMNS carry per-column strips — name
+          // the column so the strip and its readout read as that column's.
+          const ep = panel.facetKey.endpoint;
+          return ep ? requireDataset().endpointLabel(ep as Endpoint) : "";
+        }
+        const raw = panel.facetKey[dim.variableId];
+        const name = covariateLabel(dim.variableId);
+        return raw != null && String(raw).length ? `${name}: ${raw}` : name;
+      })
+      .filter(Boolean);
     title.textContent = parts.length ? parts.join(" · ") : exposureLabel(panel.xVariableId);
   } else {
     title.textContent = exposureLabel(panel.xVariableId);
