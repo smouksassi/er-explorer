@@ -212,12 +212,14 @@
        grid share and the charts bled under the following grids (QA 2026-08-24). */
     min-height: 0 !important;
   }
-  .panel-cell { overflow: hidden; }
   /* Content-aware strips (P4): a dist cell whose strip needs more height than
      its share (charts carry an inline per-row min-height floor) SCROLLS instead
-     of clipping axes or overprinting labels. The min-content chain below lets
-     the chart's floor propagate up to the cell's scroll content. */
-  .panel-cell-dist { overflow-y: auto; scrollbar-gutter: stable; }
+     of clipping axes or overprinting labels; the min-content chain below lets
+     the chart's floor propagate up to the cell's scroll content. The gutter is
+     reserved on EVERY cell — scatter included — so scatter and dist charts in
+     one column always share the same inner width (a dist-only gutter shifted
+     its x-axis 14px left of the scatter's: the Guided desync, QA 2026-08-24). */
+  .panel-cell { overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
   .panel-cell-dist .metric-stack-dist-only { height: auto; min-height: min-content; }
   .panel-cell-dist .metric-stack-dist { min-height: min-content; overflow: visible; }
   .panel-cell-dist .dist-inline { min-height: min-content; overflow: visible; }
@@ -283,7 +285,10 @@
   .compare-shared-readout { margin: 8px 10px 4px; }
   .readout { font-size: 11px; line-height: 1.45; margin-top: 4px; flex-shrink: 0; }
   .readout.readout-off { display: none !important; }
-  .readout.readout-collapsed { max-height: 3.25rem; overflow: auto; }
+  /* Collapsed readout RESERVES its height: populating it after a click must not
+     shrink the chart above (post-paint reflow scaled the pinned SVG down and
+     desynced the x-axes — the Guided-mode desync, QA 2026-08-24). */
+  .readout.readout-collapsed { max-height: 3.25rem; min-height: 3.25rem; overflow: auto; }
   .readout-line-exposure { margin-bottom: 2px; }
   .readout-line-fit { margin-bottom: 4px; }
   .filter-rules { display: flex; flex-direction: column; gap: 10px; }

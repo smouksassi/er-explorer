@@ -1852,7 +1852,14 @@ function observeMetricStacks(): void {
       schedulePaintSyncedMetricStacks(activeSet());
     });
   }
-  document.querySelectorAll(".facet-layout, .metric-stack").forEach((el) => metricStackResizeObserver!.observe(el));
+  // Observe the CHART boxes too, not just the shells: an expanded readout (or
+  // any other in-cell reflow) changes a chart's box after paint without moving
+  // the stack's outer size — the pinned SVG then meet-scales and its x-axis
+  // desyncs from its neighbors until something repaints. One corrective repaint
+  // converges (paint reproduces the same sizes, so the observer goes quiet).
+  document
+    .querySelectorAll(".facet-layout, .metric-stack, .metric-stack .chart")
+    .forEach((el) => metricStackResizeObserver!.observe(el));
 }
 
 let paintSyncedStacksScheduled = false;
