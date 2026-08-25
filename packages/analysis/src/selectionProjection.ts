@@ -19,6 +19,7 @@
  */
 
 import type { EndpointFamilyAdapter, ObservedGroupSummary, ViewLayoutSpec } from "@er-explorer/domain";
+import { GROUP_KEY_SEPARATOR } from "@er-explorer/domain";
 
 /** Structural subset of the demo's ColorBinModel the pipeline needs. */
 export interface SelectionLevelModel {
@@ -179,13 +180,27 @@ function constantValue(rows: number[], valueOf: (rowIndex: number) => string | n
   return seen ?? "";
 }
 
-/** Readout label: the clicked row, refined by the group key when it adds information. */
-export function selectionGroupLabel(ctx: SelectionProjectionCtx, gid: string, curveKey: string): string {
+/**
+ * Readout label: the clicked row, refined by the group key — but only by the
+ * PARTS that add information. A composite key repeats the dose (grouping by
+ * dose) or the channel level (grouping by the color variable); those parts are
+ * already in the row's identity and are dropped ("2400 mg · 1 · 2400 mg" was
+ * the QA-flagged redundancy).
+ */
+export function selectionGroupLabel(
+  ctx: Pick<SelectionProjectionCtx, "knownEndpointIds">,
+  gid: string,
+  curveKey: string
+): string {
   const { dose, suffix } = parseGid(gid);
   const suffixIsEndpoint = !!suffix && ctx.knownEndpointIds.includes(suffix);
   const base = suffix && !suffixIsEndpoint ? `${dose} · ${suffix}` : dose;
-  if (!curveKey || curveKey === suffix) return base;
-  return `${base} · ${curveKey}`;
+  if (!curveKey) return base;
+  const fresh = curveKey
+    .split(GROUP_KEY_SEPARATOR)
+    .filter((part) => part !== dose && part !== suffix);
+  if (!fresh.length) return base;
+  return `${base}${GROUP_KEY_SEPARATOR}${fresh.join(GROUP_KEY_SEPARATOR)}`;
 }
 
 /**

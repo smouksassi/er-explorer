@@ -152,6 +152,14 @@ const SCENARIOS: Array<{
     expectColors: ["#8172b2"]
   },
   {
+    name: "grouping by dose + pooled arm click → key deduped from the label (no '600 mg · 600 mg')",
+    spec: makeSpec({ grouping: { variableIds: ["dose"] } }),
+    selection: { doses: ["600 mg"] },
+    expectCurveKeys: ["600 mg"],
+    expectLabels: ["600 mg"],
+    expectColors: [NEUTRAL]
+  },
+  {
     name: "legacy fitByColor spec migrates to grouping (persisted sessions)",
     spec: (() => {
       const legacy = makeSpec({});

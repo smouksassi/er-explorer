@@ -12,7 +12,25 @@ latent I8 violation, re-baselined). New capabilities now legal by grammar:
 grouping by a NON-painted variable (identical-looking curves — user's
 responsibility), grouping under color=endpoints, dose-faceted degenerate
 arm-colored curves. Invariants I8 restated + I10 added.
-**E2b NEXT (user-confirmed bugs):** (1) axis desync fires ONLY when Overlays →
+**User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
+1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl
+   + group=sex renders two sex curves per panel, BOTH wearing the panel's crcl
+   level color (degenerate facet+color, per group); readout labels compose
+   "1200 mg · ≤ 105.5 · 1". Working as designed.
+2. **Desync persists in GUIDED ("simple") mode** — the scrollbar-gutter fix
+   covers Advanced but the user still sees desync in Guided. Investigate the
+   guided path separately: likely the in-cell readout (.dist-inline .readout)
+   growing after a click changes the dist CHART height post-paint, or a
+   different scroll container. Reproduce headlessly (guided, Show readout on,
+   click box, compare scatter vs dist x-axis pixel positions).
+3. **E3 P1 confirmed wanted**: with endpoint COLUMNS the user tried to mirror
+   the boxplot per endpoint column — "not possible" today (Slice D collapsed
+   strips to one pooled grid). Per-column strips under endpoint columns is the
+   E3 P1 work item.
+4. **E5 linetype channel requested** ("can we set the linetype channel") —
+   user-mappable linetype (endpoints | variable), already planned as E5.
+
+**E2b (landed a717e57) targeted these user-confirmed bugs:** (1) axis desync fires ONLY when Overlays →
 "Show readout" is checked (readout strip height change mid-paint — re-measure/
 repaint after readout render); (2) facet-ROWS-by-variable overlaps the mirrored
 dist panels (user screenshot 2026-08-24: three dist blocks collide) — add a

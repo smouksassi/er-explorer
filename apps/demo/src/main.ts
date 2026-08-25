@@ -12,7 +12,8 @@ import {
   projectedSelectionGroups,
   rowsForGroup,
   colorForGroup,
-  type SelectionProjectionCtx
+  type SelectionProjectionCtx,
+  selectionGroupLabel
 } from "@er-explorer/analysis";
 import { linearAnalysisModel, type LinearParams } from "@er-explorer/model-linear";
 import {
@@ -1412,9 +1413,29 @@ function pointColorsMonochromeForEndpoint(endpoint: Endpoint): Record<string, st
 }
 
 function curveFor(fit: EndpointFit, xs: number[], ys: number[], xDomain: [number, number]): PredictionResult {
-  const [xMin, xMax] = xDomain;
-  const span = xMax - xMin || 1;
-  const dense = Array.from({ length: 121 }, (_, i) => xMin + (span * i) / 120);
+  // No extrapolation (same rule as KDE, user ruling): a curve is drawn only
+  // over its OWN fit cohort's observed exposure support. A per-arm curve stops
+  // at that arm's min/max; a single-exposure group (placebo — all AUC 0)
+  // degenerates to ONE sample, which painters render as a fitted point + CI
+  // whisker instead of a full-width line.
+  let xMin = xDomain[0];
+  let xMax = xDomain[1];
+  if (xs.length) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of xs) {
+      if (!Number.isFinite(v)) continue;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (lo <= hi) {
+      xMin = Math.max(xMin, lo);
+      xMax = Math.min(xMax, hi);
+    }
+  }
+  const span = xMax - xMin;
+  const dense =
+    span > 0 ? Array.from({ length: 121 }, (_, i) => xMin + (span * i) / 120) : [xMin];
   if (fit.kind === "linear") {
     const surface = linearAnalysisModel.predict(fit.model);
     const points = surface.evaluate(dense);
@@ -1459,6 +1480,41 @@ function formatFitMarkerLines(estimate: number, lower: number, upper: number, de
   const line1 = estimate.toFixed(decimals);
   if (!Number.isFinite(lower) || !Number.isFinite(upper)) return [line1, ""];
   return [line1, `[${lower.toFixed(decimals)}-${upper.toFixed(decimals)}]`];
+}
+
+/**
+ * No-extrapolation rule: a single-exposure curve group (placebo — every AUC 0)
+ * has no exposure span, so there is no line to draw; it renders as ONE fitted
+ * point + CI whisker at its exposure, in the curve's own color.
+ */
+function degenerateFitMarkerLayer(
+  id: string,
+  samples: CurveSample[],
+  color: string,
+  decimals: number,
+  xAxisLabel: string
+): RendererLayer | null {
+  if (samples.length !== 1) return null;
+  const s = samples[0]!;
+  const lower = Number.isFinite(s.lower) ? s.lower : s.estimate;
+  const upper = Number.isFinite(s.upper) ? s.upper : s.estimate;
+  const [l1, l2] = formatFitMarkerLines(s.estimate, lower, upper, decimals);
+  return new ObservedStatLayer({
+    id,
+    bins: [
+      {
+        x: s.exposure,
+        center: s.estimate,
+        lower,
+        upper,
+        n: 0,
+        primaryLabel: l1,
+        secondaryLabel: l2 || `@ ${formatExposureForReadout(s.exposure)}`,
+        color,
+        tooltip: `Fitted at ${xAxisLabel} = ${formatExposureForReadout(s.exposure)}\nSingle-exposure group — no curve drawn (no extrapolation beyond the group's data)`
+      }
+    ]
+  });
 }
 
 function formatExposureForReadout(x: number): string {
@@ -2013,6 +2069,11 @@ function renderContinuousScatterViaRenderer(
     })
   ];
   curveOverlays.forEach((c, ci) => {
+    const pointMarker = degenerateFitMarkerLayer(`curve-point-${ci}`, c.samples, c.color, 1, exposureLabel(metric));
+    if (pointMarker) {
+      layers.push(pointMarker);
+      return;
+    }
     layers.push(new ConfidenceRibbonLayer({ id: `band-${ci}`, samples: c.samples, color: c.band, opacity: 0.18 }));
     layers.push(new FitLayer({ id: `curve-${ci}`, samples: c.samples, color: c.color }));
   });
@@ -2205,8 +2266,19 @@ function renderBinaryScatterOverlay(
 
   curves.forEach((c, i) => {
     const samples = curveSamplesFor[i];
-    layers.push(new ConfidenceRibbonLayer({ id: `band-${i}`, samples, color: c.color, opacity: i === 0 ? 0.18 : 0.14 }));
-    layers.push(new FitLayer({ id: `curve-${i}`, samples, color: c.color, dash: c.dash }));
+    const pointMarker = degenerateFitMarkerLayer(
+      `curve-point-${i}`,
+      samples,
+      c.color ?? "#0f172a",
+      c.fitLabelDecimals ?? 2,
+      xAxisLabel
+    );
+    if (pointMarker) {
+      layers.push(pointMarker);
+    } else {
+      layers.push(new ConfidenceRibbonLayer({ id: `band-${i}`, samples, color: c.color, opacity: i === 0 ? 0.18 : 0.14 }));
+      layers.push(new FitLayer({ id: `curve-${i}`, samples, color: c.color, dash: c.dash }));
+    }
 
     const projected = c.projected ?? [];
     if (!projected.length) return;
@@ -4228,7 +4300,7 @@ function updateReadout(
   const blocks: string[] = [];
   const grouping = groupingAccessFor(spec ?? null);
   for (const gid of gids) {
-    const { dose, suffix } = parseDistGroupId(gid);
+    const { suffix } = parseDistGroupId(gid);
     const suffixIsEndpoint = !!suffix && selectedEndpoints().includes(suffix as Endpoint);
     const lineEndpoints = suffixIsEndpoint ? [suffix as Endpoint] : endpoints;
     const refEndpoint = lineEndpoints[0] ?? endpoints[0]!;
@@ -4248,8 +4320,9 @@ function updateReadout(
       const s = summarizeDistribution(vals);
       if (!s) continue;
       const groupColor = colorForDistGroupId(gid, refEndpoint, spec, colorModel, part.rows);
-      const baseLabel = suffix && !suffixIsEndpoint ? `${dose} · ${suffix}` : dose;
-      const label = part.key && part.key !== suffix ? `${baseLabel} · ${part.key}` : baseLabel;
+      // ONE label composer (analysis pipeline): key parts already in the row's
+      // identity (dose / channel level) are deduped there.
+      const label = selectionGroupLabel({ knownEndpointIds: selectedEndpoints() }, gid, part.key);
       blocks.push(
         `<div class="readout-line-exposure"><strong style="color:${groupColor}">${escapeHtml(label)}</strong> &nbsp; Min ${exposureLabel(metric)} = ${s.min.toFixed(1)} &nbsp; Q1 = ${s.q1.toFixed(1)} &nbsp; Median = ${s.median.toFixed(1)} &nbsp; Q3 = ${s.q3.toFixed(1)} &nbsp; Max = ${s.max.toFixed(1)} &nbsp; N=${part.rows.length}</div>`
       );
