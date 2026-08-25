@@ -29,6 +29,24 @@ items from the user's post-E2 visual pass:**
 NEXT: user visual pass on P1–P4, then E2c painter convergence, E3 P1
 (per-endpoint-column strips), E4 presets/dead-code, E5 linetype, E6 callouts.
 
+**E2c + E3 P1 LANDED (2026-08-24, b70db44 / 7942402) — E2 COMPLETE:**
+- E2c painter convergence: compare cells run on the shared §J partition
+  builder (`curvePartitionsForRows` — grouping now works in overlay cells) and
+  the ONE selection pipeline; DELETED (−281 lines): renderScatterPanel (dead),
+  computeBinary/ContinuousDoseGroupStats, projectedGroupsFor,
+  projectedLinearGroupsFor, doseProjectionAccent, deprecated aliases. ALL SIX
+  baselines reproduced BYTE-IDENTICAL after the swap.
+- Known edge (logged, not built): a linear endpoint with degenerate norm
+  bounds (constant endpoint) in a shared-axis cell fails soft (NaN points);
+  the "implicit facet for unscaled linear" only matters if an explicit
+  "no rescale" option is ever added.
+- E3 P1: endpoint COLUMNS get one column-aligned strip each (own title, own
+  single-endpoint readout); endpoint ROWS still collapse (P2). Snapshot s7
+  pins it; s1–s6 byte-identical.
+NEXT: user visual pass (endpoint-column strips + compare cells with grouping),
+then E4 (guided presets + dead compare booleans/overlay mount + retired
+DistributionLinkage), E5 linetype channel, E6 callout density control.
+
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl
    + group=sex renders two sex curves per panel, BOTH wearing the panel's crcl
