@@ -10,6 +10,8 @@ export interface FacetGridMountOptions {
   appendScatterCell: (grid: HTMLElement, panel: ScatterPanelSpec) => void;
   appendCompareScatterCell: (grid: HTMLElement, panel: ScatterPanelSpec) => void;
   appendDistCell: (grid: HTMLElement, panel: DistPanelSpec) => void;
+  /** Called when >1 dist grid stacks in one block, so the host can widen the dist pane share. */
+  onDistGridsMounted?: (facet: HTMLElement, gridCount: number) => void;
 }
 
 function usesStackedFacetShells(spec: ViewLayoutSpec): boolean {
@@ -272,6 +274,9 @@ export function mountViewLayoutGrid(
       const refPanels = scatterPanels.filter((p) => stripScatterIds.has(p.id));
       mountDistGrid(distBlock, stripDist, false, refPanels.length ? refPanels : scatterPanels);
     }
+    // N vertically-repeated dist grids need N strips' worth of height, not one
+    // strip's share split N ways (charts bled under the following grids).
+    opts.onDistGridsMounted?.(facet, distRowKeys.length);
   }
 
   opts.attachFacetLayoutSplitter(facet);

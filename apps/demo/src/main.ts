@@ -1668,10 +1668,23 @@ function distPaintContextForStack(
   };
 }
 
+/**
+ * Effective scatter/dist split for one facet: `state.scatterPaneRatio` is the
+ * PER-STRIP ratio; a facet stacking N row-faceted dist grids gets N strips'
+ * worth of dist share (capped so scatter keeps ≥40%) — one strip's share split
+ * N ways made the charts bleed under the following grids (QA 2026-08-24).
+ */
+function effectiveScatterRatioFor(facet: HTMLElement): number {
+  const n = Number(facet.dataset.distGridCount ?? "1") || 1;
+  if (n <= 1) return state.scatterPaneRatio;
+  const distShare = Math.min(0.6, (1 - state.scatterPaneRatio) * n);
+  return 1 - distShare;
+}
+
 function applyAllMetricStackHeights(): void {
   document.querySelectorAll<HTMLElement>(".facet-layout").forEach((facet) => {
     applyMetricStackHeight(facet, state.metricStackHeightPx);
-    applyScatterPaneRatio(facet, state.scatterPaneRatio);
+    applyScatterPaneRatio(facet, effectiveScatterRatioFor(facet));
   });
   document.querySelectorAll<HTMLElement>(".metric-stack").forEach((stack) => {
     if (stack.closest(".facet-layout")) return;
@@ -1683,7 +1696,10 @@ function attachFacetLayoutSplitter(facet: HTMLElement): void {
   attachFacetBlockSplitter(
     facet,
     (ratio) => {
-      state.scatterPaneRatio = ratio;
+      // The user drags the EFFECTIVE split; store it back per-strip so the
+      // multi-grid scaling in effectiveScatterRatioFor does not double-apply.
+      const n = Number(facet.dataset.distGridCount ?? "1") || 1;
+      state.scatterPaneRatio = n <= 1 ? ratio : 1 - (1 - ratio) / n;
     },
     () => {
       saveScatterPaneRatio(state.scatterPaneRatio);
@@ -2631,7 +2647,13 @@ function renderViewLayoutFacetGrid(metrics: ExposureMetric[], endpoints: Endpoin
         ? appendComparePanelCell(grid, panel)
         : appendScatterPanelCell(grid, panel),
     appendCompareScatterCell: (grid, panel) => appendComparePanelCell(grid, panel),
-    appendDistCell: (grid, panel) => appendDistPanelCell(grid, panel)
+    appendDistCell: (grid, panel) => appendDistPanelCell(grid, panel),
+    onDistGridsMounted: (facet, gridCount) => {
+      // Vertically repeated strips (row-faceted dist grids): record the count so
+      // effectiveScatterRatioFor gives the dist block one strip's share PER grid.
+      facet.dataset.distGridCount = String(gridCount);
+      applyScatterPaneRatio(facet, effectiveScatterRatioFor(facet));
+    }
   });
 }
 
