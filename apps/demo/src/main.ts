@@ -3912,6 +3912,15 @@ function paintDistributionChart(
     endpointForSplits: endpoint
   });
   registerRenderedDistGroups(distGroups);
+  // Content-aware floor (P4): every strip row gets a legible minimum height —
+  // the block grows and the plot stage scrolls rather than overprinting dose
+  // labels and Ns (row-facet QA 2026-08-24). Painted height matches the floor
+  // so the SVG never scales; the resize observer settles any flex re-layout.
+  const MIN_DIST_ROW_PX = 18;
+  const contentFloor =
+    distGroups.length * MIN_DIST_ROW_PX + DISTRIBUTION_MARGIN.top + DISTRIBUTION_MARGIN.bottom;
+  const paintHeight = Math.max(height, contentFloor);
+  chartWrap.style.minHeight = `${contentFloor}px`;
   const distResult = renderDistributionViaRenderer(
     distGroups,
     xDomain,
@@ -3919,10 +3928,10 @@ function paintDistributionChart(
     computeDisplayReferenceLines(metric, endpoint, cohortRowIndices),
     exposureLabel(metric),
     width,
-    height
+    paintHeight
   );
   chartWrap.innerHTML = distResult.content;
-  pinChartSvgToContainer(chartWrap, width, height);
+  pinChartSvgToContainer(chartWrap, width, paintHeight);
   if (!readoutEl) return;
   const finalReadoutEndpoints = readoutEndpoints ?? (splitByEndpoints && splitByEndpoints.length > 1 ? splitByEndpoints : [endpoint]);
   attachDistributionInteractivity(chartWrap, metric, finalReadoutEndpoints, active, readoutEl, distResult.metadata, {
