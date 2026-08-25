@@ -12,6 +12,23 @@ latent I8 violation, re-baselined). New capabilities now legal by grammar:
 grouping by a NON-painted variable (identical-looking curves — user's
 responsibility), grouping under color=endpoints, dose-faceted degenerate
 arm-colored curves. Invariants I8 restated + I10 added.
+**P1–P4 LANDED (2026-08-24, commits 878a10b / 699d53c / 651190c) — all four
+items from the user's post-E2 visual pass:**
+- P1 no-extrapolation for curves: `curveFor` clips to the fit cohort's exposure
+  support; single-exposure groups (placebo) render a fitted point + CI marker,
+  never a full-width line ("zero stays at zero").
+- P2 label dedup: `selectionGroupLabel` drops key parts already in the row's
+  identity ("2400 mg · 1 · 2400 mg" → "2400 mg · 1"); readout uses the same
+  composer.
+- P4 content-aware strips: inline min-height = rows×18px+margins per dist
+  chart; cells scroll (never clip/overprint); two legacy `!important
+  min-height:0` rules demoted.
+- P3 Guided desync ROOT-FIXED, probe-verified (tick x 605.0==605.0 before/after
+  click and with expanded readout): gutter parity on ALL panel cells,
+  collapsed readout reserves 3.25rem, resize observer watches chart boxes.
+NEXT: user visual pass on P1–P4, then E2c painter convergence, E3 P1
+(per-endpoint-column strips), E4 presets/dead-code, E5 linetype, E6 callouts.
+
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl
    + group=sex renders two sex curves per panel, BOTH wearing the panel's crcl
