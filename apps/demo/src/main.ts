@@ -177,9 +177,6 @@ interface ProjectedGroup {
   observedSummary?: ObservedGroupSummary;
 }
 
-/** @deprecated ADR-0013 unified the shapes — alias kept while call sites migrate. */
-type LinearProjectedGroup = ProjectedGroup;
-
 /** One observed marker at exposure x — the family adapter owns the math and
  * labels (ADR-0013); consumers never branch on endpoint type. */
 interface ObservedBin {
@@ -1378,8 +1375,6 @@ function projectedGroupsForDistSelection(
   );
 }
 
-/** @deprecated E1 unified the family twins — same pipeline for every family. */
-const projectedLinearGroupsForDistSelection = projectedGroupsForDistSelection;
 
 function rowsForDistGroupId(
   gid: string,
@@ -2003,7 +1998,7 @@ function paintSyncedMetricStacks(active: Set<number>): void {
 function renderContinuousScatterViaRenderer(
   points: ScatterPoint[],
   curve: PredictionResult,
-  projected: LinearProjectedGroup[],
+  projected: ProjectedGroup[],
   xDomain: [number, number],
   metric: ExposureMetric,
   endpoint: Endpoint,
@@ -2086,12 +2081,12 @@ function renderContinuousScatterViaRenderer(
   });
 
   if (projected.length) {
-    const rangeSamplesFor = (p: LinearProjectedGroup) => {
+    const rangeSamplesFor = (p: ProjectedGroup) => {
       const lo = p.min ?? p.whiskerLow;
       const hi = p.max ?? p.whiskerHigh;
       return samplesForGroup(p).filter((s) => s.exposure >= lo && s.exposure <= hi);
     };
-    const coreSamplesFor = (p: LinearProjectedGroup) =>
+    const coreSamplesFor = (p: ProjectedGroup) =>
       samplesForGroup(p).filter((s) => s.exposure >= p.q1 && s.exposure <= p.q3);
 
     projected.forEach((p, i) => {
@@ -2985,295 +2980,26 @@ function render(): void {
   syncLayoutModeUi();
 }
 
-interface BinaryDoseGroupStats {
-  q1: number;
-  q3: number;
-  median: number;
-  whiskerLow: number;
-  whiskerHigh: number;
-  min: number;
-  max: number;
-  n: number;
-  observedSummary?: ObservedGroupSummary;
-}
-
-/** Per-dose exposure quantiles (Q1/median/Q3/whiskers/min/max) + observed responder rate (95%
- * Wilson CI) for a binary endpoint, restricted to `active` patients - the data a dose row's
- * projection onto the fitted curve is built from. Shared by the regular per-endpoint grid
- * (`renderScatterPanel`) and the "Compare endpoints" overlay (`renderEndpointComparisonRow`), so
- * clicking a dose row projects consistently in both views. */
-function computeBinaryDoseGroupStats(
-  metric: ExposureMetric,
-  endpoint: Endpoint,
-  active: Set<number>,
-  cohortRowIndices?: number[]
-): Record<string, BinaryDoseGroupStats> {
-  const ds = requireDataset();
-  const cohortSet = cohortRowIndices ? new Set(cohortRowIndices) : null;
-  const groupStats: Record<string, BinaryDoseGroupStats> = {};
-  for (const dose of DOSE_ORDER()) {
-    const doseRecords = rowIndicesForDose(dose).filter(
-      (i) => active.has(ds.patientId(i)) && (!cohortSet || cohortSet.has(i))
-    );
-    const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
-    if (!vals.length) continue;
-    const s = summarizeDistribution(vals);
-    if (!s) continue;
-    groupStats[dose] = {
-      q1: s.q1,
-      q3: s.q3,
-      median: s.median,
-      whiskerLow: s.whiskerLow,
-      whiskerHigh: s.whiskerHigh,
-      min: s.min,
-      max: s.max,
-      n: vals.length,
-      observedSummary:
-        observedFamilyFor(endpoint).observedSummary(doseRecords.map((i) => endpointValue(i, endpoint))) ??
-        undefined
-    };
-  }
-  return groupStats;
-}
-
-type ContinuousDoseGroupStats = Omit<ProjectedGroup, "groupId" | "color">;
-
-/** Exposure quantiles + observed mean/CI for a continuous endpoint, per dose (active patients). */
-function computeContinuousDoseGroupStats(
-  metric: ExposureMetric,
-  endpoint: Endpoint,
-  active: Set<number>,
-  cohortRowIndices?: number[]
-): Record<string, ContinuousDoseGroupStats> {
-  const ds = requireDataset();
-  const cohortSet = cohortRowIndices ? new Set(cohortRowIndices) : null;
-  const groupStats: Record<string, ContinuousDoseGroupStats> = {};
-  for (const dose of DOSE_ORDER()) {
-    const doseRecords = recordsWithEndpoint(endpoint).filter(
-      (i) => (!cohortSet || cohortSet.has(i)) && active.has(ds.patientId(i)) && ds.doseLabel(i) === dose
-    );
-    const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
-    if (!vals.length) continue;
-    const s = summarizeDistribution(vals);
-    if (!s) continue;
-    groupStats[dose] = {
-      q1: s.q1,
-      q3: s.q3,
-      median: s.median,
-      whiskerLow: s.whiskerLow,
-      whiskerHigh: s.whiskerHigh,
-      min: s.min,
-      max: s.max,
-      observedSummary:
-        observedFamilyFor(endpoint).observedSummary(doseRecords.map((i) => endpointValue(i, endpoint))) ??
-        undefined
-    };
-  }
-  return groupStats;
-}
-
-function projectedLinearGroupsFor(
-  groupStats: Record<string, ContinuousDoseGroupStats>,
-  colorOverride?: string,
-  compareNormalizeEndpoint?: Endpoint,
-  endpointForSelection?: Endpoint
-): ProjectedGroup[] {
-  const doseFilter = endpointForSelection ? selectedDosesForEndpoint(endpointForSelection) : state.selectedDoses;
-  return [...doseFilter]
-    .filter((dose) => groupStats[dose])
-    .map((dose) => {
-      const { observedSummary: raw, ...rest } = groupStats[dose]!;
-      let observedSummary = raw;
-      if (state.showDoseObserved && raw && compareNormalizeEndpoint) {
-        // Compare overlay: GEOMETRY on the normalized 0–1 axis, labels in native
-        // units (decision 1a) — the adapter's labels already are.
-        observedSummary = {
-          ...raw,
-          center: normCompareValue(raw.center, compareNormalizeEndpoint),
-          lower: normCompareValue(raw.lower, compareNormalizeEndpoint),
-          upper: normCompareValue(raw.upper, compareNormalizeEndpoint)
-        };
-      }
-      return {
-        groupId: dose,
-        color: colorOverride ?? resolveDoseColor(dose),
-        ...rest,
-        observedSummary: state.showDoseObserved ? observedSummary : undefined
-      };
-    });
-}
-
-/** The clicked-dose projection for a binary endpoint's chart, built from `computeBinaryDoseGroupStats` -
- * shared by both `renderScatterPanel` and `renderEndpointComparisonRow`. Each projected group is
- * colored by dose by default (the regular per-endpoint grid, where dose is the meaningful
- * distinction on that single curve); `colorOverride` lets "Compare endpoints" mode color every
- * dose's projection by the endpoint's own color instead, so the projection reads as "this curve's
- * highlight" rather than blending into the dose-colored points/legend of a different endpoint. */
 /**
- * One-channel law for plain-dose projections: they match the dist row they came
- * from — dose palette only when color IS dose, otherwise neutral ink (undefined
- * = caller falls back to per-dose colors).
+ * §J curve units, shared by EVERY scatter painter (regular and compare cells):
+ * partitions of an endpoint-finite cohort by the declared grouping — one pooled
+ * partition when none is declared.
  */
-function doseProjectionAccent(_endpoint: Endpoint): string | undefined {
-  const spec = activeViewLayoutSpec;
-  if (!spec) return undefined;
-  if (spec.color.kind === "dose") return undefined;
-  return DOSE_SELECTION_NEUTRAL;
+function curvePartitionsForRows(
+  spec: ViewLayoutSpec | null,
+  recordRows: number[]
+): Array<{ key: string; rows: number[] }> {
+  const grouping = groupingAccessFor(spec);
+  return grouping.keys.length
+    ? grouping.keys
+        .map((key) => ({ key, rows: recordRows.filter((i) => grouping.keyForRow(i) === key) }))
+        .filter((p) => p.rows.length > 0)
+    : [{ key: "", rows: recordRows }];
 }
 
-function projectedGroupsFor(
-  groupStats: Record<string, BinaryDoseGroupStats>,
-  endpoint: Endpoint,
-  colorOverride?: string,
-  opts?: { metric?: ExposureMetric; active?: Set<number>; cohortRowIndices?: number[]; spec?: ViewLayoutSpec | null }
-): ProjectedGroup[] {
-  if (opts?.metric && opts.active && state.selectedDistGroupIds.size) {
-    return projectedGroupsForDistSelection(opts.metric, endpoint, opts.active, opts.cohortRowIndices, {
-      colorOverride,
-      spec: opts.spec
-    });
-  }
-  const doseFilter = selectedDosesForEndpoint(endpoint);
-  return [...doseFilter]
-    .filter((dose) => groupStats[dose])
-    .map((dose) => {
-      const { observedSummary, ...rest } = groupStats[dose]!;
-      const color = colorOverride ?? doseProjectionAccent(endpoint) ?? resolveDoseColor(dose);
-      return {
-        groupId: dose,
-        color,
-        ...rest,
-        observedSummary: state.showDoseObserved ? observedSummary : undefined
-      };
-    });
-}
-
-function renderScatterPanel(
-  metric: ExposureMetric,
-  endpoint: Endpoint,
-  active: Set<number>,
-  container: HTMLElement,
-  opts?: { embedded?: boolean; chartHeight?: number }
-): void {
-  const ds = requireDataset();
-  const { fit, xs, ys } = fitFor(metric, endpoint);
-  const xDomain = exposureXDomain(metric);
-  const curve = curveFor(fit, xs, ys, xDomain);
-  const continuous = isContinuousEndpoint(endpoint);
-
-  const points: ScatterPoint[] = recordsWithEndpoint(endpoint).map((i) => {
-    const pid = ds.patientId(i);
-    return {
-      id: pid,
-      exposure: exposureValue(i, metric),
-      response: endpointValue(i, endpoint),
-      displayY: continuous ? endpointValue(i, endpoint) : endpointValue(i, endpoint) + seededJitter(pid),
-      groupId: ds.doseLabel(i),
-      label: scatterPointHoverLabel(i, metric, endpoint),
-      selected: active.has(pid)
-    };
-  });
-
-  const width = panelWidth();
-  let scatterResult: { content: string; metadata: unknown };
-
-  if (continuous) {
-    const groupStats: Record<
-      string,
-      {
-        q1: number;
-        q3: number;
-        median: number;
-        whiskerLow: number;
-        whiskerHigh: number;
-        min: number;
-        max: number;
-        n: number;
-        observedSummary?: ObservedGroupSummary;
-      }
-    > = {};
-    for (const dose of DOSE_ORDER()) {
-      const doseRecords = recordsWithEndpoint(endpoint).filter((i) => active.has(ds.patientId(i)) && ds.doseLabel(i) === dose);
-      const vals = doseRecords.map((i) => exposureValue(i, metric)).sort((a, b) => a - b);
-      if (!vals.length) continue;
-      const s = summarizeDistribution(vals);
-      if (!s) continue;
-      groupStats[dose] = {
-        q1: s.q1,
-        q3: s.q3,
-        median: s.median,
-        whiskerLow: s.whiskerLow,
-        whiskerHigh: s.whiskerHigh,
-        min: s.min,
-        max: s.max,
-        n: vals.length,
-        observedSummary:
-          observedFamilyFor(endpoint).observedSummary(doseRecords.map((i) => endpointValue(i, endpoint))) ??
-          undefined
-      };
-    }
-
-    const projected: LinearProjectedGroup[] = [...state.selectedDoses]
-      .filter((dose) => groupStats[dose])
-      .map((dose) => {
-        const { observedSummary, ...rest } = groupStats[dose]!;
-        return {
-          groupId: dose,
-          color: resolveDoseColor(dose),
-          ...rest,
-          observedSummary: state.showDoseObserved ? observedSummary : undefined
-        };
-      });
-
-    scatterResult = renderContinuousScatterViaRenderer(
-      points,
-      curve,
-      projected,
-      xDomain,
-      metric,
-      endpoint,
-      width,
-      computeDisplayReferenceLines(metric, endpoint, dataFilteredRowIndices()),
-      computeObservedBins(metric, endpoint, dataFilteredRowIndices())
-    );
-  } else {
-    const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active);
-    const projected = projectedGroupsFor(groupStats, endpoint);
-
-    scatterResult = renderBinaryScatterOverlay(
-      state.showPoints ? points : [],
-      [{ curve, projected }],
-      DOSE_COLORS(),
-      xDomain,
-      exposureLabel(metric),
-      endpoint.toUpperCase(),
-      width,
-      computeDisplayReferenceLines(metric, endpoint, dataFilteredRowIndices()),
-      computeObservedBins(metric, endpoint, dataFilteredRowIndices())
-    );
-  }
-
-  const chartH = opts?.chartHeight ?? SCATTER_CHART_HEIGHT;
-  const chartWrap = document.createElement("div");
-  chartWrap.className = "chart";
-  chartWrap.dataset.metric = metric;
-  chartWrap.style.height = opts?.embedded ? "100%" : `${chartH}px`;
-  if (opts?.embedded) chartWrap.style.minHeight = "120px";
-
-  if (opts?.embedded) {
-    container.appendChild(chartWrap);
-  } else {
-    const cell = document.createElement("div");
-    cell.className = "panel-cell";
-    cell.appendChild(chartWrap);
-    container.appendChild(cell);
-  }
-
-  chartWrap.innerHTML = scatterResult.content;
-  const tip = document.createElement("div");
-  tip.className = "tooltip";
-  chartWrap.appendChild(tip);
-  attachScatterInteractivity(chartWrap, tip, metric, endpoint, scatterResult.metadata as unknown as ScatterMeta);
+/** I8: a projected group rides only its own curve — structural curveKey match. */
+function projectedForCurveKey(projected: ProjectedGroup[], key: string): ProjectedGroup[] {
+  return projected.filter((g) => (g.curveKey ?? "") === key);
 }
 
 function paintRegularScatterIntoWrap(
@@ -3342,12 +3068,7 @@ function paintRegularScatterIntoWrap(
   // within the group's rows; otherwise neutral ink. One law for every channel
   // (this subsumes the old fitByColor branches AND the degenerate facet+color
   // single-level rule).
-  const grouping = groupingAccessFor(spec ?? null);
-  const curvePartitions = grouping.keys.length
-    ? grouping.keys
-        .map((key) => ({ key, rows: recordRows.filter((i) => grouping.keyForRow(i) === key) }))
-        .filter((p) => p.rows.length > 0)
-    : [{ key: "", rows: recordRows }];
+  const curvePartitions = curvePartitionsForRows(spec ?? null, recordRows);
   const channelColorFor = (rows: number[]): string | undefined => {
     if (colorByVariable && colorVarId && colorModel) {
       const level = constantOver(rows, (i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) || null);
@@ -3360,8 +3081,6 @@ function paintRegularScatterIntoWrap(
     }
     return undefined;
   };
-  const projectedForCurveKey = (projected: ProjectedGroup[], key: string): ProjectedGroup[] =>
-    projected.filter((g) => (g.curveKey ?? "") === key);
 
   if (continuous) {
     const { fit, xs, ys } = fitForCohort(metric, endpoint, recordRows);
@@ -3404,7 +3123,7 @@ function paintRegularScatterIntoWrap(
     // dose-branch mapping fell through to resolveDoseColor under split strips —
     // the recurring "magenta vestigial".
     const rowPaint = resolveDoseRowPaint(spec ?? null, panel);
-    const projected: LinearProjectedGroup[] = projectedLinearGroupsForDistSelection(
+    const projected: ProjectedGroup[] = projectedGroupsForDistSelection(
       metric,
       endpoint,
       active,
@@ -3495,15 +3214,9 @@ function paintRegularScatterIntoWrap(
     } else if (scatterPolicy?.scatterPointColorSource === "endpointMonochrome" || colorSpec?.kind === "endpoints") {
       const epColor = endpointColor(endpoint);
       const refLines = computeDisplayReferenceLines(metric, endpoint, cohort);
-      const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active, cohort);
-      // Projections match the (neutral) strip rows — one channel; the curve alone
-      // carries the endpoint color.
-      const projected = projectedGroupsFor(groupStats, endpoint, undefined, {
-        metric,
-        active,
-        cohortRowIndices: cohort,
-        spec
-      });
+      // ONE pipeline (E2c): projections match the (neutral) strip rows — one
+      // channel; the curve alone carries the endpoint color.
+      const projected = projectedGroupsForDistSelection(metric, endpoint, active, cohort, { spec });
       // §J: grouping is legal under the endpoints channel too — one curve per
       // group, each wearing the endpoint color (endpoint is constant per curve).
       const curves: BinaryCurveOverlay[] = curvePartitions.flatMap((part) => {
@@ -3532,13 +3245,7 @@ function paintRegularScatterIntoWrap(
         height
       );
     } else {
-      const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active, cohort);
-      const projected = projectedGroupsFor(groupStats, endpoint, undefined, {
-        metric,
-        active,
-        cohortRowIndices: cohort,
-        spec
-      });
+      const projected = projectedGroupsForDistSelection(metric, endpoint, active, cohort, { spec });
       // Dose is an ordinary channel (ADR-0012); §J: one curve per grouping
       // partition, arm-colored only when the arm is constant within the group.
       let curves: BinaryCurveOverlay[];
@@ -3640,49 +3347,61 @@ function paintCompareScatterIntoWrap(
   const projectionAccent = (endpoint: Endpoint) =>
     endpointColoredCurves ? endpointColor(endpoint) : DOSE_SELECTION_NEUTRAL;
 
+  // ONE machinery for compare cells too (§J / E2c): curve units come from the
+  // shared grouping partitions (endpoint × declared group — grouping now works
+  // in overlay cells), and projections come from the ONE selection pipeline
+  // (rows = clicked group ∩ panel cohort, curveKey association, deduped labels).
+  // Panel cohort everywhere (ADR-0012): a multi-curve cell inside a facet grid
+  // must project/summarize THAT panel's rows (user QA round 6). Compare geometry
+  // stays user-owned: linear endpoints map onto the 0–1 axis only through the
+  // user's normalization bounds (decision 1a — geometry normalized, labels raw).
+  const neutralCurves = !endpointColoredCurves;
   const fits = endpoints.map((endpoint) => {
     const rows = recordsWithEndpoint(endpoint).filter((i) => cohort.includes(i));
-    const { fit, xs, ys } = fitForCohort(metric, endpoint, rows);
-    const rawCurve = curveFor(fit, xs, ys, xDomain);
     const linear = usesLinearModel(endpoint);
     const { min, max, valid } = getCompareNormBounds(endpoint);
-    const curve = linear && valid ? mapCurveToCompareScale(rawCurve, min, max) : rawCurve;
     const observedBins = computeCompareObservedBins(metric, endpoint, rows);
-    // Panel cohort everywhere (ADR-0012): a multi-curve cell inside a facet grid
-    // must project/summarize THAT panel's rows — without this, every facet showed
-    // identical global projections (user QA round 6, sex-faceted compare cells).
-    let projected: ProjectedGroup[] = [];
-    if (linear) {
-      const linearStats = computeContinuousDoseGroupStats(metric, endpoint, active, cohort);
-      projected = projectedLinearGroupsFor(linearStats, projectionAccent(endpoint), endpoint, endpoint);
-    } else {
-      const groupStats = computeBinaryDoseGroupStats(metric, endpoint, active, cohort);
-      projected = projectedGroupsFor(groupStats, endpoint, projectionAccent(endpoint), {
-        metric,
-        active,
-        cohortRowIndices: cohort,
-        spec: resolveActiveViewLayoutSpec()
-      });
+
+    let projected = projectedGroupsForDistSelection(metric, endpoint, active, cohort, {
+      spec,
+      colorOverride: projectionAccent(endpoint)
+    });
+    if (linear && valid) {
+      projected = projected.map((p) =>
+        p.observedSummary
+          ? {
+              ...p,
+              observedSummary: {
+                ...p.observedSummary,
+                center: normCompareValue(p.observedSummary.center, endpoint),
+                lower: normCompareValue(p.observedSummary.lower, endpoint),
+                upper: normCompareValue(p.observedSummary.upper, endpoint)
+              }
+            }
+          : p
+      );
     }
-    return {
-      endpoint,
-      curve,
-      rawCurve: linear ? rawCurve : undefined,
-      fitLabelDecimals: linear ? 1 : 2,
-      observedBins,
-      projected
-    };
+
+    const curves: BinaryCurveOverlay[] = curvePartitionsForRows(spec ?? null, rows).flatMap((part) => {
+      const fitResult = tryFitForCohort(metric, endpoint, part.rows);
+      if (!fitResult) return [];
+      const rawCurve = curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain);
+      const curve = linear && valid ? mapCurveToCompareScale(rawCurve, min, max) : rawCurve;
+      return [
+        {
+          curve,
+          rawCurve: linear ? rawCurve : undefined,
+          fitLabelDecimals: linear ? 1 : 2,
+          color: neutralCurves ? NEUTRAL_COMPARE_COLOR : endpointColor(endpoint),
+          dash: endpointDash(endpoint),
+          projected: projectedForCurveKey(projected, part.key)
+        }
+      ];
+    });
+    return { endpoint, curves, observedBins };
   });
 
-  const neutralCurves = !endpointColoredCurves;
-  const curves: BinaryCurveOverlay[] = fits.map((f) => ({
-    curve: f.curve,
-    rawCurve: f.rawCurve,
-    fitLabelDecimals: f.fitLabelDecimals,
-    color: neutralCurves ? NEUTRAL_COMPARE_COLOR : endpointColor(f.endpoint),
-    dash: endpointDash(f.endpoint),
-    projected: f.projected
-  }));
+  const curves: BinaryCurveOverlay[] = fits.flatMap((f) => f.curves);
   const allObservedBins = fits.flatMap((f) => f.observedBins);
   const allPoints = state.showPoints ? fits.flatMap((f) => pointsFor(f.endpoint)) : [];
   const pointColors = Object.fromEntries(endpoints.map((ep) => [ep, endpointColor(ep)]));
