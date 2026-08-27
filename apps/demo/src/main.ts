@@ -214,7 +214,13 @@ const ENDPOINT_COLOR_PALETTE = ["#4C72B0", "#DDAA33", "#C44E52", "#55A868", "#81
 const ENDPOINT_DASH_PATTERNS = ["", "8 5", "10 4", "6 4", "4 6", "6 3 2 3", "3 5"];
 
 type ColorSchemeId = "default" | "tableau" | "set2" | "dark";
-type GridLayout = "endpoint-rows" | "exposure-rows";
+/** Guided presets (rethink §D.1, H5 — Guided writes the spec; covariates are Advanced-only). */
+type GuidedPreset = "endpoint-rows" | "exposure-rows" | "overlay";
+
+/** Overlay preset active with enough endpoints to overlay (guided-mode gate). */
+function guidedOverlayActive(endpointCount: number): boolean {
+  return state.guidedPreset === "overlay" && endpointCount > 1;
+}
 
 const COLOR_SCHEME_PALETTES: Record<Exclude<ColorSchemeId, "default">, string[]> = {
   tableau: ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948", "#b07aa1", "#ff9da7"],
@@ -464,7 +470,6 @@ interface DemoState {
    * "(all)" panel per exposure metric, overlaying every selected endpoint's curve together
    * (colored/dashed by endpoint instead of dose) - mirrors ggquickeda's endpoint-comparison facet
    * layout, generalized to any number of exposure metrics. */
-  compareEndpoints: boolean;
   /** Show the raw jittered per-patient scatter points on the exposure-vs-response panel(s).
    * Applies to both the regular grid and Compare Endpoints (where points are colored by
    * endpoint instead of dose). On by default in the regular grid; Compare Endpoints has
@@ -472,7 +477,7 @@ interface DemoState {
    * of visual noise - but the toggle now applies uniformly to both views. */
   showPoints: boolean;
   /** Facet grid: endpoints along rows (default) or exposures along rows. */
-  gridLayout: GridLayout;
+  guidedPreset: GuidedPreset;
   doseColorScheme: ColorSchemeId;
   endpointColorScheme: ColorSchemeId;
   endpointModels: Record<string, EndpointAnalysisModel>;
@@ -510,9 +515,8 @@ const state: DemoState = {
   showFittedAtObservedBin: false,
   showSplitValue: false,
   showDoseObserved: true,
-  compareEndpoints: false,
   showPoints: true,
-  gridLayout: "endpoint-rows",
+  guidedPreset: "endpoint-rows",
   doseColorScheme: "default",
   endpointColorScheme: "default",
   endpointModels: {},
@@ -578,7 +582,6 @@ const showDistReadoutEl = $<HTMLInputElement>("showDistReadout");
 const expandDistReadoutEl = $<HTMLInputElement>("expandDistReadout");
 const showPointsEl = $<HTMLInputElement>("showPoints");
 const endpointGroupEl = $<HTMLDivElement>("endpointGroup");
-const compareEndpointsEl = $<HTMLInputElement>("compareEndpoints");
 const compareDistByEndpointEl = $<HTMLInputElement>("compareDistByEndpoint");
 const plotStackHeightHandleEl = $<HTMLDivElement>("plotStackHeightHandle");
 const metricStackHeightRangeEl = $<HTMLInputElement>("metricStackHeightRange");
@@ -610,7 +613,7 @@ const columnRolesSummaryEl = $<HTMLDivElement>("columnRolesSummary");
 const columnRolesListEl = $<HTMLUListElement>("columnRolesList");
 const referenceArmDosesEl = $<HTMLInputElement>("referenceArmDoses");
 const referenceArmFieldEl = $<HTMLDivElement>("referenceArmField");
-const gridLayoutSelect = $<HTMLSelectElement>("gridLayoutSelect");
+const guidedPresetSelect = $<HTMLSelectElement>("guidedPresetSelect");
 const doseColorSchemeSelect = $<HTMLSelectElement>("doseColorScheme");
 const endpointColorSchemeSelect = $<HTMLSelectElement>("endpointColorScheme");
 const endpointModelsListEl = $<HTMLDivElement>("endpointModelsList");
@@ -866,7 +869,7 @@ function syncLayoutModeUi(options?: { refreshAdvancedControls?: boolean }): void
   const advanced = state.layoutMode === "advanced";
   advancedLayoutSectionEl.hidden = !advanced;
   guidedLayoutHintEl.hidden = advanced;
-  gridLayoutSelect.disabled = advanced;
+  guidedPresetSelect.disabled = advanced;
   if (advanced) {
     if (options?.refreshAdvancedControls) {
       refreshAdvancedFacetOptions();
@@ -1042,7 +1045,7 @@ function panelWidth(): number {
   const metrics = selectedExposureMetrics();
   const endpoints = selectedEndpoints();
   const cols =
-    state.gridLayout === "exposure-rows" ? Math.max(1, endpoints.length) : Math.max(1, metrics.length);
+    state.guidedPreset === "exposure-rows" ? Math.max(1, endpoints.length) : Math.max(1, metrics.length);
   return Math.max(480, Math.floor(1200 / cols));
 }
 
@@ -1215,7 +1218,7 @@ function distSplitByEndpointActive(splitByEndpoints?: Endpoint[]): boolean {
 function layoutUsesNeutralDoseChrome(): boolean {
   const chrome = policyForLayoutChrome(activeViewLayoutSpec ?? resolveActiveViewLayoutSpec(), selectedEndpoints());
   if (chrome) return chrome.useNeutralDoseLabelsInChrome;
-  return !!(state.compareEndpoints && selectedEndpoints().length > 1);
+  return guidedOverlayActive(selectedEndpoints().length);
 }
 
 function selectedDosesForEndpoint(endpoint: Endpoint): Set<string> {
@@ -2681,8 +2684,7 @@ interface ScatterMeta {
 
 function guidedLayoutInput(): import("./guidedViewLayout").GuidedLayoutInput {
   return {
-    gridLayout: state.gridLayout,
-    compareEndpoints: state.compareEndpoints,
+    preset: state.guidedPreset,
     compareDistByEndpoint: state.compareDistByEndpoint,
     exposureMetricIds: selectedExposureMetrics(),
     exposureColumnOrder: state.exposureColumnOrder,
@@ -2946,10 +2948,11 @@ function render(): void {
   // rating-scale curve in the same panel). Any number of exposure metrics is fine - each gets its
   // own overlaid "(all)" column.
   const comparisonEligible = endpoints.length > 1;
-  compareEndpointsEl.disabled = !comparisonEligible;
+  const overlayOption = [...guidedPresetSelect.options].find((o) => o.value === "overlay");
+  if (overlayOption) overlayOption.disabled = !comparisonEligible;
 
   const compareHasLinear =
-    state.compareEndpoints && comparisonEligible && endpoints.some((e) => usesLinearModel(e));
+    guidedOverlayActive(endpoints.length) && endpoints.some((e) => usesLinearModel(e));
   syncCompareNormUi(endpoints, compareHasLinear);
   syncCompareDistUi(comparisonEligible);
 
@@ -2957,7 +2960,7 @@ function render(): void {
     comparisonEligible &&
     (activeViewLayoutSpec
       ? resolveLegendShowsEndpoints(activeViewLayoutSpec, endpoints)
-      : state.compareEndpoints);
+      : state.guidedPreset === "overlay");
 
   if (showEndpointLegend) {
     renderEndpointLegend(endpoints);
@@ -4361,14 +4364,14 @@ function syncEndpointModelsUi(): void {
       const val = sel.value === "linear" ? "linear" : "logistic";
       state.endpointModels[ep] = val;
       if (val === "linear") ensureNormScaleForEndpoint(ep);
-      syncCompareNormUi(selectedEndpoints(), state.compareEndpoints && selectedEndpoints().length > 1);
+      syncCompareNormUi(selectedEndpoints(), guidedOverlayActive(selectedEndpoints().length));
       render();
     };
   });
 }
 
 function syncCompareDistUi(comparisonEligible: boolean): void {
-  const showSplit = state.compareEndpoints && comparisonEligible;
+  const showSplit = guidedOverlayActive(selectedEndpoints().length) && comparisonEligible;
   const splitLabel = compareDistByEndpointEl.closest("label");
   if (splitLabel) splitLabel.hidden = !showSplit;
   if (!showSplit) {
@@ -4591,7 +4594,7 @@ function syncMetricEndpointControls(): void {
       state.endpointColumnOrder = nextOrder;
       state.endpoints = nextSelected;
       state.brushedIds = null;
-      syncCompareNormUi([...nextSelected], state.compareEndpoints && nextSelected.size > 1);
+      syncCompareNormUi([...nextSelected], guidedOverlayActive(nextSelected.size));
       render();
     }
   );
@@ -4820,9 +4823,8 @@ function buildSessionState(): SessionState {
       showFittedAtObservedBin: state.showFittedAtObservedBin,
       showSplitValue: state.showSplitValue,
       showDoseObserved: state.showDoseObserved,
-      compareEndpoints: state.compareEndpoints,
+      guidedPreset: state.guidedPreset,
       showPoints: state.showPoints,
-      gridLayout: state.gridLayout,
       doseColorScheme: state.doseColorScheme,
       endpointColorScheme: state.endpointColorScheme,
       endpointModels: { ...state.endpointModels },
@@ -4987,10 +4989,20 @@ function loadSessionFromFile(file: File): void {
       // default true (matches the app's default) so older session files without this key still
       // show the dose-observed marker rather than silently hiding it
       state.showDoseObserved = session.settings["showDoseObserved"] !== false;
-      state.compareEndpoints = session.settings["compareEndpoints"] === true;
       state.showPoints = session.settings["showPoints"] !== false;
-      const gridRaw = session.settings["gridLayout"];
-      if (gridRaw === "endpoint-rows" || gridRaw === "exposure-rows") state.gridLayout = gridRaw;
+      const presetRaw = session.settings["guidedPreset"];
+      if (presetRaw === "endpoint-rows" || presetRaw === "exposure-rows" || presetRaw === "overlay") {
+        state.guidedPreset = presetRaw;
+      } else {
+        // Legacy sessions (pre-E4 presets): compareEndpoints boolean + gridLayout.
+        const gridRaw = session.settings["gridLayout"];
+        state.guidedPreset =
+          session.settings["compareEndpoints"] === true
+            ? "overlay"
+            : gridRaw === "exposure-rows"
+              ? "exposure-rows"
+              : "endpoint-rows";
+      }
       const doseScheme = session.settings["doseColorScheme"];
       if (doseScheme === "default" || doseScheme === "tableau" || doseScheme === "set2" || doseScheme === "dark") {
         state.doseColorScheme = doseScheme;
@@ -5057,11 +5069,10 @@ function loadSessionFromFile(file: File): void {
       }
       showDistReadoutEl.checked = state.showDistReadout;
       expandDistReadoutEl.checked = state.distReadoutExpanded;
-      compareEndpointsEl.checked = state.compareEndpoints;
       compareDistByEndpointEl.checked = state.compareDistByEndpoint;
       syncFiltersUi();
       showPointsEl.checked = state.showPoints;
-      gridLayoutSelect.value = state.gridLayout;
+      guidedPresetSelect.value = state.guidedPreset;
       doseColorSchemeSelect.value = state.doseColorScheme;
       endpointColorSchemeSelect.value = state.endpointColorScheme;
       setShellRail("plot");
@@ -5180,15 +5191,7 @@ expandDistReadoutEl.addEventListener("change", () => {
   applyReadoutChrome();
   schedulePaintSyncedMetricStacks(activeSet());
 });
-compareEndpointsEl.addEventListener("change", () => {
-  state.compareEndpoints = compareEndpointsEl.checked;
-  if (!state.compareEndpoints) {
-    state.compareDistByEndpoint = false;
-    compareDistByEndpointEl.checked = false;
-  }
-  syncCompareNormUi(selectedEndpoints(), state.compareEndpoints && selectedEndpoints().length > 1);
-  render();
-});
+
 compareDistByEndpointEl.addEventListener("change", () => {
   state.compareDistByEndpoint = compareDistByEndpointEl.checked;
   render();
@@ -5214,9 +5217,14 @@ showPointsEl.addEventListener("change", () => {
   state.showPoints = showPointsEl.checked;
   render();
 });
-gridLayoutSelect.addEventListener("change", () => {
-  const val = gridLayoutSelect.value;
-  state.gridLayout = val === "exposure-rows" ? "exposure-rows" : "endpoint-rows";
+guidedPresetSelect.addEventListener("change", () => {
+  const val = guidedPresetSelect.value;
+  state.guidedPreset = val === "exposure-rows" || val === "overlay" ? (val as GuidedPreset) : "endpoint-rows";
+  if (state.guidedPreset !== "overlay") {
+    state.compareDistByEndpoint = false;
+    compareDistByEndpointEl.checked = false;
+  }
+  syncCompareNormUi(selectedEndpoints(), guidedOverlayActive(selectedEndpoints().length));
   render();
 });
 

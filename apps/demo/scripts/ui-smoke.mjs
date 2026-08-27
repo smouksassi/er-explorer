@@ -188,9 +188,11 @@ async function run() {
     await page.locator('input[name="layoutMode"][value="guided"]').check();
     await openDrawerRail(page, "analysis");
     await setSelectedEndpoints(page, compareEps);
-    const compareCb = page.locator("#compareEndpoints");
-    if (await compareCb.isDisabled()) fail("compare endpoints should be enabled with 2+ endpoints");
-    await setCheckbox(page, "compareEndpoints", true);
+    const overlayDisabled = await page
+      .locator('#guidedPresetSelect option[value="overlay"]')
+      .evaluate((o) => o.disabled);
+    if (overlayDisabled) fail("overlay preset should be enabled with 2+ endpoints");
+    await setSelectValue(page, "guidedPresetSelect", "overlay");
     await setCheckbox(page, "compareDistByEndpoint", true);
     await openDrawerRail(page, "plot");
     await page.waitForTimeout(300);

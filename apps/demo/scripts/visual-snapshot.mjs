@@ -142,7 +142,7 @@ const SCENARIOS = [
     run: async () => {
       await setEndpoints(["icgi", "icgi2"]);
       await setMode("guided");
-      await setCb("compareEndpoints", true);
+      await setSel("guidedPresetSelect", "overlay");
       await setCb("compareDistByEndpoint", true);
       await resetSelection();
       await settle();
@@ -162,7 +162,7 @@ const SCENARIOS = [
     run: async () => {
       await setEndpoints(["icgi", "icgi7"]);
       await setMode("guided");
-      await setCb("compareEndpoints", true);
+      await setSel("guidedPresetSelect", "overlay");
       await setCb("compareDistByEndpoint", false);
       await resetSelection();
       await settle();

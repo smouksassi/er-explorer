@@ -2,9 +2,11 @@ import type { DistributionLinkage, LayoutDimension, ViewLayoutSpec } from "@er-e
 
 export type GuidedGridLayout = "endpoint-rows" | "exposure-rows";
 
+/** Guided presets (rethink §D.1): 3 ready-made specs; covariates are Advanced-only. */
+export type GuidedPresetId = "endpoint-rows" | "exposure-rows" | "overlay";
+
 export interface GuidedLayoutInput {
-  gridLayout: GuidedGridLayout;
-  compareEndpoints: boolean;
+  preset: GuidedPresetId;
   compareDistByEndpoint: boolean;
   exposureMetricIds: string[];
   exposureColumnOrder: string[];
@@ -39,7 +41,7 @@ export function guidedToViewLayoutSpec(input: GuidedLayoutInput): ViewLayoutSpec
   const metrics = mergeOrder(input.exposureMetricIds, input.exposureColumnOrder);
   const endpoints = mergeOrder(input.endpointIds, input.endpointColumnOrder);
 
-  if (input.compareEndpoints && endpoints.length > 1) {
+  if (input.preset === "overlay" && endpoints.length > 1) {
     return {
       mode: "guided",
       rowDimensions: [],
@@ -54,7 +56,7 @@ export function guidedToViewLayoutSpec(input: GuidedLayoutInput): ViewLayoutSpec
     };
   }
 
-  if (input.gridLayout === "exposure-rows") {
+  if (input.preset === "exposure-rows") {
     return {
       mode: "guided",
       rowDimensions: [xMetricsDim(metrics, input.exposureColumnOrder)],
