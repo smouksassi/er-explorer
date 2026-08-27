@@ -52,6 +52,15 @@ async function setCb(id, checked) {
     }
   }, { id, checked });
 }
+async function setPreset(value) {
+  await page.evaluate((v) => {
+    const r = document.querySelector(`input[name="guidedPreset"][value="${v}"]`);
+    if (r && !r.checked) {
+      r.checked = true;
+      r.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }, value);
+}
 async function setSel(id, value) {
   await page.evaluate(({ id, value }) => {
     const el = document.getElementById(id);
@@ -142,7 +151,7 @@ const SCENARIOS = [
     run: async () => {
       await setEndpoints(["icgi", "icgi2"]);
       await setMode("guided");
-      await setSel("guidedPresetSelect", "overlay");
+      await setPreset("overlay");
       await setCb("compareDistByEndpoint", true);
       await resetSelection();
       await settle();
@@ -162,7 +171,7 @@ const SCENARIOS = [
     run: async () => {
       await setEndpoints(["icgi", "icgi7"]);
       await setMode("guided");
-      await setSel("guidedPresetSelect", "overlay");
+      await setPreset("overlay");
       await setCb("compareDistByEndpoint", false);
       await resetSelection();
       await settle();

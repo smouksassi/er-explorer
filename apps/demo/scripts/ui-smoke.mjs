@@ -79,6 +79,16 @@ async function setSelectedEndpoints(page, ids) {
   await page.waitForTimeout(200);
 }
 
+async function setGuidedPreset(page, value) {
+  await page.evaluate((v) => {
+    const r = document.querySelector(`input[name="guidedPreset"][value="${v}"]`);
+    if (r && !r.checked) {
+      r.checked = true;
+      r.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }, value);
+}
+
 async function setSelectValue(page, id, value) {
   await page.evaluate(
     ({ id, value }) => {
@@ -189,10 +199,10 @@ async function run() {
     await openDrawerRail(page, "analysis");
     await setSelectedEndpoints(page, compareEps);
     const overlayDisabled = await page
-      .locator('#guidedPresetSelect option[value="overlay"]')
+      .locator('#guidedPresetGroup input[value="overlay"]')
       .evaluate((o) => o.disabled);
     if (overlayDisabled) fail("overlay preset should be enabled with 2+ endpoints");
-    await setSelectValue(page, "guidedPresetSelect", "overlay");
+    await setGuidedPreset(page, "overlay");
     await setCheckbox(page, "compareDistByEndpoint", true);
     await openDrawerRail(page, "plot");
     await page.waitForTimeout(300);

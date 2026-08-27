@@ -444,10 +444,6 @@
         <p class="compare-scale-note">Normalize linear endpoints to [0, 1] for overlay. Set clinically relevant bounds when observed data do not span the full score range.</p>
         <div id="compareNormList" class="compare-norm-list"></div>
       </div>
-      <div class="field"><div class="checkbox-group" id="compareEndpointsGroup">
-        <label><input type="checkbox" id="compareDistByEndpoint" checked /> Split distribution by endpoint</label>
-      </div>
-      <p class="field-hint">Applies to the Guided "Overlay endpoints" preset (Style drawer).</p></div>
       <div class="field"><label for="ciSelect">CI method</label>
         <select id="ciSelect"><option value="wald">Wald</option><option value="bootstrap">Bootstrap</option><option value="none">None</option></select>
       </div>
@@ -500,15 +496,20 @@
         <input type="range" id="metricStackHeightRange" min="320" max="1200" step="20" />
         <span class="hint" id="metricStackHeightLabel" style="margin:4px 0 0;"></span>
       </div>
-      <div class="field"><label for="guidedPresetSelect">Guided preset</label>
-        <select id="guidedPresetSelect">
-          <option value="endpoint-rows">Endpoints as rows · exposures as columns</option>
-          <option value="exposure-rows">Exposures as rows · endpoints as columns</option>
-          <option value="overlay">Overlay endpoints · one shared axis (compare)</option>
-        </select>
+      <div class="field">
+        <span class="field-label">Guided preset</span>
+        <div class="checkbox-group" id="guidedPresetGroup" style="flex-direction: column; align-items: stretch;">
+          <label><input type="radio" name="guidedPreset" value="endpoint-rows" checked /> Endpoints as rows · exposures as columns</label>
+          <label><input type="radio" name="guidedPreset" value="exposure-rows" /> Exposures as rows · endpoints as columns</label>
+          <label><input type="radio" name="guidedPreset" value="overlay" /> Overlay endpoints · one shared axis (compare)</label>
+        </div>
       </div>
+      <div class="field"><div class="checkbox-group">
+        <label><input type="checkbox" id="compareDistByEndpoint" checked /> Split distribution by endpoint</label>
+      </div>
+      <p class="field-hint">Applies to the "Overlay endpoints" preset.</p></div>
       <div class="field" id="guidedLayoutHint">
-        <p class="hint" style="margin:0">Guided mode uses the plot grid below. Enable Advanced for custom facets (study, sex) and distribution mirroring.</p>
+        <p class="hint" style="margin:0">Guided mode uses the preset above. Enable Advanced for custom facets (study, sex), grouping, and distribution mirroring.</p>
       </div>
       <div class="field">
         <span class="field-label">Layout mode</span>

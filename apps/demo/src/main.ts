@@ -613,7 +613,11 @@ const columnRolesSummaryEl = $<HTMLDivElement>("columnRolesSummary");
 const columnRolesListEl = $<HTMLUListElement>("columnRolesList");
 const referenceArmDosesEl = $<HTMLInputElement>("referenceArmDoses");
 const referenceArmFieldEl = $<HTMLDivElement>("referenceArmField");
-const guidedPresetSelect = $<HTMLSelectElement>("guidedPresetSelect");
+const guidedPresetRadios = (): HTMLInputElement[] =>
+  [...document.querySelectorAll<HTMLInputElement>('input[name="guidedPreset"]')];
+function syncGuidedPresetUi(): void {
+  for (const rb of guidedPresetRadios()) rb.checked = rb.value === state.guidedPreset;
+}
 const doseColorSchemeSelect = $<HTMLSelectElement>("doseColorScheme");
 const endpointColorSchemeSelect = $<HTMLSelectElement>("endpointColorScheme");
 const endpointModelsListEl = $<HTMLDivElement>("endpointModelsList");
@@ -869,7 +873,7 @@ function syncLayoutModeUi(options?: { refreshAdvancedControls?: boolean }): void
   const advanced = state.layoutMode === "advanced";
   advancedLayoutSectionEl.hidden = !advanced;
   guidedLayoutHintEl.hidden = advanced;
-  guidedPresetSelect.disabled = advanced;
+  for (const rb of guidedPresetRadios()) rb.disabled = advanced;
   if (advanced) {
     if (options?.refreshAdvancedControls) {
       refreshAdvancedFacetOptions();
@@ -2948,8 +2952,10 @@ function render(): void {
   // rating-scale curve in the same panel). Any number of exposure metrics is fine - each gets its
   // own overlaid "(all)" column.
   const comparisonEligible = endpoints.length > 1;
-  const overlayOption = [...guidedPresetSelect.options].find((o) => o.value === "overlay");
-  if (overlayOption) overlayOption.disabled = !comparisonEligible;
+  const overlayRadio = guidedPresetRadios().find((rb) => rb.value === "overlay");
+  if (overlayRadio) {
+    overlayRadio.disabled = state.layoutMode === "advanced" || !comparisonEligible;
+  }
 
   const compareHasLinear =
     guidedOverlayActive(endpoints.length) && endpoints.some((e) => usesLinearModel(e));
@@ -5072,7 +5078,7 @@ function loadSessionFromFile(file: File): void {
       compareDistByEndpointEl.checked = state.compareDistByEndpoint;
       syncFiltersUi();
       showPointsEl.checked = state.showPoints;
-      guidedPresetSelect.value = state.guidedPreset;
+      syncGuidedPresetUi();
       doseColorSchemeSelect.value = state.doseColorScheme;
       endpointColorSchemeSelect.value = state.endpointColorScheme;
       setShellRail("plot");
@@ -5217,15 +5223,18 @@ showPointsEl.addEventListener("change", () => {
   state.showPoints = showPointsEl.checked;
   render();
 });
-guidedPresetSelect.addEventListener("change", () => {
-  const val = guidedPresetSelect.value;
-  state.guidedPreset = val === "exposure-rows" || val === "overlay" ? (val as GuidedPreset) : "endpoint-rows";
-  if (state.guidedPreset !== "overlay") {
-    state.compareDistByEndpoint = false;
-    compareDistByEndpointEl.checked = false;
-  }
-  syncCompareNormUi(selectedEndpoints(), guidedOverlayActive(selectedEndpoints().length));
-  render();
+guidedPresetRadios().forEach((radio) => {
+  radio.addEventListener("change", () => {
+    if (!radio.checked) return;
+    const val = radio.value;
+    state.guidedPreset = val === "exposure-rows" || val === "overlay" ? (val as GuidedPreset) : "endpoint-rows";
+    if (state.guidedPreset !== "overlay") {
+      state.compareDistByEndpoint = false;
+      compareDistByEndpointEl.checked = false;
+    }
+    syncCompareNormUi(selectedEndpoints(), guidedOverlayActive(selectedEndpoints().length));
+    render();
+  });
 });
 
 document.querySelectorAll<HTMLInputElement>('input[name="layoutMode"]').forEach((rb) => {
