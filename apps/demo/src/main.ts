@@ -2730,7 +2730,6 @@ function renderViewLayoutFacetGrid(metrics: ExposureMetric[], endpoints: Endpoin
       panel.endpointIds && panel.endpointIds.length > 1
         ? appendComparePanelCell(grid, panel)
         : appendScatterPanelCell(grid, panel),
-    appendCompareScatterCell: (grid, panel) => appendComparePanelCell(grid, panel),
     appendDistCell: (grid, panel) => appendDistPanelCell(grid, panel),
     onDistGridsMounted: (facet, gridCount) => {
       // Vertically repeated strips (row-faceted dist grids): record the count so

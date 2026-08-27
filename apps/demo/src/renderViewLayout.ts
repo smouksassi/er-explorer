@@ -8,7 +8,6 @@ export interface FacetGridMountOptions {
   createFacetLayoutShell: () => HTMLElement;
   attachFacetLayoutSplitter: (facet: HTMLElement) => void;
   appendScatterCell: (grid: HTMLElement, panel: ScatterPanelSpec) => void;
-  appendCompareScatterCell: (grid: HTMLElement, panel: ScatterPanelSpec) => void;
   appendDistCell: (grid: HTMLElement, panel: DistPanelSpec) => void;
   /** Called when >1 dist grid stacks in one block, so the host can widen the dist pane share. */
   onDistGridsMounted?: (facet: HTMLElement, gridCount: number) => void;
@@ -149,37 +148,9 @@ export function mountViewLayoutGrid(
 ): void {
   container.innerHTML = "";
 
-  if (isGuidedCompareTopology(spec)) {
-    const facet = opts.createFacetLayoutShell();
-    const scatterBlock = facet.querySelector(".facet-scatter-block") as HTMLElement;
-    const distBlock = facet.querySelector(".facet-dist-block") as HTMLElement;
-
-    const rowEl = document.createElement("div");
-    rowEl.className = "endpoint-row";
-    rowEl.innerHTML = `<div class="facet-row-label">Response · endpoints overlaid</div>`;
-    const rowGrid = document.createElement("div");
-    rowGrid.className = "panel-grid";
-    rowEl.appendChild(rowGrid);
-    scatterBlock.appendChild(rowEl);
-
-    const sorted = sortPanelsByColOrder(scatterPanels, {
-      ...spec,
-      colDimensions: [{ kind: "xMetrics", ids: scatterPanels.map((p) => p.xVariableId), order: scatterPanels.map((p) => p.xVariableId) }]
-    });
-    for (const panel of sorted) {
-      opts.appendCompareScatterCell(rowGrid, panel);
-    }
-
-    const distGrid = document.createElement("div");
-    distGrid.className = "panel-grid facet-shared-dist-grid";
-    for (const dp of distPanels) {
-      opts.appendDistCell(distGrid, dp);
-    }
-    distBlock.appendChild(distGrid);
-    opts.attachFacetLayoutSplitter(facet);
-    container.appendChild(facet);
-    return;
-  }
+  // ONE mount path (rethink A4): the former guided-compare shell was the
+  // general no-row-dims mount with a hardcoded banner label — deleted in E4.
+  // Multi-endpoint cells route through appendScatterCell (endpointIds > 1).
 
   const rowGroups = groupByRowStrip(scatterPanels, spec);
   const rowKeys = [...rowGroups.keys()];

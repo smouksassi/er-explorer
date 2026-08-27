@@ -7,7 +7,7 @@ import type {
   ScatterPanelSpec,
   ViewLayoutSpec
 } from "@er-explorer/domain";
-import { isGuidedCompareTopology, panelEndpointMode } from "@er-explorer/domain";
+import { panelEndpointMode } from "@er-explorer/domain";
 import { getColumn, type LoadedDataset } from "./loadedDataset";
 import { isMissing } from "./rawValue";
 import { selectRecordIndices } from "./filters";
@@ -144,37 +144,10 @@ export function enumerateScatterPanels(
 ): ScatterPanelSpec[] {
   const baseIndices = baseRowIndices ?? [...selectRecordIndices(loaded, filters)];
 
-  if (isGuidedCompareTopology(spec)) {
-    const colBranches = cartesianFacetBranches(loaded, baseIndices, spec.colDimensions, input, spec);
-    const rowBranches =
-      spec.rowDimensions.length > 0
-        ? cartesianFacetBranches(loaded, baseIndices, spec.rowDimensions, input, spec)
-        : [{ facetKey: {} as FacetKey, indices: baseIndices }];
-
-    const panels: ScatterPanelSpec[] = [];
-    for (const row of rowBranches) {
-      for (const col of colBranches) {
-        const facetKey = { ...row.facetKey, ...col.facetKey };
-        const { xVariableId } = resolveEndpointAndX(facetKey, input);
-        const endpointIds =
-          spec.color.kind === "endpoints"
-            ? input.endpointIds
-            : facetKey.endpoint
-              ? [facetKey.endpoint]
-              : input.endpointIds;
-        const indices = row.indices.filter((i) => col.indices.includes(i));
-        panels.push({
-          id: stablePanelId("scatter", facetKey, "overlay"),
-          facetKey,
-          xVariableId,
-          endpointId: endpointIds[0] ?? input.endpointIds[0] ?? "",
-          endpointIds,
-          rowIndices: indices
-        });
-      }
-    }
-    if (panels.length) return panels;
-  }
+  // ONE enumeration path (rethink A4 — Guided is presets that write the spec):
+  // the former guided-compare special branch produced the same panels as the
+  // general path below (attachMultiEndpointIds marks color=endpoints overlay
+  // cells), minus an "|overlay" id suffix. Deleted in E4.
 
   const allDims = [...spec.rowDimensions, ...spec.colDimensions];
   if (!allDims.length) {
