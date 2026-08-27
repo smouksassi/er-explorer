@@ -47,6 +47,22 @@ NEXT: user visual pass (endpoint-column strips + compare cells with grouping),
 then E4 (guided presets + dead compare booleans/overlay mount + retired
 DistributionLinkage), E5 linetype channel, E6 callout density control.
 
+**E4 LANDED (2026-08-24, 3379805 + fdd3ca4) — user confirmed E2c/E3 visuals:**
+- E4a one path (rethink A4): guided-compare special branches DELETED from both
+  enumerateScatterPanels and mountViewLayoutGrid — overlay flows through the
+  general grid ("|overlay" id suffix and the banner label gone; s1–s3
+  re-baselined, text-identical, +20px chart height).
+- E4b presets: ONE "Guided preset" select (endpoint-rows | exposure-rows |
+  overlay) replaces gridLayout select + compareEndpoints checkbox; state fields
+  deleted; sessions save guidedPreset with legacy migration on load; "Split
+  distribution by endpoint" remains the overlay sub-option. All 7 baselines
+  byte-identical.
+- Still vestigial (harmless, future sweep): spec.endpointOverlay flag,
+  DistributionLinkage select (hidden), isGuidedCompareTopology (still used by
+  panel-policy chrome), GuidedGridLayout type.
+NEXT: E5 linetype channel (user-requested; motivating case: facet+color=crcl,
+group=sex — dash distinguishes the sex curves), then E6 callout density.
+
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl
    + group=sex renders two sex curves per panel, BOTH wearing the panel's crcl
