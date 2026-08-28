@@ -63,6 +63,18 @@ DistributionLinkage), E5 linetype channel, E6 callout density control.
 NEXT: E5 linetype channel (user-requested; motivating case: facet+color=crcl,
 group=sex — dash distinguishes the sex curves), then E6 callout density.
 
+**E4 polish + E5 LANDED (2026-08-28):** guided preset radios + split-dist
+toggle relocated (user feedback); E5 linetype channel: spec.linetype
+(none | endpoints | variable, default endpoints = legacy dash rule preserved,
+all 7 prior baselines byte-identical), constancy-law dash in ALL painters
+(regular continuous/binary + compare), "Linetype (curves)" select in Style,
+dash legend when mapped to a variable, snapshot s8 pins the motivating case
+(crcl facet+color + group/linetype=sex: solid vs "8 5" per panel).
+NEXT: E6 callout density control (default "Selected groups only", "All" on
+demand, persisted); then backlog: rethink §K provenance check (177 vs 176),
+"recode value as missing" data-prep feature, vestigial sweep (endpointOverlay
+flag, DistributionLinkage, GuidedGridLayout type).
+
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl
    + group=sex renders two sex curves per panel, BOTH wearing the panel's crcl

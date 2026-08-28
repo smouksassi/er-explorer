@@ -81,6 +81,7 @@ import {
   distEndpointColorSplit,
   formatDistGroupId,
   resolveGrouping,
+  resolveLinetype,
   isGuidedCompareTopology,
   layoutHasEndpointFacet,
   parseDistGroupId as parseDistGroupRef,
@@ -629,6 +630,7 @@ const advancedColFacetsEl = $<HTMLSelectElement>("advancedColFacets");
 const advancedColorByEl = $<HTMLSelectElement>("advancedColorBy");
 const advancedColorBinningEl = $<HTMLSelectElement>("advancedColorBinning");
 const advancedGroupCurvesEl = $<HTMLSelectElement>("advancedGroupCurves");
+const advancedLinetypeByEl = $<HTMLSelectElement>("advancedLinetypeBy");
 const advancedEndpointOverlayEl = $<HTMLInputElement>("advancedEndpointOverlay");
 const advancedDistLinkageEl = $<HTMLSelectElement>("advancedDistLinkage");
 const advancedColorDistShapesEl = $<HTMLInputElement>("advancedColorDistShapes");
@@ -678,6 +680,21 @@ function refreshAdvancedColorOptions(): void {
   }
   if ([...advancedGroupCurvesEl.options].some((o) => o.value === keepGroup)) {
     advancedGroupCurvesEl.value = keepGroup;
+  }
+
+  // Linetype (§H3a): endpoints (default) | none | any covariate — a second
+  // paint channel for curve strokes.
+  const keepLinetype = advancedLinetypeByEl.value;
+  advancedLinetypeByEl.innerHTML =
+    '<option value="endpoints">Endpoints (default)</option><option value="none">None (all solid)</option>';
+  for (const col of filterColumnOptions()) {
+    const opt = document.createElement("option");
+    opt.value = col.id;
+    opt.textContent = col.label;
+    advancedLinetypeByEl.appendChild(opt);
+  }
+  if ([...advancedLinetypeByEl.options].some((o) => o.value === keepLinetype)) {
+    advancedLinetypeByEl.value = keepLinetype;
   }
 }
 
@@ -755,6 +772,7 @@ function pullAdvancedSpecFromUi(): ViewLayoutSpec {
     advancedColorByEl.value,
     advancedColorBinningEl.value,
     advancedGroupCurvesEl.value,
+    advancedLinetypeByEl.value,
     // ADR-0012: distribution layout is derived (collapse over endpoints, mirror
     // non-endpoint facets) — the linkage field is pinned, the control hidden.
     "mirror_scatter_grid",
@@ -892,6 +910,7 @@ function syncLayoutModeUi(options?: { refreshAdvancedControls?: boolean }): void
         advancedColorByEl,
         advancedColorBinningEl,
         advancedGroupCurvesEl,
+        advancedLinetypeByEl,
         advancedDistLinkageEl,
         advancedColorDistShapesEl,
         advancedEndpointOverlayEl
@@ -945,6 +964,19 @@ function appendLegendTitle(container: HTMLElement, title: string): void {
   container.appendChild(el);
 }
 
+/** Linetype legend row (E5): dash sample per level when linetype maps a variable. */
+function appendLinetypeLegend(spec: ViewLayoutSpec): void {
+  const lt = linetypeAccessFor(spec);
+  if (lt.kind !== "variable" || !lt.legend || !lt.variableId) return;
+  appendLegendTitle(legendEl, `Linetype · ${covariateLabel(lt.variableId)}`);
+  for (const { level, dash } of lt.legend) {
+    const item = document.createElement("div");
+    item.className = "dotKey";
+    item.innerHTML = `<svg width="26" height="10" aria-hidden="true"><line x1="1" y1="5" x2="25" y2="5" stroke="currentColor" stroke-width="2"${dash ? ` stroke-dasharray="${dash}"` : ""}></line></svg> ${escapeHtml(level)}`;
+    legendEl.appendChild(item);
+  }
+}
+
 function renderLayoutColorLegend(spec: ViewLayoutSpec): void {
   const ds = requireDataset();
   legendEl.innerHTML = "";
@@ -956,6 +988,7 @@ function renderLayoutColorLegend(spec: ViewLayoutSpec): void {
       item.innerHTML = `<span class="swatch" style="background:${resolveDoseColor(dose)}"></span> ${escapeHtml(dose)}`;
       legendEl.appendChild(item);
     }
+    appendLinetypeLegend(spec);
     return;
   }
   if (spec.color.kind === "endpoints") {
@@ -966,6 +999,7 @@ function renderLayoutColorLegend(spec: ViewLayoutSpec): void {
       item.innerHTML = `<span class="swatch" style="background:${endpointColor(endpoint)}"></span> ${escapeHtml(ds.endpointLabel(endpoint))}`;
       legendEl.appendChild(item);
     }
+    appendLinetypeLegend(spec);
     return;
   }
   const variableId = spec.color.variableId;
@@ -978,6 +1012,7 @@ function renderLayoutColorLegend(spec: ViewLayoutSpec): void {
     item.innerHTML = `<span class="swatch" style="background:${variableColorForLevel(variableId, level, levels)}"></span> ${escapeHtml(level)}`;
     legendEl.appendChild(item);
   }
+  appendLinetypeLegend(spec);
 }
 
 function renderVariableColorLegend(variableId: string): void {
@@ -1325,6 +1360,52 @@ function constantOver(rows: number[], valueOf: (rowIndex: number) => string | nu
     else if (seen !== v) return "";
   }
   return seen ?? "";
+}
+
+/**
+ * Linetype channel (§H3a / E5): a SECOND paint channel for CURVE STROKES only.
+ * Same constancy law as color — a curve wears a dash iff the linetype variable
+ * is constant within its group's rows. Points, strips, and observed markers
+ * never dash. Default (endpoints): dash disambiguates shared ink — multi-
+ * endpoint cells and the endpoints color channel; single-endpoint cells solid
+ * (exactly the legacy behavior).
+ */
+function linetypeAccessFor(spec: ViewLayoutSpec | null): {
+  kind: "none" | "endpoints" | "variable";
+  variableId?: string;
+  dashForRows: (rows: number[], endpoint: Endpoint, cellEndpointCount: number) => string;
+  legend?: Array<{ level: string; dash: string }>;
+} {
+  const lt = resolveLinetype(spec);
+  if (!spec || lt.kind === "none" || !dataset) return { kind: "none", dashForRows: () => "" };
+  if (lt.kind === "endpoints") {
+    return {
+      kind: "endpoints",
+      dashForRows: (_rows, endpoint, cellEndpointCount) =>
+        cellEndpointCount > 1 || spec.color.kind === "endpoints" ? endpointDash(endpoint) : ""
+    };
+  }
+  const ds = requireDataset();
+  const binning =
+    (spec.color.kind === "variable" && spec.color.variableId === lt.variableId
+      ? spec.color.binning
+      : lt.binning) ?? spec.continuousBinning;
+  // Level model on the BASE cohort — dash↔level assignment must be identical in
+  // every panel (same rule as color and grouping models).
+  const model = buildColorBinModel(ds.loaded, lt.variableId, dataFilteredRowIndices(), binning);
+  const dashForLevel = (level: string): string => {
+    const idx = model.levels.indexOf(level);
+    return ENDPOINT_DASH_PATTERNS[(idx >= 0 ? idx : 0) % ENDPOINT_DASH_PATTERNS.length]!;
+  };
+  return {
+    kind: "variable",
+    variableId: lt.variableId,
+    dashForRows: (rows) => {
+      const level = constantOver(rows, (i) => colorLevelForRow(i, model, ds.loaded, lt.variableId) || null);
+      return level ? dashForLevel(level) : "";
+    },
+    legend: model.levels.map((level) => ({ level, dash: dashForLevel(level) }))
+  };
 }
 
 function selectionProjectionCtxFor(
@@ -2025,7 +2106,7 @@ function renderContinuousScatterViaRenderer(
   height = SCATTER_CHART_HEIGHT,
   opts?: {
     /** §J curve groups (one per grouping partition); replaces the single pooled curve. */
-    curves?: Array<{ curve: PredictionResult; color: string; key?: string; level?: string }>;
+    curves?: Array<{ curve: PredictionResult; color: string; dash?: string; key?: string; level?: string }>;
     /** Point color under the active color channel; default = dose palette. */
     pointColorFor?: (p: ScatterPoint) => string;
   }
@@ -2036,6 +2117,7 @@ function renderContinuousScatterViaRenderer(
         samples: toCurveSamples(c.curve),
         color: c.color,
         band: c.color,
+        dash: c.dash,
         key: c.key,
         level: c.level
       }))
@@ -2044,6 +2126,7 @@ function renderContinuousScatterViaRenderer(
           samples: toCurveSamples(curve),
           color: "#64748b",
           band: "#94a3b8",
+          dash: undefined as string | undefined,
           key: undefined as string | undefined,
           level: undefined as string | undefined
         }
@@ -2094,7 +2177,7 @@ function renderContinuousScatterViaRenderer(
       return;
     }
     layers.push(new ConfidenceRibbonLayer({ id: `band-${ci}`, samples: c.samples, color: c.band, opacity: 0.18 }));
-    layers.push(new FitLayer({ id: `curve-${ci}`, samples: c.samples, color: c.color }));
+    layers.push(new FitLayer({ id: `curve-${ci}`, samples: c.samples, color: c.color, dash: c.dash || undefined }));
   });
 
   if (projected.length) {
@@ -3090,6 +3173,7 @@ function paintRegularScatterIntoWrap(
   // (this subsumes the old fitByColor branches AND the degenerate facet+color
   // single-level rule).
   const curvePartitions = curvePartitionsForRows(spec ?? null, recordRows);
+  const linetype = linetypeAccessFor(spec ?? null);
   const channelColorFor = (rows: number[]): string | undefined => {
     if (colorByVariable && colorVarId && colorModel) {
       const level = constantOver(rows, (i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) || null);
@@ -3121,11 +3205,15 @@ function paintRegularScatterIntoWrap(
         }
       }
       const color = channelColorFor(part.rows);
-      return [{ curve: fitted, color, key: part.key, level: part.key || undefined }];
+      const dash = linetype.dashForRows(part.rows, endpoint, 1);
+      return [{ curve: fitted, color, dash, key: part.key, level: part.key || undefined }];
     });
-    // A single unpainted pooled curve keeps the renderer's default neutral style.
+    // A single unpainted, undashed pooled curve keeps the renderer's default style.
     const neutralPooled =
-      builtCurves.length === 1 && builtCurves[0]!.key === "" && builtCurves[0]!.color === undefined;
+      builtCurves.length === 1 &&
+      builtCurves[0]!.key === "" &&
+      builtCurves[0]!.color === undefined &&
+      !builtCurves[0]!.dash;
     if (builtCurves.length && !neutralPooled) {
       levelCurves = builtCurves.map((c) => ({ ...c, color: c.color ?? "#64748b" }));
     }
@@ -3194,7 +3282,7 @@ function paintRegularScatterIntoWrap(
           {
             curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
             color: channelColorFor(part.rows) ?? "#334155",
-            dash: "",
+            dash: linetype.dashForRows(part.rows, endpoint, 1),
             projected: projectedForCurveKey(doseProjected, part.key)
           }
         ];
@@ -3206,7 +3294,7 @@ function paintRegularScatterIntoWrap(
             {
               curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
               color: channelColorFor(recordRows) ?? "#334155",
-              dash: "",
+              dash: linetype.dashForRows(recordRows, endpoint, 1),
               projected: doseProjected
             }
           ];
@@ -3247,7 +3335,7 @@ function paintRegularScatterIntoWrap(
           {
             curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
             color: epColor,
-            dash: endpointDash(endpoint),
+            dash: linetype.dashForRows(part.rows, endpoint, 1),
             projected: projectedForCurveKey(projected, part.key)
           }
         ];
@@ -3279,7 +3367,7 @@ function paintRegularScatterIntoWrap(
             {
               curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
               color: channelColorFor(part.rows) ?? "#334155",
-              dash: "",
+              dash: linetype.dashForRows(part.rows, endpoint, 1),
               // Granularity rule (I8): a group's projection rides only its own curve.
               projected: projectedForCurveKey(projected, part.key)
             }
@@ -3290,11 +3378,13 @@ function paintRegularScatterIntoWrap(
         // Degenerate facet+dose-color: a single-arm cell keeps its arm color
         // (constancy — same rule variables already have); multi-arm stays neutral.
         const armColor = channelColorFor(recordRows);
+        const pooledDash = fitResult ? linetype.dashForRows(recordRows, endpoint, 1) : "";
         curves = fitResult
           ? [
               {
                 curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
                 ...(armColor ? { color: armColor } : {}),
+                ...(pooledDash ? { dash: pooledDash } : {}),
                 projected
               }
             ]
@@ -3377,6 +3467,7 @@ function paintCompareScatterIntoWrap(
   // stays user-owned: linear endpoints map onto the 0–1 axis only through the
   // user's normalization bounds (decision 1a — geometry normalized, labels raw).
   const neutralCurves = !endpointColoredCurves;
+  const linetype = linetypeAccessFor(spec ?? null);
   const fits = endpoints.map((endpoint) => {
     const rows = recordsWithEndpoint(endpoint).filter((i) => cohort.includes(i));
     const linear = usesLinearModel(endpoint);
@@ -3414,7 +3505,7 @@ function paintCompareScatterIntoWrap(
           rawCurve: linear ? rawCurve : undefined,
           fitLabelDecimals: linear ? 1 : 2,
           color: neutralCurves ? NEUTRAL_COMPARE_COLOR : endpointColor(endpoint),
-          dash: endpointDash(endpoint),
+          dash: linetype.dashForRows(part.rows, endpoint, endpoints.length),
           projected: projectedForCurveKey(projected, part.key)
         }
       ];
@@ -5279,6 +5370,7 @@ function bindAdvancedLayoutInput(el: HTMLElement): void {
   advancedColorByEl,
   advancedColorBinningEl,
   advancedGroupCurvesEl,
+  advancedLinetypeByEl,
   advancedEndpointOverlayEl,
   advancedDistLinkageEl,
   advancedColorDistShapesEl

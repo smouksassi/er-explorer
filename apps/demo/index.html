@@ -551,6 +551,13 @@
           </select>
           <p class="field-hint">Statistical grouping: one fitted curve per group (per endpoint). Color stays paint — a curve wears the color only when its group has a single color level. Per-arm fits over a narrow exposure range are the analyst's judgment.</p>
         </div>
+        <div class="field"><label for="advancedLinetypeBy">Linetype (curves)</label>
+          <select id="advancedLinetypeBy">
+            <option value="endpoints">Endpoints (default)</option>
+            <option value="none">None (all solid)</option>
+          </select>
+          <p class="field-hint">Second paint channel for curve strokes: dash by endpoint (overlay default) or by a covariate's levels — a curve dashes only when its group is a single level (same rule as color). Points and boxplots never dash.</p>
+        </div>
         <div class="field" hidden aria-hidden="true"><label><input type="checkbox" id="advancedEndpointOverlay" /> Overlay endpoints (compare)</label></div>
         <!-- ADR-0012: distribution layout is DERIVED — strips collapse over endpoints
              and mirror non-endpoint facets; shared-by-column is the no-facet outcome.

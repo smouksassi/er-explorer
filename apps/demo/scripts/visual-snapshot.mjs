@@ -226,6 +226,22 @@ const SCENARIOS = [
       await clickRow("2400 mg");
       await settle();
     }
+  },
+  {
+    // Linetype channel (E5, the motivating case): facet+color=crcl (degenerate,
+    // both curves wear the panel color) + group=sex + linetype=sex — dash is
+    // what distinguishes the two sex curves inside each panel.
+    name: "s8-linetype-sex-under-crcl-facet-color",
+    run: async () => {
+      await setEndpoints(["icgi"]);
+      await setMode("advanced");
+      await setFacets([], ["var:crcl"]);
+      await setSel("advancedColorBy", "crcl");
+      await setSel("advancedGroupCurves", "sex");
+      await setSel("advancedLinetypeBy", "sex");
+      await resetSelection();
+      await settle();
+    }
   }
 ];
 

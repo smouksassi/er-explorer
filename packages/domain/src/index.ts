@@ -71,7 +71,8 @@ export type {
   ScatterPanelSpec,
   DistPanelSpec,
   GroupKey,
-  GroupingSpec
+  GroupingSpec,
+  LinetypeEncoding
 } from "./viewLayout";
 
 export {
@@ -85,6 +86,7 @@ export {
   layoutHasEndpointFacet,
   panelEndpointMode,
   resolveGrouping,
+  resolveLinetype,
   usesEndpointColorOverlay,
   withResolvedGrouping
 } from "./viewLayout";

@@ -9,3 +9,9 @@ dist
 apps/demo/src/data.generated.ts
 apps/demo/bundle.js
 apps/demo/dist/bundle.js
+
+# local scratch
+smoke.log
+snap.log
+v.log
+claudetwoexposureoneendpoint.R

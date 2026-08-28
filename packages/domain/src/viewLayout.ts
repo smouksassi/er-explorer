@@ -28,6 +28,19 @@ export type ColorEncoding =
   | { kind: "endpoints" }
   | { kind: "variable"; variableId: string; binning?: VariableColorBinning };
 
+/**
+ * Linetype channel (rethink §H3a, E5): a SECOND paint channel for curve strokes
+ * only — dash by endpoint identity (the overlay default) or by a variable's
+ * levels (double encoding, or encoding a second variable next to color). Paint,
+ * never statistics: a curve wears a dash iff the linetype variable is constant
+ * within its group (the same constancy law as color). Marks without line ink
+ * (points, strip shapes, observed markers) never dash.
+ */
+export type LinetypeEncoding =
+  | { kind: "none" }
+  | { kind: "endpoints" }
+  | { kind: "variable"; variableId: string; binning?: VariableColorBinning };
+
 export type DistributionLinkage =
   | "mirror_scatter_grid"
   | "shared_by_x_column"
@@ -60,6 +73,8 @@ export interface ViewLayoutSpec {
   rowDimensions: LayoutDimension[];
   colDimensions: LayoutDimension[];
   color: ColorEncoding;
+  /** Curve-stroke dash channel. Resolve via {@link resolveLinetype} (absent = endpoints, the legacy default). */
+  linetype?: LinetypeEncoding;
   /** Statistical grouping of curves/fits. Resolve via {@link resolveGrouping} (handles legacy specs). */
   grouping?: GroupingSpec;
   /**
@@ -245,6 +260,11 @@ export function resolveGrouping(spec: ViewLayoutSpec | null | undefined): string
   if (spec.color.kind === "variable") return [spec.color.variableId];
   if (spec.color.kind === "dose") return [DOSE_GROUPING_ID];
   return [];
+}
+
+/** The one reader of the linetype channel: absent = dash-by-endpoints (the legacy overlay default). */
+export function resolveLinetype(spec: ViewLayoutSpec | null | undefined): LinetypeEncoding {
+  return spec?.linetype ?? { kind: "endpoints" };
 }
 
 /** Normalize a (possibly legacy) spec to carry explicit `grouping` and no `fitByColor`. */

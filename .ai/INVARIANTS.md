@@ -201,3 +201,13 @@ scenarios per family); domain type has no required `fitByColor`. **Prevention:**
 any code that decides fit cohorts from `spec.color` (rather than
 `resolveGrouping`) — or paints a curve without a constancy check — is a
 violation.
+
+**Linetype (E5):** `linetype` is a SECOND paint channel for curve strokes only
+(none | endpoints | variable), governed by the SAME constancy law — a curve
+dashes iff the linetype variable is constant within its group. Absent =
+endpoints (the legacy dash-by-endpoint rule: multi-endpoint cells and the
+endpoints color channel; single-endpoint cells solid). Points, strip shapes,
+and observed markers never dash. The one-COLOR-channel rule (I2) is untouched —
+linetype exists precisely so a second variable never needs a second palette.
+Guard: snapshot s8 (facet+color=crcl degenerate + group=sex + linetype=sex —
+two same-colored curves per panel distinguished solid vs "8 5").

@@ -1,5 +1,5 @@
-import type { DistributionLinkage, LayoutDimension, VariableColorBinning, ViewLayoutSpec } from "@er-explorer/domain";
-import { dedupeFacetDimensions, resolveGrouping } from "@er-explorer/domain";
+import type { DistributionLinkage, LayoutDimension, LinetypeEncoding, VariableColorBinning, ViewLayoutSpec } from "@er-explorer/domain";
+import { dedupeFacetDimensions, resolveGrouping, resolveLinetype } from "@er-explorer/domain";
 
 export function linkageFromSelectValue(value: string): DistributionLinkage {
   switch (value) {
@@ -90,6 +90,7 @@ export function readAdvancedSpecFromUi(
   colorValue: string,
   colorBinningValue: string,
   groupCurvesValue: string,
+  linetypeValue: string,
   distLinkage: DistributionLinkage,
   colorDistShapes: boolean,
   _endpointOverlay: boolean
@@ -118,6 +119,12 @@ export function readAdvancedSpecFromUi(
     // any channel. Whether the groups are visually distinguishable is the
     // constancy theorem's job, not a UI restriction.
     grouping: { variableIds: groupCurvesValue ? [groupCurvesValue] : [] },
+    linetype:
+      linetypeValue === "none"
+        ? ({ kind: "none" } as LinetypeEncoding)
+        : linetypeValue === "endpoints" || !linetypeValue
+          ? ({ kind: "endpoints" } as LinetypeEncoding)
+          : ({ kind: "variable", variableId: linetypeValue, binning } as LinetypeEncoding),
     endpointOverlay: false,
     distribution: { linkage: distLinkage, colorDistShapes },
     observedGroupVariableId: color.kind === "variable" ? color.variableId : undefined
@@ -131,6 +138,7 @@ export function applyAdvancedSpecToUi(
   colorSelect: HTMLSelectElement,
   colorBinningSelect: HTMLSelectElement,
   groupCurvesEl: HTMLSelectElement,
+  linetypeEl: HTMLSelectElement,
   distLinkageEl: HTMLSelectElement,
   colorDistShapesEl: HTMLInputElement,
   endpointOverlayEl: HTMLInputElement
@@ -153,6 +161,13 @@ export function applyAdvancedSpecToUi(
     groupCurvesEl.value = groupValue;
   } else {
     groupCurvesEl.value = "";
+  }
+  const lt = resolveLinetype(spec);
+  const ltValue = lt.kind === "variable" ? lt.variableId : lt.kind;
+  if ([...linetypeEl.options].some((o) => o.value === ltValue)) {
+    linetypeEl.value = ltValue;
+  } else {
+    linetypeEl.value = "endpoints";
   }
   distLinkageEl.value = spec.distribution.linkage;
   colorDistShapesEl.checked = spec.distribution.colorDistShapes;
