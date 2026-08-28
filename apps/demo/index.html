@@ -469,6 +469,13 @@
       <div class="field"><span class="field-label">On dose click</span>
         <div class="checkbox-group"><label><input type="checkbox" id="showDoseObserved" checked /> Observed %/N</label></div>
       </div>
+      <div class="field"><span class="field-label">Callout density</span>
+        <div class="checkbox-group" id="calloutDensityGroup">
+          <label><input type="radio" name="calloutDensity" value="selected" checked /> Selected groups only</label>
+          <label><input type="radio" name="calloutDensity" value="all" /> All groups</label>
+        </div>
+        <p class="field-hint">Per-group split/bin callouts (%/N, fitted + CI) follow your selection — click a boxplot row to read its group. With nothing selected, cohort-level callouts show. "All groups" always shows every callout (can overlap in dense views).</p>
+      </div>
       <div class="field"><span class="field-label">Distribution readout</span>
         <div class="checkbox-group">
           <label><input type="checkbox" id="showDistReadout" checked /> Show readout</label>

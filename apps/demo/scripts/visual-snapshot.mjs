@@ -242,6 +242,45 @@ const SCENARIOS = [
       await resetSelection();
       await settle();
     }
+  },
+  {
+    // Callout density (E6) — default "Selected groups only" with NO selection:
+    // split/bin callouts collapse to cohort level (pooled observed %/N; fitted
+    // pill suppressed under split curves until a group is clicked).
+    name: "s9-callout-density-selected-no-selection",
+    run: async () => {
+      await setEndpoints(["icgi"]);
+      await setMode("advanced");
+      await setFacets([], []);
+      await setSel("advancedColorBy", "crcl");
+      await setSel("advancedGroupCurves", "crcl");
+      await setSel("advancedLinetypeBy", "endpoints");
+      await page.locator('.nav-btn[data-rail="overlays"]').click();
+      await page.evaluate(() => {
+        const r = document.querySelector('input[name="refLine"][value="median"]');
+        if (r && !r.checked) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); }
+      });
+      await setCb("showObservedResp", true);
+      await setCb("showReferenceFit", true);
+      await page.evaluate(() => {
+        const r = document.querySelector('input[name="calloutDensity"][value="selected"]');
+        if (r && !r.checked) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); }
+      });
+      await resetSelection();
+      await settle();
+    }
+  },
+  {
+    // Callout density (E6) — "All groups": every group's callouts render.
+    name: "s10-callout-density-all-no-selection",
+    run: async () => {
+      await page.locator('.nav-btn[data-rail="overlays"]').click();
+      await page.evaluate(() => {
+        const r = document.querySelector('input[name="calloutDensity"][value="all"]');
+        if (r && !r.checked) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); }
+      });
+      await settle();
+    }
   }
 ];
 

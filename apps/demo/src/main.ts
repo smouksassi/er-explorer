@@ -479,6 +479,8 @@ interface DemoState {
   showPoints: boolean;
   /** Facet grid: endpoints along rows (default) or exposures along rows. */
   guidedPreset: GuidedPreset;
+  /** E6 callout density: per-group split/bin callouts follow the selection ("selected") or always render ("all"). */
+  calloutDensity: "selected" | "all";
   doseColorScheme: ColorSchemeId;
   endpointColorScheme: ColorSchemeId;
   endpointModels: Record<string, EndpointAnalysisModel>;
@@ -518,6 +520,7 @@ const state: DemoState = {
   showDoseObserved: true,
   showPoints: true,
   guidedPreset: "endpoint-rows",
+  calloutDensity: "selected",
   doseColorScheme: "default",
   endpointColorScheme: "default",
   endpointModels: {},
@@ -1408,6 +1411,36 @@ function linetypeAccessFor(spec: ViewLayoutSpec | null): {
   };
 }
 
+/**
+ * E6 callout density (rethink §J.6): the plot is an extraction tool — split/bin
+ * callouts follow the SELECTION by default. Returns "all" (render every
+ * group's callouts: density "all", or a pooled dose row is selected — I8
+ * expands it to every group), null (no selection: cohort-level callouts only),
+ * or the set of selected channel levels.
+ */
+function calloutLevelFilter(): "all" | null | Set<string> {
+  if (state.calloutDensity === "all") return "all";
+  if (!state.selectedDistGroupIds.size && !state.selectedDoses.size) return null;
+  if (state.selectedDoses.size) return "all";
+  const levels = new Set<string>();
+  for (const gid of state.selectedDistGroupIds) {
+    const { suffix } = parseDistGroupId(gid);
+    if (suffix && !selectedEndpoints().includes(suffix as Endpoint)) levels.add(suffix);
+    else return "all";
+  }
+  return levels;
+}
+
+/** Fitted-at-split/bin markers under the density rule: a curve shows its pill
+ * iff it hosts a projection of the current selection (the I8 association); with
+ * no selection, only a lone pooled curve gets one. */
+function curveShowsFitCallout(hostsProjection: boolean, curveCount: number): boolean {
+  const filter = calloutLevelFilter();
+  if (filter === "all") return true;
+  if (filter === null) return curveCount === 1;
+  return hostsProjection;
+}
+
 function selectionProjectionCtxFor(
   active: Set<number>,
   spec: ViewLayoutSpec | null,
@@ -2230,12 +2263,17 @@ function renderContinuousScatterViaRenderer(
 
   if (referenceLines.length) {
     const multiCurve = curveOverlays.length > 1;
+    const projectionHostKeys = new Set(projected.map((p) => p.curveKey ?? ""));
+    const markerOverlays = curveOverlays.filter((c) =>
+      curveShowsFitCallout(projectionHostKeys.has(c.key ?? ""), curveOverlays.length)
+    );
     const refSpecs: ReferenceLineSpec[] = referenceLines.map((ref) => {
       const spec: ReferenceLineSpec = { value: ref.value, label: ref.label };
       if (state.showSplitValue) spec.valueLabel = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
       if (state.showReferenceFit) {
-        // One fitted marker per curve group: same split x, per-group y (ADR-0012).
-        spec.markerValues = curveOverlays.map((c) => {
+        // One fitted marker per curve group: same split x, per-group y (ADR-0012;
+        // E6 density decides WHICH groups' markers render).
+        spec.markerValues = markerOverlays.map((c) => {
           const at = interpolateCurveSample(c.samples, ref.value);
           const [l1, l2] = formatFitMarkerLines(at.estimate, at.lower, at.upper, 1);
           return {
@@ -2278,7 +2316,9 @@ function renderContinuousScatterViaRenderer(
   }
 
   if (state.showFittedAtObservedBin && observedBins.length) {
+    const hostKeys = new Set(projected.map((p) => p.curveKey ?? ""));
     curveOverlays.forEach((c, ci) => {
+      if (!curveShowsFitCallout(hostKeys.has(c.key ?? ""), curveOverlays.length)) return;
       layers.push(
         createFitAtObservedBinLayer(
           `fit-at-observed-bin-${ci}`,
@@ -2431,11 +2471,15 @@ function renderBinaryScatterOverlay(
   });
 
   if (referenceLines.length) {
+    const markerCurveIdx = curves
+      .map((c, ci) => ci)
+      .filter((ci) => curveShowsFitCallout((curves[ci]!.projected?.length ?? 0) > 0, curves.length));
     const refSpecs: ReferenceLineSpec[] = referenceLines.map((ref) => {
       const spec: ReferenceLineSpec = { value: ref.value, label: ref.label };
       if (state.showSplitValue) spec.valueLabel = ref.value >= 100 ? ref.value.toFixed(0) : ref.value.toFixed(1);
       if (state.showReferenceFit) {
-        spec.markerValues = curves.map((c, ci) => {
+        spec.markerValues = markerCurveIdx.map((ci) => {
+          const c = curves[ci]!;
           const at = interpolateCurveSample(curveSamplesFor[ci], ref.value);
           const rawSamples = c.rawCurve ? toCurveSamples(c.rawCurve) : curveSamplesFor[ci];
           const rawAt = c.rawCurve ? interpolateCurveSample(rawSamples, ref.value) : at;
@@ -2484,6 +2528,7 @@ function renderBinaryScatterOverlay(
 
   if (state.showFittedAtObservedBin && observedBins.length) {
     curves.forEach((c, ci) => {
+      if (!curveShowsFitCallout((c.projected?.length ?? 0) > 0, curves.length)) return;
       const dec = c.fitLabelDecimals ?? 2;
       const color = hasExtras ? c.color ?? "#0f172a" : "#0f172a";
       layers.push(
@@ -2721,10 +2766,16 @@ function computeObservedBinsForPanel(
   colorModel?: ReturnType<typeof colorBinModelForSpec>
 ): ObservedBin[] {
   if (overlayPolicy?.observedAtSplit === "colorLevelWithinPanel" && colorVarId && colorModel) {
+    // E6 density: per-level callouts follow the selection; no selection →
+    // cohort-level (pooled) callouts only.
+    const filter = calloutLevelFilter();
+    if (filter === null) return computeObservedBins(metric, endpoint, cohortRowIndices);
     const ds = requireDataset();
     const paletteLevels = colorModel.levels;
-    const levels = paletteLevels.filter((level) =>
-      cohortRowIndices.some((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === level)
+    const levels = paletteLevels.filter(
+      (level) =>
+        (filter === "all" || filter.has(level)) &&
+        cohortRowIndices.some((i) => colorLevelForRow(i, colorModel, ds.loaded, colorVarId) === level)
     );
     return levels.flatMap((level) =>
       computeObservedBins(
@@ -4718,6 +4769,9 @@ function syncOverlayControlsFromState(): void {
   showDoseObservedEl.checked = state.showDoseObserved;
   showDistReadoutEl.checked = state.showDistReadout;
   expandDistReadoutEl.checked = state.distReadoutExpanded;
+  document
+    .querySelectorAll<HTMLInputElement>('input[name="calloutDensity"]')
+    .forEach((rb) => (rb.checked = rb.value === state.calloutDensity));
 }
 
 /** Richer default overlays when loading the bundled effICGI walkthrough. */
@@ -4921,6 +4975,7 @@ function buildSessionState(): SessionState {
       showSplitValue: state.showSplitValue,
       showDoseObserved: state.showDoseObserved,
       guidedPreset: state.guidedPreset,
+      calloutDensity: state.calloutDensity,
       showPoints: state.showPoints,
       doseColorScheme: state.doseColorScheme,
       endpointColorScheme: state.endpointColorScheme,
@@ -5087,6 +5142,7 @@ function loadSessionFromFile(file: File): void {
       // show the dose-observed marker rather than silently hiding it
       state.showDoseObserved = session.settings["showDoseObserved"] !== false;
       state.showPoints = session.settings["showPoints"] !== false;
+      state.calloutDensity = session.settings["calloutDensity"] === "all" ? "all" : "selected";
       const presetRaw = session.settings["guidedPreset"];
       if (presetRaw === "endpoint-rows" || presetRaw === "exposure-rows" || presetRaw === "overlay") {
         state.guidedPreset = presetRaw;
@@ -5166,6 +5222,9 @@ function loadSessionFromFile(file: File): void {
       }
       showDistReadoutEl.checked = state.showDistReadout;
       expandDistReadoutEl.checked = state.distReadoutExpanded;
+      document
+        .querySelectorAll<HTMLInputElement>('input[name="calloutDensity"]')
+        .forEach((rb) => (rb.checked = rb.value === state.calloutDensity));
       compareDistByEndpointEl.checked = state.compareDistByEndpoint;
       syncFiltersUi();
       showPointsEl.checked = state.showPoints;
@@ -5314,6 +5373,14 @@ showPointsEl.addEventListener("change", () => {
   state.showPoints = showPointsEl.checked;
   render();
 });
+document.querySelectorAll<HTMLInputElement>('input[name="calloutDensity"]').forEach((radio) => {
+  radio.addEventListener("change", () => {
+    if (!radio.checked) return;
+    state.calloutDensity = radio.value === "all" ? "all" : "selected";
+    render();
+  });
+});
+
 guidedPresetRadios().forEach((radio) => {
   radio.addEventListener("change", () => {
     if (!radio.checked) return;

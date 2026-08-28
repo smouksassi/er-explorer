@@ -75,6 +75,21 @@ demand, persisted); then backlog: rethink §K provenance check (177 vs 176),
 "recode value as missing" data-prep feature, vestigial sweep (endpointOverlay
 flag, DistributionLinkage, GuidedGridLayout type).
 
+**E6 LANDED (2026-08-28) — E-SEQUENCE COMPLETE (E1–E6):** callout density
+control in Overlays (state.calloutDensity, persisted, legacy-safe load).
+Rule: per-group split/bin callouts (observed %/N per color level, fitted+CI
+per curve, fitted-at-bin) follow the SELECTION by default — a curve shows its
+fit pill iff it hosts a projection (the I8 association); pooled dose click →
+all groups; NO selection → cohort level only (pooled observed; fit pill only
+on a lone pooled curve). "All groups" = legacy everything-on. Probe: 6 hit-
+areas (selected/noSel) vs 42 (pooled click) vs 36 (all/noSel); snapshots
+s9/s10 pin both densities. NOTE: the snapshot battery loads WITHOUT example
+defaults, so s1–s8 never had split callouts — all byte-identical.
+REMAINING BACKLOG: user visual pass on E5+E6; provenance check (177 vs 176);
+"recode value as missing" data-prep; vestigial sweep; E3 strip-rule
+re-challenge (user reserved the right); ordinal/Emax family adapters
+(ADR-0013 lookahead); CUI work (long-term).
+
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl
    + group=sex renders two sex curves per panel, BOTH wearing the panel's crcl
