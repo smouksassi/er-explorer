@@ -41,19 +41,6 @@ export function effectiveVariableBinning(
   return binning ?? "median";
 }
 
-/** @deprecated cut-value-bearing labels (binLabelsForCuts) replaced the opaque
- * "≤ median" labels — the user could not verify which cut was used (QA round 13). */
-export function binLabelsFor(binning: VariableColorBinning): string[] {
-  switch (binning) {
-    case "median":
-      return ["≤ median", "> median"];
-    case "tertiles":
-      return ["T1 (low)", "T2 (mid)", "T3 (high)"];
-    case "quartiles":
-      return ["Q1 (low)", "Q2", "Q3", "Q4 (high)"];
-  }
-}
-
 /** One decimal keeps the cut faithful (105.5 must not display as 106 — a row at
  * 105.8 would read as inside "≤ 106" while being above the real cut). */
 function fmtCut(v: number): string {

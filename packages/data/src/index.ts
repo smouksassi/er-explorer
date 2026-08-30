@@ -74,7 +74,6 @@ export {
   buildVariableLevelModel,
   levelForRow,
   isNumericCovariateColumn,
-  binLabelsFor,
   binLabelsForCuts,
   MISSING_LEVEL,
   getVariableRecode,

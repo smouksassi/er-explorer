@@ -3,6 +3,5 @@ export {
   buildVariableLevelModel as buildColorBinModel,
   levelForRow as colorLevelForRow,
   isNumericCovariateColumn as isNumericColorColumn,
-  effectiveVariableBinning,
-  binLabelsFor
+  effectiveVariableBinning
 } from "@er-explorer/data";

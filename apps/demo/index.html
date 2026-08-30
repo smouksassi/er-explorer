@@ -583,18 +583,6 @@
           </select>
           <p class="field-hint">Second paint channel for curve strokes: dash by endpoint (overlay default) or by a covariate's levels — a curve dashes only when its group is a single level (same rule as color). Points and boxplots never dash.</p>
         </div>
-        <div class="field" hidden aria-hidden="true"><label><input type="checkbox" id="advancedEndpointOverlay" /> Overlay endpoints (compare)</label></div>
-        <!-- ADR-0012: distribution layout is DERIVED — strips collapse over endpoints
-             and mirror non-endpoint facets; shared-by-column is the no-facet outcome.
-             Hidden (not removed) until the Slice E wiring cleanup. -->
-        <div class="field" hidden aria-hidden="true"><label for="advancedDistLinkage">Distribution layout</label>
-          <select id="advancedDistLinkage">
-            <option value="mirror_scatter_grid">Mirror scatter facets</option>
-            <option value="shared_by_x_column">Shared by exposure column</option>
-            <option value="single_pooled">Single pooled per exposure</option>
-            <option value="mirror_color_only">Color-split boxplots only</option>
-          </select>
-        </div>
         <div class="field"><label><input type="checkbox" id="advancedColorDistShapes" /> Color-split boxplots within dose rows</label>
           <p class="field-hint">For <strong>Endpoints</strong> color without endpoint facets: split each dose into side-by-side endpoint rows (Guided compare). When endpoints are faceted, boxplots use that panel’s endpoint color automatically.</p>
         </div>

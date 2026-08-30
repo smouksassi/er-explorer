@@ -148,11 +148,6 @@ export function isGuidedCompareTopology(spec: ViewLayoutSpec): boolean {
   return effectiveEndpointOverlay(spec) && colDimensionsAreOnlyXMetrics(spec);
 }
 
-/** @deprecated Use {@link isGuidedCompareTopology} for mount overlay; Advanced uses facet grid only. */
-export function usesEndpointColorOverlay(spec: ViewLayoutSpec, _selectedEndpointCount: number): boolean {
-  return isGuidedCompareTopology(spec);
-}
-
 export type PanelEndpointMode = "single" | "multiColor";
 
 /** Whether this cell shows one endpoint or multiple curves colored by endpoint. */

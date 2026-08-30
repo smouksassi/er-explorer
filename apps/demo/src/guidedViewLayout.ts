@@ -1,6 +1,4 @@
-import type { DistributionLinkage, LayoutDimension, ViewLayoutSpec } from "@er-explorer/domain";
-
-export type GuidedGridLayout = "endpoint-rows" | "exposure-rows";
+import type { LayoutDimension, ViewLayoutSpec } from "@er-explorer/domain";
 
 /** Guided presets (rethink §D.1): 3 ready-made specs; covariates are Advanced-only. */
 export type GuidedPresetId = "endpoint-rows" | "exposure-rows" | "overlay";
@@ -79,19 +77,4 @@ export function guidedToViewLayoutSpec(input: GuidedLayoutInput): ViewLayoutSpec
 
 export function defaultAdvancedSpecFromGuided(input: GuidedLayoutInput): ViewLayoutSpec {
   return { ...guidedToViewLayoutSpec(input), mode: "advanced", endpointOverlay: false };
-}
-
-export function distLinkageLabel(linkage: DistributionLinkage): string {
-  switch (linkage) {
-    case "mirror_scatter_grid":
-      return "Mirror scatter facets";
-    case "shared_by_x_column":
-      return "Shared by exposure column (Guided default)";
-    case "single_pooled":
-      return "Single pooled row per exposure";
-    case "mirror_color_only":
-      return "Color-split boxplots only";
-    default:
-      return linkage;
-  }
 }

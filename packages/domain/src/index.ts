@@ -87,7 +87,6 @@ export {
   panelEndpointMode,
   resolveGrouping,
   resolveLinetype,
-  usesEndpointColorOverlay,
   withResolvedGrouping
 } from "./viewLayout";
 export type { PanelEndpointMode } from "./viewLayout";

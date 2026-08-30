@@ -1,17 +1,5 @@
-import type { DistributionLinkage, LayoutDimension, LinetypeEncoding, VariableColorBinning, ViewLayoutSpec } from "@er-explorer/domain";
+import type { LayoutDimension, LinetypeEncoding, VariableColorBinning, ViewLayoutSpec } from "@er-explorer/domain";
 import { dedupeFacetDimensions, resolveGrouping, resolveLinetype } from "@er-explorer/domain";
-
-export function linkageFromSelectValue(value: string): DistributionLinkage {
-  switch (value) {
-    case "mirror_scatter_grid":
-    case "shared_by_x_column":
-    case "single_pooled":
-    case "mirror_color_only":
-      return value;
-    default:
-      return "shared_by_x_column";
-  }
-}
 
 export function parseFacetDimensionToken(
   token: string,
@@ -91,9 +79,7 @@ export function readAdvancedSpecFromUi(
   colorBinningValue: string,
   groupCurvesValue: string,
   linetypeValue: string,
-  distLinkage: DistributionLinkage,
-  colorDistShapes: boolean,
-  _endpointOverlay: boolean
+  colorDistShapes: boolean
 ): ViewLayoutSpec {
   const rowDimensions = readFacetDimensionsFromSelect(rowSelect, endpoints, xMetrics);
   const colDimensions = readFacetDimensionsFromSelect(colSelect, endpoints, xMetrics);
@@ -126,7 +112,9 @@ export function readAdvancedSpecFromUi(
           ? ({ kind: "endpoints" } as LinetypeEncoding)
           : ({ kind: "variable", variableId: linetypeValue, binning } as LinetypeEncoding),
     endpointOverlay: false,
-    distribution: { linkage: distLinkage, colorDistShapes },
+    // ADR-0012: distribution layout is DERIVED (strips collapse over endpoints,
+    // mirror non-endpoint facets); the linkage field is pinned.
+    distribution: { linkage: "mirror_scatter_grid", colorDistShapes },
     observedGroupVariableId: color.kind === "variable" ? color.variableId : undefined
   });
 }
@@ -139,9 +127,7 @@ export function applyAdvancedSpecToUi(
   colorBinningSelect: HTMLSelectElement,
   groupCurvesEl: HTMLSelectElement,
   linetypeEl: HTMLSelectElement,
-  distLinkageEl: HTMLSelectElement,
-  colorDistShapesEl: HTMLInputElement,
-  endpointOverlayEl: HTMLInputElement
+  colorDistShapesEl: HTMLInputElement
 ): void {
   applyFacetSelectFromSpec(rowSelect, spec.rowDimensions);
   applyFacetSelectFromSpec(colSelect, spec.colDimensions);
@@ -169,7 +155,5 @@ export function applyAdvancedSpecToUi(
   } else {
     linetypeEl.value = "endpoints";
   }
-  distLinkageEl.value = spec.distribution.linkage;
   colorDistShapesEl.checked = spec.distribution.colorDistShapes;
-  endpointOverlayEl.checked = !!spec.endpointOverlay;
 }

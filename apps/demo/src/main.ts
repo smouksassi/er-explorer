@@ -714,8 +714,6 @@ const advancedLinetypeByEl = $<HTMLSelectElement>("advancedLinetypeBy");
 const recodeSectionEl = $<HTMLDivElement>("recodeSection");
 const recodeVariableSelectEl = $<HTMLSelectElement>("recodeVariableSelect");
 const recodeEditorEl = $<HTMLDivElement>("recodeEditor");
-const advancedEndpointOverlayEl = $<HTMLInputElement>("advancedEndpointOverlay");
-const advancedDistLinkageEl = $<HTMLSelectElement>("advancedDistLinkage");
 const advancedColorDistShapesEl = $<HTMLInputElement>("advancedColorDistShapes");
 const resetAdvancedToGuidedBtn = $<HTMLButtonElement>("resetAdvancedToGuidedBtn");
 const advancedLayoutStatusEl = $<HTMLParagraphElement>("advancedLayoutStatus");
@@ -856,11 +854,7 @@ function pullAdvancedSpecFromUi(): ViewLayoutSpec {
     advancedColorBinningEl.value,
     advancedGroupCurvesEl.value,
     advancedLinetypeByEl.value,
-    // ADR-0012: distribution layout is derived (collapse over endpoints, mirror
-    // non-endpoint facets) — the linkage field is pinned, the control hidden.
-    "mirror_scatter_grid",
-    advancedColorDistShapesEl.checked,
-    advancedEndpointOverlayEl.checked
+    advancedColorDistShapesEl.checked
   );
 }
 
@@ -913,9 +907,6 @@ function syncAdvancedColorDistShapesUi(spec: ViewLayoutSpec | null): void {
 function syncAdvancedFitByColorUi(spec: ViewLayoutSpec | null): void {
   // §J: grouping is statistics, legal with ANY channel — the constancy theorem,
   // not the UI, decides what a group's curve wears. Nothing to disable.
-  const epFacet = spec ? layoutHasEndpointFacet(spec) : false;
-  advancedEndpointOverlayEl.disabled = epFacet;
-  if (epFacet) advancedEndpointOverlayEl.checked = false;
   syncAdvancedColorDistShapesUi(spec);
 }
 
@@ -994,9 +985,7 @@ function syncLayoutModeUi(options?: { refreshAdvancedControls?: boolean }): void
         advancedColorBinningEl,
         advancedGroupCurvesEl,
         advancedLinetypeByEl,
-        advancedDistLinkageEl,
-        advancedColorDistShapesEl,
-        advancedEndpointOverlayEl
+        advancedColorDistShapesEl
       );
     }
     syncAdvancedFitByColorUi(state.advancedViewLayout ?? activeViewLayoutSpec);
@@ -5690,8 +5679,6 @@ function bindAdvancedLayoutInput(el: HTMLElement): void {
   advancedColorBinningEl,
   advancedGroupCurvesEl,
   advancedLinetypeByEl,
-  advancedEndpointOverlayEl,
-  advancedDistLinkageEl,
   advancedColorDistShapesEl
 ].forEach(bindAdvancedLayoutInput);
 

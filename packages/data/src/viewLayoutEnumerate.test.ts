@@ -6,8 +6,7 @@ import {
   effectiveEndpointOverlay,
   isGuidedCompareTopology,
   layoutHasEndpointFacet,
-  panelEndpointMode,
-  usesEndpointColorOverlay
+  panelEndpointMode
 } from "@er-explorer/domain";
 import { loadDataset } from "./loadedDataset";
 import {
@@ -211,7 +210,6 @@ describe("viewLayoutEnumerate", () => {
       distribution: { linkage: "mirror_scatter_grid", colorDistShapes: true }
     };
     expect(isGuidedCompareTopology(spec)).toBe(false);
-    expect(usesEndpointColorOverlay(spec, 2)).toBe(false);
     expect(distEndpointColorSplit(spec, 2)).toBe(true);
     const scatter = enumerateScatterPanels(loaded, [], spec, input);
     expect(scatter).toHaveLength(2);
