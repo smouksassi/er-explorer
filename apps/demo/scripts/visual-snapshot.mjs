@@ -281,6 +281,50 @@ const SCENARIOS = [
       });
       await settle();
     }
+  },
+  {
+    // Level recoding (2026-08-28): race merged 2,3→"2+3", 4,5→"4+5", 99→(missing),
+    // user order [2+3, 1, 4+5, ...] — recoded identity everywhere (color levels,
+    // strips, gray missing) via the ONE level model.
+    name: "s11-recode-race-merge-missing-order",
+    run: async () => {
+      await page.locator('.nav-btn[data-rail="overlays"]').click();
+      await page.evaluate(() => {
+        const r = document.querySelector('input[name="calloutDensity"][value="selected"]');
+        if (r && !r.checked) { r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); }
+        const off = document.querySelector('input[name="refLine"][value="none"]');
+        if (off && !off.checked) { off.checked = true; off.dispatchEvent(new Event("change", { bubbles: true })); }
+      });
+      await page.locator('.nav-btn[data-rail="data"]').click();
+      await page.evaluate(() => {
+        const el = document.getElementById("recodeVariableSelect");
+        el.value = "race";
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      const setTarget = async (raw, target) => {
+        await page.evaluate(({ raw, target }) => {
+          const inp = [...document.querySelectorAll('#recodeEditor input[type=text]')].find((i) => i.placeholder === raw);
+          inp.value = target;
+          inp.dispatchEvent(new Event("change", { bubbles: true }));
+        }, { raw, target });
+        await page.waitForTimeout(250);
+      };
+      await setTarget("2", "2+3");
+      await setTarget("3", "2+3");
+      await setTarget("4", "4+5");
+      await setTarget("5", "4+5");
+      await page.evaluate(() => {
+        const rows = [...document.querySelectorAll("#recodeEditor > div > div")];
+        const row = rows.find((r) => r.querySelector("span")?.title === "99");
+        row.querySelector("button").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await page.waitForTimeout(400);
+      await setSel("advancedColorBy", "race");
+      await setSel("advancedGroupCurves", "");
+      await setSel("advancedLinetypeBy", "endpoints");
+      await resetSelection();
+      await settle();
+    }
   }
 ];
 

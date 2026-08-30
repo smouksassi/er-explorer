@@ -77,6 +77,10 @@ export {
   binLabelsFor,
   binLabelsForCuts,
   MISSING_LEVEL,
+  getVariableRecode,
+  recodedLevelFor,
+  setVariableRecodes,
+  type VariableRecode,
   effectiveVariableBinning
 } from "./variableBins";
 export {

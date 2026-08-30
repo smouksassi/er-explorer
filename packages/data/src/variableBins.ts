@@ -106,6 +106,44 @@ function binIndex(value: number, cuts: number[]): number {
  */
 export const MISSING_LEVEL = "(missing)";
 
+/**
+ * Per-variable level recoding (data prep, user ruling 2026-08-28): merge rare
+ * categories, rename levels, route coded-missing values (race 99) into the
+ * explicit missing level, and own the level ORDER. Applied inside the ONE level
+ * model (I1), so every consumer — colors, facets, grouping, linetype, strips,
+ * filters, readouts — sees the recoded identity with zero extra plumbing.
+ * Strictly in-place and reversible: the frozen dataset is never mutated; the
+ * recode is view-layer prep registered against the dataset instance.
+ */
+export interface VariableRecode {
+  /** Raw level (trimmed string form) → new label; {@link MISSING_LEVEL} routes to missing. Absent = keep. */
+  map: Record<string, string>;
+  /** Output level order (user-dragged). Missing stays pinned last regardless (I9). */
+  order?: string[];
+}
+
+const RECODE_REGISTRY = new WeakMap<LoadedDataset, Map<string, VariableRecode>>();
+
+/** Register the active recodes for a dataset (replaces any previous set). */
+export function setVariableRecodes(loaded: LoadedDataset, recodes: Record<string, VariableRecode>): void {
+  const map = new Map<string, VariableRecode>();
+  for (const [variableId, recode] of Object.entries(recodes)) {
+    if (recode && Object.keys(recode.map).length + (recode.order?.length ?? 0) > 0) {
+      map.set(variableId, recode);
+    }
+  }
+  RECODE_REGISTRY.set(loaded, map);
+}
+
+export function getVariableRecode(loaded: LoadedDataset, variableId: string): VariableRecode | undefined {
+  return RECODE_REGISTRY.get(loaded)?.get(variableId);
+}
+
+/** Recoded label for a raw (non-missing) level; identity when unmapped. */
+export function recodedLevelFor(raw: string, recode: VariableRecode | undefined): string {
+  return recode?.map[raw] ?? raw;
+}
+
 export interface VariableLevelModel {
   binning?: VariableColorBinning;
   levels: string[];
@@ -125,22 +163,37 @@ export function buildVariableLevelModel(
   binning?: VariableColorBinning
 ): VariableLevelModel {
   const col = getColumn(loaded, variableId);
-  const hasMissing = rowIndices.some((i) => isMissingRaw(col[i]));
   const effective = effectiveVariableBinning(loaded, variableId, rowIndices, binning);
   if (effective) {
+    // Recodes apply to CATEGORICAL variables only — binned covariates have cuts.
+    const hasMissing = rowIndices.some((i) => isMissingRaw(col[i]));
     const vals = numericValuesForRows(loaded, variableId, rowIndices).sort((a, b) => a - b);
     const cuts = cutpointsFor(effective, vals);
     const levels = binLabelsForCuts(cuts);
     if (hasMissing) levels.push(MISSING_LEVEL);
     return { binning: effective, levels, cuts, hasMissing };
   }
+  const recode = getVariableRecode(loaded, variableId);
   const set = new Set<string>();
+  let hasMissing = false;
   for (const i of rowIndices) {
     const raw = col[i];
-    if (isMissingRaw(raw)) continue;
-    set.add(String(raw).trim());
+    if (isMissingRaw(raw)) {
+      hasMissing = true;
+      continue;
+    }
+    const level = recodedLevelFor(String(raw).trim(), recode);
+    // Recoded-to-missing (e.g. race 99) routes into the I9 missing machinery.
+    if (level === MISSING_LEVEL) hasMissing = true;
+    else set.add(level);
   }
-  const levels = [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  let levels = [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  if (recode?.order?.length) {
+    // User-owned order: dragged order first, any level it doesn't name keeps
+    // the numeric-aware sort after it.
+    const ranked = recode.order.filter((l) => set.has(l));
+    levels = [...ranked, ...levels.filter((l) => !ranked.includes(l))];
+  }
   if (hasMissing) levels.push(MISSING_LEVEL);
   return { levels, hasMissing };
 }
@@ -160,5 +213,7 @@ export function levelForRow(
     const idx = binIndex(n, model.cuts);
     return model.levels[idx] ?? "";
   }
-  return String(raw).trim();
+  const level = recodedLevelFor(String(raw).trim(), getVariableRecode(loaded, variableId));
+  if (level === MISSING_LEVEL) return model.hasMissing ? MISSING_LEVEL : "";
+  return level;
 }

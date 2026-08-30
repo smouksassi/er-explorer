@@ -90,6 +90,21 @@ REMAINING BACKLOG: user visual pass on E5+E6; provenance check (177 vs 176);
 re-challenge (user reserved the right); ordinal/Emax family adapters
 (ADR-0013 lookahead); CUI work (long-term).
 
+**LEVEL RECODING LANDED (2026-08-28, user-approved design):** per-variable
+categorical recode (merge rare levels, rename, route coded values e.g. race 99
+→ (missing), drag display order) in Data drawer. Applied INSIDE the one level
+model (I1: data/variableBins WeakMap registry — setVariableRecodes on the
+loaded dataset), so colors/facets/grouping/linetype/strips/filters/readouts
+all see recoded identity with zero plumbing; recoded-to-missing rides I9;
+filters speak recoded levels ONLY (user ruling) and recoded-to-missing counts
+as missing there too. Covariates only (dose machinery reads raw arm labels;
+endpoints are numeric). In-place + reversible (Reset), persisted in sessions.
+Data tests (merge/rename/missing-route/order incl. partial order); snapshot
+s11 pins race merged 2+3 / 4+5 / 99→missing end to end.
+STILL QUEUED (user-approved earlier, NOT yet built): reference-arm checkbox
+picker from dose levels + PK/NON-PK badge with override + explanation copy
+under the picker (the "how reference arms are handled" text).
+
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl
    + group=sex renders two sex curves per panel, BOTH wearing the panel's crcl

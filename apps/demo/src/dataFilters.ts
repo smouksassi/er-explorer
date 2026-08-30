@@ -1,4 +1,11 @@
-import { getColumn, isMissing, type RawCellValue } from "@er-explorer/data";
+import {
+  MISSING_LEVEL,
+  getColumn,
+  getVariableRecode,
+  isMissing,
+  recodedLevelFor,
+  type RawCellValue
+} from "@er-explorer/data";
 import type { LoadedDataset } from "@er-explorer/data";
 import type { DemoColumnRole } from "./columnMapping";
 
@@ -64,13 +71,17 @@ function inferNumericColumn(loaded: LoadedDataset, columnId: string): boolean {
 }
 
 export function distinctColumnValues(loaded: LoadedDataset, columnId: string, limit = 80): string[] {
+  // Recoded variables show their RECODED levels — the user did that data-prep
+  // step first, so everything downstream (filters included) speaks new labels.
+  const recode = getVariableRecode(loaded, columnId);
   const col = getColumn(loaded, columnId);
   const seen = new Set<string>();
   const out: string[] = [];
   for (let i = 0; i < col.length; i++) {
     const v = col[i];
     if (isMissing(v)) continue;
-    const s = String(v);
+    const s = recodedLevelFor(String(v).trim(), recode);
+    if (s === MISSING_LEVEL) continue;
     if (seen.has(s)) continue;
     seen.add(s);
     out.push(s);
@@ -92,9 +103,13 @@ function cellNumber(raw: RawCellValue): number {
 
 export function rowMatchesFilter(rowIndex: number, rule: DataFilterRule, loaded: LoadedDataset): boolean {
   const raw = getColumn(loaded, rule.column)[rowIndex];
+  const recode = getVariableRecode(loaded, rule.column);
+  // A level recoded to "(missing)" (e.g. race 99) IS missing for filters too.
+  const missing = isMissing(raw) || (!!recode && recodedLevelFor(String(raw).trim(), recode) === MISSING_LEVEL);
   // Missingness operators take no value and must precede the empty-values guard.
-  if (rule.operator === "missing") return isMissing(raw);
-  if (rule.operator === "notMissing") return !isMissing(raw);
+  if (rule.operator === "missing") return missing;
+  if (rule.operator === "notMissing") return !missing;
+  if (missing && rule.categorical) return false;
   const numeric = rule.categorical ? false : inferNumericColumn(loaded, rule.column);
   const vals = rule.values.map((v) => v.trim()).filter((v) => v.length > 0);
   if (!vals.length) return true;
@@ -125,7 +140,7 @@ export function rowMatchesFilter(rowIndex: number, rule: DataFilterRule, loaded:
     }
   }
 
-  const s = cellString(raw);
+  const s = recode && !isMissing(raw) ? recodedLevelFor(cellString(raw).trim(), recode) : cellString(raw);
   switch (rule.operator) {
     case "eq":
     case "in":

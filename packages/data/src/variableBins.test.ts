@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { loadDataset } from "./loadedDataset";
-import { binLabelsForCuts, buildVariableLevelModel, levelForRow } from "./variableBins";
+import {
+  MISSING_LEVEL,
+  binLabelsForCuts,
+  buildVariableLevelModel,
+  levelForRow,
+  setVariableRecodes
+} from "./variableBins";
 
 describe("variableBins — missing values never enter cut points (QA round 13)", () => {
   // 20 non-missing values 1..20 (true median 10.5) + 10 missing. The old code
@@ -57,6 +63,45 @@ describe("explicit missing level (QA round 12 ruling)", () => {
     expect(levelForRow(25, model, loaded, "crcl")).toBe("(missing)");
     // Cut points still exclude missing (the QA round 13 rule is independent).
     expect(model.cuts).toEqual([10.5]);
+  });
+
+  it("recode: merge + rename + route-to-missing + user order (2026-08-28 ruling)", () => {
+    // race-like coded categorical: 1 dominant, rare 2..5, coded-missing 99.
+    const race = [1, 1, 1, 1, 1, 1, 2, 3, 4, 5, 99, 99];
+    const loaded = loadDataset(
+      new Map<string, number[]>([
+        ["id", race.map((_, i) => i + 1)],
+        ["race", race]
+      ])
+    );
+    const rows = race.map((_, i) => i);
+    setVariableRecodes(loaded, {
+      race: {
+        map: { "1": "White", "2": "2+3", "3": "2+3", "4": "4+5", "5": "4+5", "99": MISSING_LEVEL },
+        order: ["4+5", "White", "2+3"]
+      }
+    });
+    const model = buildVariableLevelModel(loaded, "race", rows);
+    // User-dragged order wins; recoded-to-missing joins the I9 level, pinned last.
+    expect(model.levels).toEqual(["4+5", "White", "2+3", "(missing)"]);
+    expect(model.hasMissing).toBe(true);
+    expect(levelForRow(0, model, loaded, "race")).toBe("White");
+    expect(levelForRow(6, model, loaded, "race")).toBe("2+3");
+    expect(levelForRow(9, model, loaded, "race")).toBe("4+5");
+    expect(levelForRow(10, model, loaded, "race")).toBe("(missing)");
+  });
+
+  it("recode order names only some levels: named first, rest keep numeric-aware sort", () => {
+    const vals = ["b", "a", "c", "a"];
+    const loaded = loadDataset(
+      new Map<string, Array<string | number>>([
+        ["id", vals.map((_, i) => i + 1)],
+        ["v", vals]
+      ])
+    );
+    setVariableRecodes(loaded, { v: { map: {}, order: ["c"] } });
+    const model = buildVariableLevelModel(loaded, "v", [0, 1, 2, 3]);
+    expect(model.levels).toEqual(["c", "a", "b"]);
   });
 
   it("no missing level when the cohort has none", () => {

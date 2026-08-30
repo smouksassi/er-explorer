@@ -68,6 +68,8 @@ import {
 import {
   MISSING_LEVEL,
   buildCellResolutionInput,
+  setVariableRecodes,
+  type VariableRecode,
   enumerateDistPanels,
   enumerateScatterPanels,
   getColumn,
@@ -109,7 +111,7 @@ import {
   verifySnapshotChecksum
 } from "./datasetSnapshot";
 import { initAppShell, setPlotWorkspaceVisible, setShellRail } from "./appShell";
-import { mountSortableFieldList } from "./sortableFieldList";
+import { mountSortableChips, mountSortableFieldList } from "./sortableFieldList";
 import {
   type EndpointAnalysisModel,
   type EndpointNormScale,
@@ -481,6 +483,8 @@ interface DemoState {
   guidedPreset: GuidedPreset;
   /** E6 callout density: per-group split/bin callouts follow the selection ("selected") or always render ("all"). */
   calloutDensity: "selected" | "all";
+  /** Per-variable level recodes (merge/rename/route-to-missing/order) - data prep, in-place, reversible. */
+  variableRecodes: Record<string, VariableRecode>;
   doseColorScheme: ColorSchemeId;
   endpointColorScheme: ColorSchemeId;
   endpointModels: Record<string, EndpointAnalysisModel>;
@@ -521,6 +525,7 @@ const state: DemoState = {
   showPoints: true,
   guidedPreset: "endpoint-rows",
   calloutDensity: "selected",
+  variableRecodes: {},
   doseColorScheme: "default",
   endpointColorScheme: "default",
   endpointModels: {},
@@ -634,6 +639,9 @@ const advancedColorByEl = $<HTMLSelectElement>("advancedColorBy");
 const advancedColorBinningEl = $<HTMLSelectElement>("advancedColorBinning");
 const advancedGroupCurvesEl = $<HTMLSelectElement>("advancedGroupCurves");
 const advancedLinetypeByEl = $<HTMLSelectElement>("advancedLinetypeBy");
+const recodeSectionEl = $<HTMLDivElement>("recodeSection");
+const recodeVariableSelectEl = $<HTMLSelectElement>("recodeVariableSelect");
+const recodeEditorEl = $<HTMLDivElement>("recodeEditor");
 const advancedEndpointOverlayEl = $<HTMLInputElement>("advancedEndpointOverlay");
 const advancedDistLinkageEl = $<HTMLSelectElement>("advancedDistLinkage");
 const advancedColorDistShapesEl = $<HTMLInputElement>("advancedColorDistShapes");
@@ -4815,8 +4823,163 @@ function syncColumnRolesSummary(): void {
   syncReferenceArmUi();
 }
 
+/** Push the current recode maps onto the loaded dataset (the ONE level-model layer reads them). */
+function applyVariableRecodes(): void {
+  if (dataset) setVariableRecodes(dataset.loaded, state.variableRecodes);
+}
+
+/** Categorical COVARIATES (level-model has no cuts) — the recode-eligible set.
+ * Dose is excluded (arm labels are read raw by the dose machinery: DOSE_ORDER,
+ * reference-arm matching); endpoints are numeric responses, not level sets. */
+function recodeEligibleVariables(): Array<{ id: string; label: string }> {
+  if (!dataset) return [];
+  const base = dataFilteredRowIndices();
+  return filterColumnOptions()
+    .filter((c) => c.role === "covariate")
+    .filter((c) => !buildColorBinModel(dataset!.loaded, c.id, base).binning)
+    .map((c) => ({ id: c.id, label: c.label }));
+}
+
+function refreshRecodeUi(): void {
+  if (!dataset) {
+    recodeSectionEl.hidden = true;
+    return;
+  }
+  const vars = recodeEligibleVariables();
+  recodeSectionEl.hidden = vars.length === 0;
+  if (!vars.length) return;
+  const keep = recodeVariableSelectEl.value;
+  recodeVariableSelectEl.innerHTML = "";
+  for (const v of vars) {
+    const opt = document.createElement("option");
+    opt.value = v.id;
+    const active = state.variableRecodes[v.id];
+    opt.textContent = active ? v.label + " (recoded)" : v.label;
+    recodeVariableSelectEl.appendChild(opt);
+  }
+  if ([...recodeVariableSelectEl.options].some((o) => o.value === keep)) recodeVariableSelectEl.value = keep;
+  renderRecodeEditor(recodeVariableSelectEl.value);
+}
+
+function renderRecodeEditor(variableId: string): void {
+  recodeEditorEl.innerHTML = "";
+  if (!dataset || !variableId) return;
+  const ds = requireDataset();
+  const col = getColumn(ds.loaded, variableId);
+  const base = dataFilteredRowIndices();
+
+  // RAW levels with N/% - frequency is how rare categories are spotted.
+  const counts = new Map<string, number>();
+  let missingN = 0;
+  for (const i of base) {
+    const raw = col[i];
+    if (raw === null || raw === undefined || String(raw).trim() === "") {
+      missingN++;
+      continue;
+    }
+    const s = String(raw).trim();
+    counts.set(s, (counts.get(s) ?? 0) + 1);
+  }
+  const rawLevels = [...counts.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const recode: VariableRecode = state.variableRecodes[variableId] ?? { map: {} };
+  const total = base.length || 1;
+
+  const commit = (next: VariableRecode | null) => {
+    if (next && (Object.keys(next.map).length || next.order?.length)) {
+      state.variableRecodes[variableId] = next;
+    } else {
+      delete state.variableRecodes[variableId];
+    }
+    applyVariableRecodes();
+    refreshRecodeUi();
+    syncFiltersUi();
+    render();
+  };
+
+  const table = document.createElement("div");
+  for (const raw of rawLevels) {
+    const target = recode.map[raw] ?? raw;
+    const row = document.createElement("div");
+    row.style.cssText =
+      "display:grid;grid-template-columns:minmax(0,1fr) 74px minmax(0,1.2fr) auto;gap:6px;align-items:center;margin-bottom:4px;";
+    const n = counts.get(raw)!;
+    const pct = ((n / total) * 100).toFixed(n / total < 0.1 ? 1 : 0);
+    const isMissingTarget = target === MISSING_LEVEL;
+    row.innerHTML =
+      '<span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;" title="' + escapeAttr(raw) + '">' +
+      escapeHtml(raw) +
+      '</span><span class="field-hint" style="margin:0">N=' + n + " (" + pct + "%)</span>";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = isMissingTarget ? "" : target;
+    input.placeholder = isMissingTarget ? "(missing)" : raw;
+    input.disabled = isMissingTarget;
+    input.addEventListener("change", () => {
+      const next: VariableRecode = { map: { ...recode.map }, order: recode.order ? [...recode.order] : undefined };
+      const v = input.value.trim();
+      if (!v || v === raw) delete next.map[raw];
+      else next.map[raw] = v;
+      commit(next);
+    });
+    const missBtn = document.createElement("button");
+    missBtn.type = "button";
+    missBtn.className = "btn btn-sm";
+    missBtn.textContent = isMissingTarget ? "restore" : "-> (missing)";
+    missBtn.title = isMissingTarget
+      ? "Treat this level as a real category again"
+      : "Route this coded value into the explicit (missing) level";
+    missBtn.addEventListener("click", () => {
+      const next: VariableRecode = { map: { ...recode.map }, order: recode.order ? [...recode.order] : undefined };
+      if (isMissingTarget) delete next.map[raw];
+      else next.map[raw] = MISSING_LEVEL;
+      commit(next);
+    });
+    row.append(input, missBtn);
+    table.appendChild(row);
+  }
+  recodeEditorEl.appendChild(table);
+  if (missingN > 0) {
+    const note = document.createElement("p");
+    note.className = "field-hint";
+    note.textContent = missingN + " row(s) already missing - they stay in (missing).";
+    recodeEditorEl.appendChild(note);
+  }
+
+  // Output order - drag to reorder; the dragged order IS the level order
+  // everywhere (palette, facets, strips, dashes). "(missing)" pinned last (I9).
+  const model = buildColorBinModel(ds.loaded, variableId, base);
+  const outputs = model.levels.filter((l) => l !== MISSING_LEVEL);
+  const orderTitle = document.createElement("p");
+  orderTitle.className = "field-hint";
+  orderTitle.style.margin = "8px 0 2px";
+  orderTitle.textContent = "Display order (drag) - drives colors, facets, strips, and dashes:";
+  recodeEditorEl.appendChild(orderTitle);
+  const orderList = document.createElement("ul");
+  recodeEditorEl.appendChild(orderList);
+  mountSortableChips(
+    orderList,
+    outputs,
+    (nextOrder) => {
+      const next: VariableRecode = { map: { ...recode.map }, order: nextOrder };
+      commit(next);
+    },
+    { pinnedTail: model.hasMissing ? [MISSING_LEVEL] : [] }
+  );
+
+  if (state.variableRecodes[variableId]) {
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "btn btn-sm";
+    reset.style.marginTop = "6px";
+    reset.textContent = "Reset recode for this variable";
+    reset.addEventListener("click", () => commit(null));
+    recodeEditorEl.appendChild(reset);
+  }
+}
+
 function activateDataset(next: DatasetContext, statusMessage?: string, options?: { focusPlot?: boolean }): void {
   dataset = next;
+  applyVariableRecodes();
   state.exposureColumnOrder = [...next.exposureOrder()];
   state.endpointColumnOrder = [...next.endpointOrder()];
   state.brushedIds = null;
@@ -4831,6 +4994,7 @@ function activateDataset(next: DatasetContext, statusMessage?: string, options?:
   pendingDatasetMeta = null;
   dataStatusEl.textContent = statusMessage ?? `${dataset.datasetName} — ${dataset.rowCount} rows`;
   syncColumnRolesSummary();
+  refreshRecodeUi();
   saveSessionBtn.disabled = false;
   setPlotWorkspaceVisible(true);
   if (options?.focusPlot !== false) setShellRail("plot");
@@ -4976,6 +5140,7 @@ function buildSessionState(): SessionState {
       showDoseObserved: state.showDoseObserved,
       guidedPreset: state.guidedPreset,
       calloutDensity: state.calloutDensity,
+      variableRecodes: JSON.parse(JSON.stringify(state.variableRecodes)),
       showPoints: state.showPoints,
       doseColorScheme: state.doseColorScheme,
       endpointColorScheme: state.endpointColorScheme,
@@ -5143,6 +5308,13 @@ function loadSessionFromFile(file: File): void {
       state.showDoseObserved = session.settings["showDoseObserved"] !== false;
       state.showPoints = session.settings["showPoints"] !== false;
       state.calloutDensity = session.settings["calloutDensity"] === "all" ? "all" : "selected";
+      const recodesRaw = session.settings["variableRecodes"];
+      state.variableRecodes =
+        recodesRaw && typeof recodesRaw === "object" && !Array.isArray(recodesRaw)
+          ? (JSON.parse(JSON.stringify(recodesRaw)) as Record<string, VariableRecode>)
+          : {};
+      applyVariableRecodes();
+      refreshRecodeUi();
       const presetRaw = session.settings["guidedPreset"];
       if (presetRaw === "endpoint-rows" || presetRaw === "exposure-rows" || presetRaw === "overlay") {
         state.guidedPreset = presetRaw;
@@ -5373,6 +5545,8 @@ showPointsEl.addEventListener("change", () => {
   state.showPoints = showPointsEl.checked;
   render();
 });
+recodeVariableSelectEl.addEventListener("change", () => renderRecodeEditor(recodeVariableSelectEl.value));
+
 document.querySelectorAll<HTMLInputElement>('input[name="calloutDensity"]').forEach((radio) => {
   radio.addEventListener("change", () => {
     if (!radio.checked) return;
