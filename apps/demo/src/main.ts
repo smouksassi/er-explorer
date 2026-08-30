@@ -356,14 +356,16 @@ function normCompareValue(y: number, endpoint: Endpoint): number {
 }
 
 function isPlaceboDose(dose: string): boolean {
-  if (state.referenceArmDoses.length) {
-    return state.referenceArmDoses.some((a) => a.toLowerCase() === dose.toLowerCase());
-  }
-  return requireDataset().isPlaceboDose(dose);
+  // The list is materialized from the dataset's inferred default on activation,
+  // so an EMPTY list is the user's explicit "no reference arm" - never re-infer.
+  return state.referenceArmDoses.some((a) => a.toLowerCase() === dose.toLowerCase());
 }
 
 /** PK-like exposures: reference arm ~0 on x; non-PK (wt, age): all dose groups on x. */
 function exposureIsPkMetric(metric: ExposureMetric): boolean {
+  // User-owned override first (mapping UI); auto-detection is only the default.
+  const override = state.exposurePkOverrides[metric];
+  if (override !== undefined) return override;
   if (looksLikePkExposureColumn(metric)) return true;
   const placeboRows = rowIndicesPlacebo();
   if (!placeboRows.length) return false;
@@ -389,8 +391,72 @@ function inferDefaultReferenceArmDoses(): string[] {
 }
 
 function syncReferenceArmUi(): void {
-  const labels = state.referenceArmDoses.length ? state.referenceArmDoses : inferDefaultReferenceArmDoses();
-  referenceArmDosesEl.value = labels.join(", ");
+  const ds = requireDataset();
+  const levels = ds.doseOrder();
+  const selected = new Set(
+    state.referenceArmDoses
+      .map((t) => levels.find((l) => l.toLowerCase() === t.trim().toLowerCase()))
+      .filter((l): l is string => !!l)
+  );
+  referenceArmLevelsEl.innerHTML = "";
+  for (const level of levels) {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = level;
+    input.checked = selected.has(level);
+    input.addEventListener("change", () => {
+      state.referenceArmDoses = [...referenceArmLevelsEl.querySelectorAll<HTMLInputElement>("input:checked")].map(
+        (i) => i.value
+      );
+      syncReferenceArmUi();
+      syncExposurePkUi();
+      render();
+    });
+    label.append(input, document.createTextNode(" " + level));
+    referenceArmLevelsEl.appendChild(label);
+  }
+  // Legacy free-text / session tokens that match no dose level are surfaced,
+  // never silently dropped.
+  const unmatched = state.referenceArmDoses.filter(
+    (t) => !levels.some((l) => l.toLowerCase() === t.trim().toLowerCase())
+  );
+  referenceArmWarningEl.hidden = unmatched.length === 0;
+  referenceArmWarningEl.textContent = unmatched.length
+    ? "Ignored (match no dose level): " + unmatched.join(", ")
+    : "";
+}
+
+function syncExposurePkUi(): void {
+  if (!dataset) {
+    exposurePkFieldEl.hidden = true;
+    return;
+  }
+  const ds = requireDataset();
+  const metrics = ds.exposureOrder();
+  exposurePkFieldEl.hidden = metrics.length === 0;
+  exposurePkListEl.innerHTML = "";
+  for (const metric of metrics) {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = exposureIsPkMetric(metric);
+    input.addEventListener("change", () => {
+      state.exposurePkOverrides[metric] = input.checked;
+      syncExposurePkUi();
+      syncColumnRolesSummary();
+      render();
+    });
+    const overridden = state.exposurePkOverrides[metric] !== undefined;
+    label.append(
+      input,
+      document.createTextNode(" " + exposureLabel(metric) + (overridden ? "" : " (auto)"))
+    );
+    label.title = overridden
+      ? "User override - untick/tick to change; reload mapping to return to auto"
+      : "Auto-detected; tick/untick to override";
+    exposurePkListEl.appendChild(label);
+  }
 }
 
 function rowIndicesForDose(dose: string): number[] {
@@ -485,6 +551,8 @@ interface DemoState {
   calloutDensity: "selected" | "all";
   /** Per-variable level recodes (merge/rename/route-to-missing/order) - data prep, in-place, reversible. */
   variableRecodes: Record<string, VariableRecode>;
+  /** Per-exposure PK override (absent = auto-detect by name / zero reference arm). */
+  exposurePkOverrides: Record<string, boolean>;
   doseColorScheme: ColorSchemeId;
   endpointColorScheme: ColorSchemeId;
   endpointModels: Record<string, EndpointAnalysisModel>;
@@ -526,6 +594,7 @@ const state: DemoState = {
   guidedPreset: "endpoint-rows",
   calloutDensity: "selected",
   variableRecodes: {},
+  exposurePkOverrides: {},
   doseColorScheme: "default",
   endpointColorScheme: "default",
   endpointModels: {},
@@ -620,7 +689,10 @@ const loadCsvBtn = $<HTMLButtonElement>("loadCsvBtn");
 const dataStatusEl = $<HTMLSpanElement>("dataStatus");
 const columnRolesSummaryEl = $<HTMLDivElement>("columnRolesSummary");
 const columnRolesListEl = $<HTMLUListElement>("columnRolesList");
-const referenceArmDosesEl = $<HTMLInputElement>("referenceArmDoses");
+const referenceArmLevelsEl = $<HTMLDivElement>("referenceArmLevels");
+const referenceArmWarningEl = $<HTMLParagraphElement>("referenceArmWarning");
+const exposurePkFieldEl = $<HTMLDivElement>("exposurePkField");
+const exposurePkListEl = $<HTMLDivElement>("exposurePkList");
 const referenceArmFieldEl = $<HTMLDivElement>("referenceArmField");
 const guidedPresetRadios = (): HTMLInputElement[] =>
   [...document.querySelectorAll<HTMLInputElement>('input[name="guidedPreset"]')];
@@ -4812,7 +4884,9 @@ function syncColumnRolesSummary(): void {
     .map((col) => {
       const role = ds.columnRoles[col] ?? "ignore";
       if (role === "ignore") return "";
-      return `<li><span class="col-name">${escapeHtml(col)}</span><span class="col-role">${escapeHtml(role)}</span></li>`;
+      const roleLabel =
+        role === "exposure" ? `exposure · ${exposureIsPkMetric(col) ? "PK" : "NON-PK"}` : role;
+      return `<li><span class="col-name">${escapeHtml(col)}</span><span class="col-role">${escapeHtml(roleLabel)}</span></li>`;
     })
     .filter(Boolean);
   columnRolesListEl.innerHTML = items.length
@@ -4821,6 +4895,7 @@ function syncColumnRolesSummary(): void {
   columnRolesSummaryEl.hidden = false;
   referenceArmFieldEl.hidden = false;
   syncReferenceArmUi();
+  syncExposurePkUi();
 }
 
 /** Push the current recode maps onto the loaded dataset (the ONE level-model layer reads them). */
@@ -4980,6 +5055,9 @@ function renderRecodeEditor(variableId: string): void {
 function activateDataset(next: DatasetContext, statusMessage?: string, options?: { focusPlot?: boolean }): void {
   dataset = next;
   applyVariableRecodes();
+  // Materialize the inferred reference arms as an explicit selection so the
+  // picker's empty state can mean "no reference arm" without re-inference.
+  if (!state.referenceArmDoses.length) state.referenceArmDoses = inferDefaultReferenceArmDoses();
   state.exposureColumnOrder = [...next.exposureOrder()];
   state.endpointColumnOrder = [...next.endpointOrder()];
   state.brushedIds = null;
@@ -5141,6 +5219,7 @@ function buildSessionState(): SessionState {
       guidedPreset: state.guidedPreset,
       calloutDensity: state.calloutDensity,
       variableRecodes: JSON.parse(JSON.stringify(state.variableRecodes)),
+      exposurePkOverrides: { ...state.exposurePkOverrides },
       showPoints: state.showPoints,
       doseColorScheme: state.doseColorScheme,
       endpointColorScheme: state.endpointColorScheme,
@@ -5315,6 +5394,12 @@ function loadSessionFromFile(file: File): void {
           : {};
       applyVariableRecodes();
       refreshRecodeUi();
+      const pkRaw = session.settings["exposurePkOverrides"];
+      state.exposurePkOverrides =
+        pkRaw && typeof pkRaw === "object" && !Array.isArray(pkRaw)
+          ? ({ ...(pkRaw as Record<string, boolean>) } as Record<string, boolean>)
+          : {};
+      syncExposurePkUi();
       const presetRaw = session.settings["guidedPreset"];
       if (presetRaw === "endpoint-rows" || presetRaw === "exposure-rows" || presetRaw === "overlay") {
         state.guidedPreset = presetRaw;
@@ -5442,13 +5527,6 @@ dataStatusEl.textContent = "No dataset loaded.";
 
 reloadBundledBtn.addEventListener("click", reloadBundledDataset);
 editMappingBtn.addEventListener("click", openMappingForCurrentDataset);
-referenceArmDosesEl.addEventListener("change", () => {
-  state.referenceArmDoses = referenceArmDosesEl.value
-    .split(/[,;]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  render();
-});
 loadCsvBtn.addEventListener("click", () => csvFileInput.click());
 csvFileInput.addEventListener("change", () => {
   const file = csvFileInput.files?.[0];

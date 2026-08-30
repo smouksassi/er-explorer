@@ -400,9 +400,21 @@
         <p class="hint" style="margin:8px 0 0">Covariates mapped here appear on scatter hover (value or “missing”). Covariate role does not drop rows from E–R plots unless you filter them.</p>
       </div>
       <div class="field" id="referenceArmField" hidden>
-        <label for="referenceArmDoses">Reference arm dose label(s)</label>
-        <input type="text" id="referenceArmDoses" placeholder="Placebo, Control" autocomplete="off" />
-        <p class="hint" style="margin:6px 0 0">Comma-separated dose levels with no active drug (placebo/SOC). PK-like exposure names (AUC, Cmax, Cmin, CAVE, Css, …) treat reference arm as ~0; other x variables (wt, age) show all arms.</p>
+        <span class="field-label">Reference arm dose level(s)</span>
+        <div class="checkbox-group" id="referenceArmLevels"></div>
+        <p class="hint" id="referenceArmWarning" hidden style="margin:4px 0 0;color:#b45309"></p>
+        <div class="field-hint" style="margin:6px 0 0;line-height:1.5">
+          <strong>How reference arms are handled:</strong><br/>
+          • <strong>PK exposures</strong> (AUC, Cmax, … or arm values ≈ 0): the reference arm means exposure 0 — it is <strong>excluded from split cut points and Min/Max lines</strong>, its observed %/N gets its <strong>own callout at x = 0</strong>, and its distribution row shows the <strong>label and N only</strong> (no boxplot of all-zero values).<br/>
+          • <strong>Non-PK x variables</strong> (age, wt, …): the reference arm is ordinary data — included in cut points, Min/Max, and bins, with a real boxplot.<br/>
+          • <strong>Covariate binning</strong> for color/facets (e.g. crcl median) always includes the reference arm — reference patients have baselines too.<br/>
+          • Every selected level is a reference arm; all other dose levels stay separate groups. Untick everything for "no reference arm".
+        </div>
+      </div>
+      <div class="field" id="exposurePkField" hidden>
+        <span class="field-label">Exposure handling (PK vs non-PK)</span>
+        <div class="checkbox-group" id="exposurePkList"></div>
+        <p class="field-hint">PK-like is auto-detected from the column name (AUC, Cmax, Cmin, CAVE, Css, …) or from reference-arm values ≈ 0; tick/untick to override per exposure. PK drives the reference-arm rules above.</p>
       </div>
       <div class="field" id="recodeSection" hidden>
         <span class="field-label">Recode levels (categorical)</span>
