@@ -114,6 +114,23 @@ list: auto-detected badge per exposure (name / zero-arm reason) + per-column
 user override (state.exposurePkOverrides, persisted); roles summary shows
 "exposure · PK / NON-PK". All 11 baselines byte-identical.
 
+**LOESS LANDED (2026-08-31, 990d0ac) — ADR-0013's contract PROVEN:** third
+model family with NO pipeline changes. packages/model-loess (R stats::loess
+match under surface="direct"; CI = SE×t; null below 5 points). Painter path
+now follows DATA KIND (endpointDataKind), not the model — usesLinearModel
+deleted; loess legal on binary (x/N observed stays, axis pads, never clamps).
+Endpoint Models UI: Logistic|Loess / Linear|Loess + user-owned span/degree,
+persisted (loessSettings). Snapshot s12 pins binary+continuous loess with
+grouping; s1–s11 byte-identical. Earlier same-day: vestigial sweep (6960e46).
+NEXT: user visual pass on loess (cross-check in R with
+loess.control(surface="direct")); then the UNIFIED MINIMUM-SUPPORT slice —
+tier table proposed to user 2026-08-31 and provisionally approved
+("we need a unified approach across all stats"): N≥5 full five-number/box,
+2–4 → points + Min·Median·Max only, 1 → single value; curves need N≥5 &
+>1 distinct x; readout prints "fit n/a (N=k)" below support; constants
+MIN_SUMMARY_N/MIN_FIT_N in one place. Then: Emax family, provenance check,
+E3 re-challenge.
+
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl
    + group=sex renders two sex curves per panel, BOTH wearing the panel's crcl
