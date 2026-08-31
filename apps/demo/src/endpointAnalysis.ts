@@ -1,7 +1,17 @@
 import type { DatasetContext, EndpointId } from "./datasetContext";
 import type { PredictionResult } from "@er-explorer/analysis";
 
-export type EndpointAnalysisModel = "logistic" | "linear";
+export type EndpointAnalysisModel = "logistic" | "linear" | "loess";
+
+/**
+ * The DATA KIND of an endpoint (binary responder vs continuous scale) — decides
+ * the painter path (jitter, probability axis, x/N vs mean±CI observed
+ * summaries) independently of which MODEL fits the curve (ADR-0013: loess is
+ * legal on binary data; the observed layer stays endpoint-TYPE driven).
+ */
+export function endpointDataKind(ds: DatasetContext, endpoint: EndpointId): "binary" | "continuous" {
+  return inferDefaultEndpointModel(ds, endpoint) === "logistic" ? "binary" : "continuous";
+}
 
 export interface EndpointNormScale {
   min: number;

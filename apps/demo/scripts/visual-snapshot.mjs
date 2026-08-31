@@ -325,6 +325,35 @@ const SCENARIOS = [
       await resetSelection();
       await settle();
     }
+  },
+  {
+    // LOESS family (ADR-0013 third family): loess on a CONTINUOUS endpoint
+    // (brls) AND on a BINARY endpoint (icgi — smoother never clamped, the
+    // probability axis pads); grouping by sex proves the pipelines stay
+    // family-blind; the pooled click exercises loess readout fits.
+    name: "s12-loess-binary-and-continuous",
+    run: async () => {
+      await setEndpoints(["icgi", "brls"]);
+      await page.locator('.nav-btn[data-rail="analysis"]').click();
+      await page.evaluate(() => {
+        for (const ep of ["icgi", "brls"]) {
+          const sel = document.querySelector(`select[data-endpoint-model="${ep}"]`);
+          if (sel && sel.value !== "loess") {
+            sel.value = "loess";
+            sel.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        }
+      });
+      await setMode("advanced");
+      await setFacets(["endpoints"], []);
+      await setSel("advancedColorBy", "sex");
+      await setSel("advancedGroupCurves", "sex");
+      await setSel("advancedLinetypeBy", "endpoints");
+      await resetSelection();
+      await settle();
+      await clickRow("1200 mg");
+      await settle();
+    }
   }
 ];
 

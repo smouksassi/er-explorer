@@ -47,6 +47,9 @@ importers:
       '@er-explorer/model-linear':
         specifier: workspace:*
         version: link:../../packages/model-linear
+      '@er-explorer/model-loess':
+        specifier: workspace:*
+        version: link:../../packages/model-loess
       '@er-explorer/renderer':
         specifier: workspace:*
         version: link:../../packages/renderer
@@ -98,6 +101,12 @@ importers:
       '@er-explorer/domain':
         specifier: workspace:*
         version: link:../domain
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@20.19.43)
+
+  packages/model-loess:
     devDependencies:
       vitest:
         specifier: ^2.1.8

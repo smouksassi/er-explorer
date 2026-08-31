@@ -1,0 +1,26 @@
+{
+  "name": "@er-explorer/model-loess",
+  "version": "0.0.1",
+  "private": false,
+  "description": "LOESS (local polynomial regression) AnalysisModel plugin for ER Explorer - R stats::loess-compatible fits for any endpoint type, including smoothers on binary data.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    "import": "./dist/index.js",
+    "require": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm typecheck && vitest run",
+    "lint": "eslint . --ext .ts",
+    "clean": "rimraf dist tsconfig.build.tsbuildinfo tsconfig.tsbuildinfo"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  },
+  "files": ["dist"],
+  "keywords": ["er-explorer", "analysis", "loess", "smoother", "plugin"],
+  "license": "MIT"
+}

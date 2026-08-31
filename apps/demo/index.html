@@ -456,6 +456,7 @@
       <div class="field">
         <span class="field-label">Endpoint models</span>
         <div id="endpointModelsList" class="endpoint-model-list"></div>
+        <p class="field-hint">Loess matches R's <code>stats::loess</code> (gaussian; defaults span 0.75, degree 2). Cross-check in R with <code>loess.control(surface="direct")</code> — R's default surface interpolates. CI = pointwise SE × t. Loess needs ≥ 5 points per fitted group; smoothers on binary endpoints may leave 0–1 (the axis pads; values are never clamped).</p>
       </div>
       <div class="field" id="compareNormSection" hidden>
         <span class="field-label">Compare scale (linear)</span>

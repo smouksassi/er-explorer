@@ -16,6 +16,7 @@ import {
   selectionGroupLabel
 } from "@er-explorer/analysis";
 import { linearAnalysisModel, type LinearParams } from "@er-explorer/model-linear";
+import { fitLoess, predictLoess, predictLoessAt, type LoessFit } from "@er-explorer/model-loess";
 import {
   SVGRenderer,
   GridLayer,
@@ -116,6 +117,7 @@ import {
   type EndpointAnalysisModel,
   type EndpointNormScale,
   dataRangeForEndpoint,
+  endpointDataKind,
   inferDefaultEndpointModel,
   mapCurveToCompareScale,
   normToCompareScale,
@@ -305,14 +307,24 @@ function DOSE_COLORS(): Record<string, string> {
   return out;
 }
 
+/**
+ * Painter path by DATA KIND, never by the selected model (ADR-0013): loess on a
+ * binary endpoint keeps the binary painter (jittered 0/1 points, probability
+ * axis, x/N observed) while the curve comes from the chosen family.
+ */
 function isContinuousEndpoint(endpoint: Endpoint): boolean {
-  return usesLinearModel(endpoint);
+  if (!dataset) return false;
+  return endpointDataKind(dataset, endpoint) === "continuous";
 }
 
-function usesLinearModel(endpoint: Endpoint): boolean {
-  if (!dataset) return false;
-  const model = state.endpointModels[endpoint] ?? inferDefaultEndpointModel(dataset, endpoint);
-  return model === "linear";
+function endpointModelFor(endpoint: Endpoint): EndpointAnalysisModel {
+  if (!dataset) return "logistic";
+  return state.endpointModels[endpoint] ?? inferDefaultEndpointModel(dataset, endpoint);
+}
+
+/** Per-endpoint loess tuning (user-owned; defaults match R stats::loess). */
+function loessSettingsFor(endpoint: Endpoint): { span: number; degree: 1 | 2 } {
+  return state.loessSettings[endpoint] ?? { span: 0.75, degree: 2 };
 }
 
 function ensureEndpointAnalysisDefaults(): void {
@@ -323,7 +335,7 @@ function ensureEndpointAnalysisDefaults(): void {
     }
   }
   for (const e of endpointOrder()) {
-    if (state.endpointModels[e] === "linear") ensureNormScaleForEndpoint(e);
+    if (isContinuousEndpoint(e)) ensureNormScaleForEndpoint(e);
   }
 }
 
@@ -349,7 +361,7 @@ function getCompareNormBounds(endpoint: Endpoint): { min: number; max: number; v
 }
 
 function normCompareValue(y: number, endpoint: Endpoint): number {
-  if (!usesLinearModel(endpoint)) return y;
+  if (!isContinuousEndpoint(endpoint)) return y;
   const { min, max, valid } = getCompareNormBounds(endpoint);
   if (!valid) return NaN;
   return normToCompareScale(y, min, max);
@@ -556,6 +568,8 @@ interface DemoState {
   doseColorScheme: ColorSchemeId;
   endpointColorScheme: ColorSchemeId;
   endpointModels: Record<string, EndpointAnalysisModel>;
+  /** Per-endpoint loess span/degree (only read when that endpoint's model is "loess"). */
+  loessSettings: Record<string, { span: number; degree: 1 | 2 }>;
   endpointNormScales: Record<string, EndpointNormScale>;
   dataFilters: DataFilterRule[];
   compareDistByEndpoint: boolean;
@@ -598,6 +612,7 @@ const state: DemoState = {
   doseColorScheme: "default",
   endpointColorScheme: "default",
   endpointModels: {},
+  loessSettings: {},
   endpointNormScales: {},
   dataFilters: [],
   compareDistByEndpoint: true,
@@ -1166,7 +1181,10 @@ function panelWidth(): number {
  * `LogisticModel` and `LinearParams` expose `intercept`/`slope`, so most call sites only need to
  * branch on `kind` where the two families' meaning actually diverges (the response scale, and
  * whether a fitted value needs a sigmoid transform). */
-type EndpointFit = { kind: "logistic"; model: LogisticModel } | { kind: "linear"; model: LinearParams };
+type EndpointFit =
+  | { kind: "logistic"; model: LogisticModel }
+  | { kind: "linear"; model: LinearParams }
+  | { kind: "loess"; model: LoessFit };
 
 function fitFor(metric: ExposureMetric, endpoint: Endpoint): { fit: EndpointFit; xs: number[]; ys: number[] } {
   return fitForCohort(metric, endpoint, recordsWithEndpoint(endpoint));
@@ -1180,7 +1198,15 @@ function fitForCohort(
   const indices = cohortRowIndices.filter((i) => Number.isFinite(endpointValue(i, endpoint)));
   const xs = indices.map((i) => exposureValue(i, metric));
   const ys = indices.map((i) => endpointValue(i, endpoint));
-  if (isContinuousEndpoint(endpoint)) {
+  // The FAMILY decides the curve; the painter path is data-kind driven
+  // elsewhere (ADR-0013 — no pipeline branching on family beyond this seam).
+  const family = endpointModelFor(endpoint);
+  if (family === "loess") {
+    const model = fitLoess(xs, ys, loessSettingsFor(endpoint));
+    if (!model) throw new Error(`Too few points for loess (${metric}/${endpoint})`);
+    return { fit: { kind: "loess", model }, xs, ys };
+  }
+  if (family === "linear") {
     const outcome = linearAnalysisModel.fit({ exposures: xs, responses: ys });
     if (!outcome.optimization.converged) throw new Error(`Unable to fit linear model for ${metric}/${endpoint}`);
     return { fit: { kind: "linear", model: outcome.params }, xs, ys };
@@ -1621,6 +1647,16 @@ function curveFor(fit: EndpointFit, xs: number[], ys: number[], xDomain: [number
   const span = xMax - xMin;
   const dense =
     span > 0 ? Array.from({ length: 121 }, (_, i) => xMin + (span * i) / 120) : [xMin];
+  if (fit.kind === "loess") {
+    // t-based pointwise band (predict se + t multiplier — the ggquickeda
+    // recipe, H4b); bootstrap for loess is future work, so both CI settings
+    // draw the same band. Never clamped (round-2 §I.4).
+    const preds = predictLoess(fit.model, dense);
+    if (state.ciMethod === "none") {
+      return { estimates: preds.map((e) => ({ ...e, lower: NaN, upper: NaN })), metadata: {} };
+    }
+    return { estimates: preds, metadata: {} };
+  }
   if (fit.kind === "linear") {
     const surface = linearAnalysisModel.predict(fit.model);
     const points = surface.evaluate(dense);
@@ -2455,9 +2491,21 @@ function renderBinaryScatterOverlay(
   height = SCATTER_CHART_HEIGHT
 ): { content: string; metadata: ScatterMeta } {
   const plotHeight = height;
-  const yDomain: [number, number] = [-0.18, 1.18];
   const hasExtras = curves.length > 1;
   const curveSamplesFor = curves.map((c) => toCurveSamples(c.curve));
+  // Never clamp a smoother (round-2 §I.4): pad the probability axis to cover
+  // any curve/band overflow from loess-on-binary instead of pinning it.
+  let yLo = -0.18;
+  let yHi = 1.18;
+  for (const samples of curveSamplesFor) {
+    for (const s of samples) {
+      const lo = Number.isFinite(s.lower) ? Math.min(s.lower, s.estimate) : s.estimate;
+      const hi = Number.isFinite(s.upper) ? Math.max(s.upper, s.estimate) : s.estimate;
+      if (Number.isFinite(lo)) yLo = Math.min(yLo, lo - 0.02);
+      if (Number.isFinite(hi)) yHi = Math.max(yHi, hi + 0.02);
+    }
+  }
+  const yDomain: [number, number] = [yLo, yHi];
 
   const scatterPoints: ScatterPointDatum[] = points.map((p) =>
     scatterDatumFromPoint(p, {
@@ -3161,7 +3209,7 @@ function render(): void {
   }
 
   const compareHasLinear =
-    guidedOverlayActive(endpoints.length) && endpoints.some((e) => usesLinearModel(e));
+    guidedOverlayActive(endpoints.length) && endpoints.some((e) => isContinuousEndpoint(e));
   syncCompareNormUi(endpoints, compareHasLinear);
   syncCompareDistUi(comparisonEligible);
 
@@ -3556,7 +3604,7 @@ function paintCompareScatterIntoWrap(
     return rows.map((i) => {
       const pid = ds.patientId(i);
       const raw = endpointValue(i, endpoint);
-      const linear = usesLinearModel(endpoint);
+      const linear = isContinuousEndpoint(endpoint);
       const yDisplay = linear ? normCompareValue(raw, endpoint) + seededJitter(pid, 0.04) : raw + seededJitter(pid);
       return {
         id: pid,
@@ -3590,7 +3638,7 @@ function paintCompareScatterIntoWrap(
   const linetype = linetypeAccessFor(spec ?? null);
   const fits = endpoints.map((endpoint) => {
     const rows = recordsWithEndpoint(endpoint).filter((i) => cohort.includes(i));
-    const linear = usesLinearModel(endpoint);
+    const linear = isContinuousEndpoint(endpoint);
     const { min, max, valid } = getCompareNormBounds(endpoint);
     const observedBins = computeCompareObservedBins(metric, endpoint, rows);
 
@@ -3637,7 +3685,7 @@ function paintCompareScatterIntoWrap(
   const allObservedBins = fits.flatMap((f) => f.observedBins);
   const allPoints = state.showPoints ? fits.flatMap((f) => pointsFor(f.endpoint)) : [];
   const pointColors = Object.fromEntries(endpoints.map((ep) => [ep, endpointColor(ep)]));
-  const yLabel = endpoints.some((e) => usesLinearModel(e)) ? "Response (compare 0–1)" : "Response";
+  const yLabel = endpoints.some((e) => isContinuousEndpoint(e)) ? "Response (compare 0–1)" : "Response";
   const result = renderBinaryScatterOverlay(
     allPoints,
     curves,
@@ -4110,7 +4158,7 @@ function computeCompareObservedBins(
     // Compare overlay: GEOMETRY on the normalized 0–1 axis, labels stay native
     // (decision 1a). Binary summaries already live on [0,1]; normCompareValue is
     // identity for them via usesLinearModel gating.
-    summary: usesLinearModel(endpoint)
+    summary: isContinuousEndpoint(endpoint)
       ? {
           ...b.summary,
           center: normCompareValue(b.summary.center, endpoint),
@@ -4131,7 +4179,7 @@ function renderEndpointLegend(endpoints: Endpoint[]): void {
     item.className = "dotKey";
     const color = endpointColor(endpoint);
     const dash = endpointDash(endpoint);
-    const linear = usesLinearModel(endpoint);
+    const linear = isContinuousEndpoint(endpoint);
     const bounds = linear ? getCompareNormBounds(endpoint) : null;
     const scaleNote =
       linear && bounds?.valid
@@ -4306,10 +4354,18 @@ function updateReadout(
         const fitResult = tryFitForCohort(metric, endpoint, fitRows);
         if (!fitResult) continue;
         const fit = fitResult.fit;
-        // ADR-0013: family math via the adapter — no family branching in pipelines.
-        const family = fit.kind === "linear" ? linearFamily : logisticFamily;
-        const decimals = family.readoutDecimals;
-        const fitAt = (x: number) => family.fittedAt(fit.model as never, x);
+        // ADR-0013: readout DECIMALS follow the endpoint's DATA KIND (loess on a
+        // binary endpoint still reads as probabilities); fitted values come from
+        // the fitted family's own evaluator.
+        const decimals = isContinuousEndpoint(endpoint)
+          ? linearFamily.readoutDecimals
+          : logisticFamily.readoutDecimals;
+        const fitAt = (x: number): number =>
+          fit.kind === "loess"
+            ? predictLoessAt(fit.model, x).estimate
+            : fit.kind === "linear"
+              ? linearFamily.fittedAt(fit.model as never, x)
+              : logisticFamily.fittedAt(fit.model as never, x);
         const lineColor = spec?.color.kind === "endpoints" ? endpointColor(endpoint) : groupColor;
         const lineLabel = lineEndpoints.length > 1 || endpoints.length > 1 ? ds.endpointLabel(endpoint) : label;
         const endpointN = part.rows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).length;
@@ -4565,12 +4621,26 @@ function syncEndpointModelsUi(): void {
   endpointModelsListEl.innerHTML = endpoints
     .map((e) => {
       const model = state.endpointModels[e] ?? inferDefaultEndpointModel(ds, e);
+      // Model options follow the DATA KIND (ADR-0013): binary endpoints choose
+      // Logistic or Loess; continuous choose Linear or Loess. Loess exposes its
+      // R-default tuning (span 0.75, degree 2) — user-owned, per endpoint.
+      const continuous = endpointDataKind(ds, e) === "continuous";
+      const nativeOption = continuous
+        ? `<option value="linear" ${model === "linear" ? "selected" : ""}>Linear</option>`
+        : `<option value="logistic" ${model === "logistic" ? "selected" : ""}>Logistic</option>`;
+      const loess = loessSettingsFor(e);
+      const loessControls =
+        model === "loess"
+          ? `<span class="loess-controls">span <input type="number" data-loess-span="${escapeAttr(e)}" value="${loess.span}" min="0.1" max="2" step="0.05" style="width:64px" />
+             deg <select data-loess-degree="${escapeAttr(e)}" style="width:52px"><option value="1" ${loess.degree === 1 ? "selected" : ""}>1</option><option value="2" ${loess.degree === 2 ? "selected" : ""}>2</option></select></span>`
+          : "";
       return `<div class="endpoint-model-row" data-endpoint="${escapeAttr(e)}">
         <span>${escapeHtml(ds.endpointLabel(e))}</span>
         <select data-endpoint-model="${escapeAttr(e)}">
-          <option value="logistic" ${model === "logistic" ? "selected" : ""}>Logistic</option>
-          <option value="linear" ${model === "linear" ? "selected" : ""}>Linear</option>
+          ${nativeOption}
+          <option value="loess" ${model === "loess" ? "selected" : ""}>Loess</option>
         </select>
+        ${loessControls}
       </div>`;
     })
     .join("");
@@ -4578,10 +4648,29 @@ function syncEndpointModelsUi(): void {
     sel.onchange = () => {
       const ep = sel.dataset.endpointModel as Endpoint | undefined;
       if (!ep) return;
-      const val = sel.value === "linear" ? "linear" : "logistic";
+      const val = sel.value === "linear" || sel.value === "loess" ? (sel.value as EndpointAnalysisModel) : "logistic";
       state.endpointModels[ep] = val;
-      if (val === "linear") ensureNormScaleForEndpoint(ep);
+      if (isContinuousEndpoint(ep)) ensureNormScaleForEndpoint(ep);
       syncCompareNormUi(selectedEndpoints(), guidedOverlayActive(selectedEndpoints().length));
+      syncEndpointModelsUi();
+      render();
+    };
+  });
+  endpointModelsListEl.querySelectorAll<HTMLInputElement>("input[data-loess-span]").forEach((inp) => {
+    inp.onchange = () => {
+      const ep = inp.dataset.loessSpan as Endpoint | undefined;
+      if (!ep) return;
+      const span = Number(inp.value);
+      if (!Number.isFinite(span) || span < 0.1 || span > 2) return;
+      state.loessSettings[ep] = { ...loessSettingsFor(ep), span };
+      render();
+    };
+  });
+  endpointModelsListEl.querySelectorAll<HTMLSelectElement>("select[data-loess-degree]").forEach((sel) => {
+    sel.onchange = () => {
+      const ep = sel.dataset.loessDegree as Endpoint | undefined;
+      if (!ep) return;
+      state.loessSettings[ep] = { ...loessSettingsFor(ep), degree: sel.value === "1" ? 1 : 2 };
       render();
     };
   });
@@ -4606,7 +4695,7 @@ function syncCompareNormUi(endpoints: Endpoint[], show: boolean): void {
     return;
   }
   const ds = dataset;
-  const linearEps = endpoints.filter((e) => usesLinearModel(e));
+  const linearEps = endpoints.filter((e) => isContinuousEndpoint(e));
   if (!linearEps.length) {
     compareNormSectionEl.hidden = true;
     compareNormListEl.innerHTML = "";
@@ -5213,6 +5302,7 @@ function buildSessionState(): SessionState {
       doseColorScheme: state.doseColorScheme,
       endpointColorScheme: state.endpointColorScheme,
       endpointModels: { ...state.endpointModels },
+      loessSettings: { ...state.loessSettings },
       endpointNormScales: { ...state.endpointNormScales },
       dataFilters: state.dataFilters.map((r) => ({ ...r, values: [...r.values] })),
       compareDistByEndpoint: state.compareDistByEndpoint,
@@ -5413,6 +5503,10 @@ function loadSessionFromFile(file: File): void {
       const modelsRaw = session.settings["endpointModels"];
       if (modelsRaw && typeof modelsRaw === "object" && !Array.isArray(modelsRaw)) {
         state.endpointModels = { ...(modelsRaw as Record<string, EndpointAnalysisModel>) };
+      }
+      const loessRaw = session.settings["loessSettings"];
+      if (loessRaw && typeof loessRaw === "object" && !Array.isArray(loessRaw)) {
+        state.loessSettings = { ...(loessRaw as Record<string, { span: number; degree: 1 | 2 }>) };
       }
       const normRaw = session.settings["endpointNormScales"];
       if (normRaw && typeof normRaw === "object" && !Array.isArray(normRaw)) {
