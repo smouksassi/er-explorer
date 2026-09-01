@@ -94,6 +94,41 @@ describe("DistributionLayer", () => {
     expect(svg).not.toContain("er-ridge-shape");
   });
 
+  it("draws rawPoints rows as individual points — no ridge shape, no median/IQR geometry (minimum-support rule)", () => {
+    const renderer = new SVGRenderer();
+    const result = renderer.render({
+      width: 600,
+      height: 300,
+      xDomain: [0, 100],
+      yDomain: [0, 1],
+      layers: [
+        new DistributionLayer({
+          id: "dist",
+          mode: "boxplot",
+          groups: [
+            {
+              groupId: "600 mg",
+              label: "600 mg",
+              color: "#4C72B0",
+              n: 3,
+              rawPoints: [12, 40, 77],
+              // A caller may still pass the abstaining summary; rawPoints wins.
+              summary: { ...summary, q1: NaN, q3: NaN, whiskerLow: NaN, whiskerHigh: NaN }
+            }
+          ]
+        })
+      ]
+    });
+    const svg = result.content as string;
+    expect(svg).toContain("er-raw-points");
+    expect((svg.match(/<circle/g) ?? []).length).toBe(3);
+    expect(svg).not.toContain("er-ridge-shape");
+    expect(svg).not.toContain("er-iqr-lines");
+    expect(svg).not.toContain("NaN");
+    expect(svg).toContain('data-group="600 mg"');
+    expect(svg).toContain("N=3");
+  });
+
   it("prints an nResponders-aware count label when supplied, otherwise a plain N= count", () => {
     const renderer = new SVGRenderer();
     const result = renderer.render({

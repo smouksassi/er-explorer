@@ -20,14 +20,18 @@
 
 import type { EndpointFamilyAdapter, ObservedGroupSummary, ViewLayoutSpec } from "@er-explorer/domain";
 import { GROUP_KEY_SEPARATOR } from "@er-explorer/domain";
+import type { SupportTier } from "./support";
 
 /** Structural subset of the demo's ColorBinModel the pipeline needs. */
 export interface SelectionLevelModel {
   levels: string[];
 }
 
-/** Exposure five-number summary; producer injected (summarizeDistribution). */
+/** Exposure five-number summary; producer injected (summarizeDistribution).
+ * Below full support (unified minimum-support rule) the producer abstains on
+ * q1/q3/whiskers with NaN — projection painters draw only the finite markers. */
 export interface ExposureSummary {
+  tier: SupportTier;
   q1: number;
   q3: number;
   median: number;

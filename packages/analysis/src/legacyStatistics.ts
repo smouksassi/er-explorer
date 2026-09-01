@@ -17,6 +17,8 @@
  * logistic plugin built against `AnalysisModel`.
  */
 
+import { supportTierFor, type SupportTier } from "./support";
+
 export type ModelKind = "logistic" | "linear" | "ordinal" | "time-to-event";
 
 export interface ModelDefinition {
@@ -379,6 +381,10 @@ export function wilsonScoreInterval(successes: number, n: number, z = 1.95996398
 
 export interface DistributionSummary {
   n: number;
+  /** Support tier (unified minimum-support rule). Below "full", q1/q3 and the
+   * whiskers are NaN — the statistic abstains rather than fabricating quartiles
+   * from 2–4 points; min/median/max/mean stay honest at any n ≥ 1. */
+  tier: SupportTier;
   min: number;
   max: number;
   mean: number;
@@ -393,6 +399,23 @@ export interface DistributionSummary {
 export function summarizeDistribution(values: number[]): DistributionSummary | null {
   if (!values.length) return null;
   const arr = values.slice().sort((a, b) => a - b);
+  const tier = supportTierFor(arr.length);
+  if (tier !== "full") {
+    const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+    return {
+      n: arr.length,
+      tier,
+      min: arr[0],
+      max: arr[arr.length - 1],
+      mean,
+      median: quantile(arr, 0.5),
+      q1: NaN,
+      q3: NaN,
+      whiskerLow: NaN,
+      whiskerHigh: NaN,
+      outliers: []
+    };
+  }
   const q1 = quantile(arr, 0.25);
   const median = quantile(arr, 0.5);
   const q3 = quantile(arr, 0.75);
@@ -403,7 +426,7 @@ export function summarizeDistribution(values: number[]): DistributionSummary | n
   const whiskerHigh = [...arr].reverse().find((v) => v <= upperFence) ?? arr[arr.length - 1];
   const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
   const outliers = arr.filter((v) => v < lowerFence || v > upperFence);
-  return { n: arr.length, min: arr[0], max: arr[arr.length - 1], mean, q1, median, q3, whiskerLow, whiskerHigh, outliers };
+  return { n: arr.length, tier, min: arr[0], max: arr[arr.length - 1], mean, q1, median, q3, whiskerLow, whiskerHigh, outliers };
 }
 
 /* ---------------------------------------------------------------------- *

@@ -37,6 +37,14 @@ export interface DistributionGroupDatum {
    * is a constant zero by design) - the row still renders its label, N count, and click target,
    * just no shape. */
   skipShape?: boolean;
+  /**
+   * Below minimum summary support (the caller's unified minimum-support rule):
+   * the row's raw x values, drawn as individual points on the row centerline
+   * INSTEAD of a box/violin/lineranges shape — quartile geometry is not
+   * meaningful at that n. Takes precedence over `mode`; the row keeps its
+   * label, N count, selection highlight, and click target.
+   */
+  rawPoints?: number[];
   splitAnnotations?: DistributionSplitAnnotation[];
   /**
    * Shared x-sample grid this group's shape is traced over, plus its stepped box-profile and
@@ -118,6 +126,26 @@ export class DistributionLayer implements Layer {
         if (g.skipShape) {
           target.group({ class: "er-ridge", "data-group": String(g.groupId), style: "cursor:pointer" }, () => {
             target.drawRect({ x: plotRect.x, y: rowTop, width: plotRect.width, height: rowHeight }, { fill: "transparent" });
+          });
+          this.drawRowLabels(ctx, g, cy);
+          groupMeta.push({ groupId: g.groupId, cy, color: g.color, xSamples: [], boxHalfHeights: [], densityHalfHeights: [] });
+          return;
+        }
+
+        if (g.rawPoints?.length) {
+          const highlight = g.selectionColor ?? g.color;
+          target.group({ class: "er-ridge", "data-group": String(g.groupId), style: "cursor:pointer" }, () => {
+            target.drawRect({ x: plotRect.x, y: rowTop, width: plotRect.width, height: rowHeight }, { fill: "transparent" });
+            target.group({ class: "er-raw-points" }, () => {
+              for (const v of g.rawPoints!) {
+                target.drawCircle(xScale(v), cy, 3.4, {
+                  fill: g.selected ? highlight : g.color,
+                  stroke: "#fff",
+                  strokeWidth: 1.1,
+                  opacity: g.selected ? 0.95 : 0.8
+                });
+              }
+            });
           });
           this.drawRowLabels(ctx, g, cy);
           groupMeta.push({ groupId: g.groupId, cy, color: g.color, xSamples: [], boxHalfHeights: [], densityHalfHeights: [] });

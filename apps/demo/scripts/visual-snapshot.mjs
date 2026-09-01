@@ -354,6 +354,43 @@ const SCENARIOS = [
       await clickRow("1200 mg");
       await settle();
     }
+  },
+  {
+    // Unified minimum-support rule (I11). Rides s11's still-active race recode
+    // (levels 1, 2+3, 4+5, 7, 8, (missing)) whose dose×level cells are naturally
+    // tiny: 600 mg×"1" N=2 (minimal), 600 mg×"8" N=1 (single), 600 mg×"2+3" N=3,
+    // while "4+5" stays a full box. Pins: raw-point strip rows instead of boxes
+    // below N=5; readout Min·Median·Max (no quartiles) at minimal tier and the
+    // single-value line at N=1; NO Q1–Q3 projection band/markers for abstaining
+    // groups; per-group curves absent below MIN_FIT_N with "fit n/a (N=k)" in
+    // the readout (race "1" has 4 rows dataset-wide → no curve, both families).
+    name: "s13-minimum-support-tiers",
+    run: async () => {
+      await setEndpoints(["icgi", "brls"]);
+      await page.locator('.nav-btn[data-rail="analysis"]').click();
+      await page.evaluate(() => {
+        // s12 left both endpoints on loess — restore the default families so
+        // this scenario exercises the logistic/linear guards.
+        for (const [ep, model] of [["icgi", "logistic"], ["brls", "linear"]]) {
+          const sel = document.querySelector(`select[data-endpoint-model="${ep}"]`);
+          if (sel && sel.value !== model) {
+            sel.value = model;
+            sel.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        }
+      });
+      await setMode("advanced");
+      await setFacets(["endpoints"], []);
+      await setSel("advancedColorBy", "race");
+      await setSel("advancedGroupCurves", "race");
+      await setSel("advancedLinetypeBy", "endpoints");
+      await setCb("advancedColorDistShapes", true);
+      await resetSelection();
+      await settle();
+      await clickRow("600 mg|1");
+      await clickRow("600 mg|8");
+      await settle();
+    }
   }
 ];
 

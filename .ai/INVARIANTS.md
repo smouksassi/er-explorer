@@ -211,3 +211,41 @@ and observed markers never dash. The one-COLOR-channel rule (I2) is untouched �
 linetype exists precisely so a second variable never needs a second palette.
 Guard: snapshot s8 (facet+color=crcl degenerate + group=sex + linetype=sex —
 two same-colored curves per panel distinguished solid vs "8 5").
+
+## I11 — Unified minimum support: statistics abstain, data stays (2026-09-01)
+
+**Rule:** every displayed statistic declares its minimum support; below it, the
+statistic ABSTAINS and the raw data stays on screen. ONE threshold pair in ONE
+place — `MIN_SUMMARY_N = 5` / `MIN_FIT_N = 5` (`analysis/support.ts`) — and one
+tier function `supportTierFor(n)`: "full" (n ≥ 5), "minimal" (2–4), "single" (1).
+Enforcement lives at the CENTRAL stat seams, never per painter:
+- `summarizeDistribution` returns a tiered summary; below "full", q1/q3 and the
+  whiskers are **NaN** (the abstention encoding), min/median/max/mean stay honest.
+- Dist shape builder (`computeDistributionGroupData`): below "full" it emits
+  `rawPoints` — the row renders its raw values as points, no box/violin/
+  lineranges at any mode.
+- Selection pipeline: projections carry the tiered summary; geometry layers
+  (`DoseProjectionLayer`) skip non-finite markers, so an abstaining group shows
+  range band + median tick, never a fabricated Q1–Q3 core.
+- `tryFitForCohort` is the ONE fit gate for every family and every curve path
+  (pooled + grouped, all painters): below MIN_FIT_N no curve exists; the P1
+  degenerate point marker still covers single-distinct-x cohorts that fit.
+- Readout prints only the tier's statistics (Min·Median·Max at minimal, the
+  value at single) and says `— fit n/a (N=k)` when the fit abstained.
+Observed x/N and mean±CI markers are DATA, not estimates — unchanged at any n
+(meanConfidenceInterval already degenerates honestly at n=1).
+
+**Why NaN:** a consumer that forgets to check the tier draws NOTHING rather
+than a fabricated quantile — abstention propagates through every pipeline
+without per-painter policy.
+
+**Bug class prevented:** a boxplot/25th-percentile/fitted curve fabricated from
+2–4 points reads as evidence ("the readout should not show a 25% percentile
+when we have 3 points" — user ruling 2026-08-31).
+
+**Guard:** `analysis/support.test.ts` (tier boundaries, NaN abstention);
+renderer tests (rawPoints row, NaN-quartile projection); snapshot s13 (recoded
+race tiny cells: raw-point strip rows, tiered readout, fit n/a, zero "NaN" in
+any baseline). **Prevention:** any new statistic must route its support
+decision through `supportTierFor` at its producing seam; any literal `< 3`/`< 5`
+support check outside `analysis/support.ts` is a violation.

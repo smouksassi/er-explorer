@@ -66,6 +66,27 @@ describe("DoseProjectionLayer", () => {
     expect(svg).toContain(`cy="${midY}"`);
   });
 
+  it("abstaining (NaN) quartiles draw NO band/guides/dots — median and min/max markers remain (minimum-support rule)", () => {
+    const renderer = new SVGRenderer();
+    const svg = renderer.render({
+      width: 600,
+      height: 300,
+      xDomain: [0, 100],
+      yDomain: [0, 1],
+      layers: [
+        new DoseProjectionLayer({
+          id: "proj",
+          curveSamples,
+          groups: [{ color: "#ff00ff", q1: NaN, q3: NaN, median: 50, min: 5, max: 95 }]
+        })
+      ]
+    }).content as string;
+    // median dot + hollow min/max markers only — no Q1/Q3 dots, no shaded band
+    expect((svg.match(/<circle/g) ?? []).length).toBe(3);
+    expect(svg).not.toContain("<rect");
+    expect(svg).not.toContain("NaN");
+  });
+
   it("draws nothing for an empty group list", () => {
     const renderer = new SVGRenderer();
     const result = renderer.render({

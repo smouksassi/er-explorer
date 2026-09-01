@@ -13,7 +13,9 @@ import {
   rowsForGroup,
   colorForGroup,
   type SelectionProjectionCtx,
-  selectionGroupLabel
+  selectionGroupLabel,
+  MIN_FIT_N,
+  MIN_SUMMARY_N
 } from "@er-explorer/analysis";
 import { linearAnalysisModel, type LinearParams } from "@er-explorer/model-linear";
 import { fitLoess, predictLoess, predictLoessAt, type LoessFit } from "@er-explorer/model-loess";
@@ -1332,7 +1334,11 @@ function tryFitForCohort(
   cohortRowIndices: number[]
 ): { fit: EndpointFit; xs: number[]; ys: number[] } | null {
   const indices = cohortRowIndices.filter((i) => Number.isFinite(endpointValue(i, endpoint)));
-  if (indices.length < 3) return null;
+  // Unified minimum-support rule (I11): no family fits below MIN_FIT_N — the
+  // raw points stay on screen and the readout says "fit n/a (N=k)". A cohort
+  // whose exposure support is a single value (placebo) still fits and renders
+  // as the P1 degenerate point marker, never a line.
+  if (indices.length < MIN_FIT_N) return null;
   try {
     return fitForCohort(metric, endpoint, indices);
   } catch {
@@ -2233,7 +2239,9 @@ function paintSyncedMetricStacks(active: Set<number>): void {
  */
 function renderContinuousScatterViaRenderer(
   points: ScatterPoint[],
-  curve: PredictionResult,
+  // null = the panel abstains from a pooled curve (below minimum fit support);
+  // points, observed markers, and reference lines still render.
+  curve: PredictionResult | null,
   projected: ProjectedGroup[],
   xDomain: [number, number],
   metric: ExposureMetric,
@@ -2259,22 +2267,24 @@ function renderContinuousScatterViaRenderer(
         key: c.key,
         level: c.level
       }))
-    : [
-        {
-          samples: toCurveSamples(curve),
-          color: "#64748b",
-          band: "#94a3b8",
-          dash: undefined as string | undefined,
-          key: undefined as string | undefined,
-          level: undefined as string | undefined
-        }
-      ];
+    : curve
+      ? [
+          {
+            samples: toCurveSamples(curve),
+            color: "#64748b",
+            band: "#94a3b8",
+            dash: undefined as string | undefined,
+            key: undefined as string | undefined,
+            level: undefined as string | undefined
+          }
+        ]
+      : [];
   const allSamples = curveOverlays.flatMap((c) => c.samples);
-  const curveSamples = curveOverlays[0]!.samples;
   // A projected group rides ITS OWN curve, matched structurally by curveKey
   // (I4/I8). Legacy producers without curveKey (guided compare) fall back to
-  // suffix/dose matching; the single pooled curve is the last resort.
-  const samplesForGroup = (p: Pick<ProjectedGroup, "groupId" | "curveKey">) => {
+  // suffix/dose matching; the single pooled curve is the last resort. With no
+  // curve at all (fit below minimum support) there is nothing to ride.
+  const samplesForGroup = (p: Pick<ProjectedGroup, "groupId" | "curveKey">): CurveSample[] => {
     if (p.curveKey !== undefined) {
       const byKey = curveOverlays.find((c) => (c.key ?? "") === p.curveKey);
       if (byKey) return byKey.samples;
@@ -2283,7 +2293,7 @@ function renderContinuousScatterViaRenderer(
     const match =
       (suffix ? curveOverlays.find((c) => c.level === suffix) : undefined) ??
       curveOverlays.find((c) => c.level === dose);
-    return (match ?? curveOverlays[0]!).samples;
+    return (match ?? curveOverlays[0])?.samples ?? [];
   };
   const yDomain = computeContinuousYDomain(points, allSamples);
   const plotHeight = height;
@@ -3356,21 +3366,22 @@ function paintRegularScatterIntoWrap(
   };
 
   if (continuous) {
-    const { fit, xs, ys } = fitForCohort(metric, endpoint, recordRows);
-    const curve = curveFor(fit, xs, ys, xDomain);
+    // ONE fit gate for every curve (I11): the pooled panel curve routes through
+    // the same tryFitForCohort guard as the grouping partitions — a low-support
+    // panel keeps its raw points and simply has no curve.
+    const pooledFit = tryFitForCohort(metric, endpoint, recordRows);
+    const curve = pooledFit ? curveFor(pooledFit.fit, pooledFit.xs, pooledFit.ys, xDomain) : null;
 
     let levelCurves: Array<{ curve: PredictionResult; color: string; key?: string; level?: string }> | undefined;
     const builtCurves = curvePartitions.flatMap((part) => {
       let fitted: PredictionResult;
       if (part.key === "") {
+        if (!curve) return [];
         fitted = curve;
       } else {
-        try {
-          const f = fitForCohort(metric, endpoint, part.rows);
-          fitted = curveFor(f.fit, f.xs, f.ys, xDomain);
-        } catch {
-          return [];
-        }
+        const f = tryFitForCohort(metric, endpoint, part.rows);
+        if (!f) return [];
+        fitted = curveFor(f.fit, f.xs, f.ys, xDomain);
       }
       const color = channelColorFor(part.rows);
       const dash = linetype.dashForRows(part.rows, endpoint, 1);
@@ -4034,9 +4045,26 @@ function computeDistributionGroupData(
   xDomain: [number, number],
   boxHalfHeightPx: number,
   baseCount = 60
-): { xSamples: number[]; boxHalfHeights: number[]; densityHalfHeights: number[]; summary: NonNullable<ReturnType<typeof summarizeDistribution>> } | null {
+): {
+  xSamples: number[];
+  boxHalfHeights: number[];
+  densityHalfHeights: number[];
+  summary: NonNullable<ReturnType<typeof summarizeDistribution>>;
+  /** Unified minimum-support rule (I11): below MIN_SUMMARY_N the row abstains
+   * from box/violin/lineranges geometry — the raw values render as points. */
+  rawPoints?: number[];
+} | null {
   const summary = summarizeDistribution(values);
   if (!summary) return null;
+  if (summary.tier !== "full") {
+    return {
+      xSamples: [],
+      boxHalfHeights: [],
+      densityHalfHeights: [],
+      summary,
+      rawPoints: values.filter((v) => Number.isFinite(v))
+    };
+  }
   const bandwidth = silvermanBandwidth(values);
   // ADR-0012: density shapes are TRIMMED at the observed min/max — no KDE
   // extrapolation beyond the data range (a shape past Max reads as fabricated
@@ -4092,6 +4120,10 @@ function renderDistributionViaRenderer(
       selected: g.selected,
       selectionColor: g.selectionColor,
       skipShape: g.skipShape,
+      // Below minimum summary support the layer draws these raw values as
+      // points on the row and never touches the (abstaining, NaN-quartile)
+      // summary geometry — the tier decision is made HERE, once, not per mode.
+      rawPoints: computed?.rawPoints,
       splitAnnotations: g.splitAnnotations,
       xSamples: computed?.xSamples,
       boxHalfHeights: computed?.boxHalfHeights,
@@ -4338,8 +4370,16 @@ function updateReadout(
       // ONE label composer (analysis pipeline): key parts already in the row's
       // identity (dose / channel level) are deduped there.
       const label = selectionGroupLabel({ knownEndpointIds: selectedEndpoints() }, gid, part.key);
+      // Unified minimum-support rule (I11): the readout only prints statistics
+      // the group's N honestly supports — quartiles abstain below MIN_SUMMARY_N.
+      const exposureStats =
+        s.tier === "full"
+          ? `Min ${exposureLabel(metric)} = ${s.min.toFixed(1)} &nbsp; Q1 = ${s.q1.toFixed(1)} &nbsp; Median = ${s.median.toFixed(1)} &nbsp; Q3 = ${s.q3.toFixed(1)} &nbsp; Max = ${s.max.toFixed(1)} &nbsp; N=${part.rows.length}`
+          : s.tier === "minimal"
+            ? `Min ${exposureLabel(metric)} = ${s.min.toFixed(1)} &nbsp; Median = ${s.median.toFixed(1)} &nbsp; Max = ${s.max.toFixed(1)} &nbsp; N=${part.rows.length} &nbsp; <span class="muted">quartiles need N ≥ ${MIN_SUMMARY_N}</span>`
+            : `${exposureLabel(metric)} = ${s.median.toFixed(1)} &nbsp; N=${part.rows.length}`;
       blocks.push(
-        `<div class="readout-line-exposure"><strong style="color:${groupColor}">${escapeHtml(label)}</strong> &nbsp; Min ${exposureLabel(metric)} = ${s.min.toFixed(1)} &nbsp; Q1 = ${s.q1.toFixed(1)} &nbsp; Median = ${s.median.toFixed(1)} &nbsp; Q3 = ${s.q3.toFixed(1)} &nbsp; Max = ${s.max.toFixed(1)} &nbsp; N=${part.rows.length}</div>`
+        `<div class="readout-line-exposure"><strong style="color:${groupColor}">${escapeHtml(label)}</strong> &nbsp; ${exposureStats}</div>`
       );
 
       if (omitEndpointFit) continue;
@@ -4352,7 +4392,15 @@ function updateReadout(
         );
         const fitRows = part.key ? fitBase.filter((i) => grouping.keyForRow(i) === part.key) : fitBase;
         const fitResult = tryFitForCohort(metric, endpoint, fitRows);
-        if (!fitResult) continue;
+        if (!fitResult) {
+          // I11: the fit ABSTAINED (below MIN_FIT_N or the family refused) —
+          // say so instead of silently omitting the line.
+          const naLabel = lineEndpoints.length > 1 || endpoints.length > 1 ? ds.endpointLabel(endpoint) : label;
+          blocks.push(
+            `<div class="readout-line-fit"><span class="muted">${escapeHtml(naLabel)} — fit n/a (N=${fitRows.length})</span></div>`
+          );
+          continue;
+        }
         const fit = fitResult.fit;
         // ADR-0013: readout DECIMALS follow the endpoint's DATA KIND (loess on a
         // binary endpoint still reads as probabilities); fitted values come from
@@ -4372,8 +4420,16 @@ function updateReadout(
         const missing = part.rows.length - endpointN;
         const nNote =
           missing === 0 ? "" : ` &nbsp; <span class="muted">${missing} missing from N=${part.rows.length}</span>`;
+        // The fit line mirrors the exposure line's tier: fitted values only at
+        // the quantiles the clicked group's N honestly supports (I11).
+        const fitStats =
+          s.tier === "full"
+            ? `fit @ Min ${fitAt(s.min).toFixed(decimals)} · Q1 ${fitAt(s.q1).toFixed(decimals)} · Med ${fitAt(s.median).toFixed(decimals)} · Q3 ${fitAt(s.q3).toFixed(decimals)} · Max ${fitAt(s.max).toFixed(decimals)}`
+            : s.tier === "minimal"
+              ? `fit @ Min ${fitAt(s.min).toFixed(decimals)} · Med ${fitAt(s.median).toFixed(decimals)} · Max ${fitAt(s.max).toFixed(decimals)}`
+              : `fit @ ${s.median.toFixed(1)} → ${fitAt(s.median).toFixed(decimals)}`;
         blocks.push(
-          `<div class="readout-line-fit"><span style="color:${lineColor}">${escapeHtml(lineLabel)}</span> — fit @ Min ${fitAt(s.min).toFixed(decimals)} · Q1 ${fitAt(s.q1).toFixed(decimals)} · Med ${fitAt(s.median).toFixed(decimals)} · Q3 ${fitAt(s.q3).toFixed(decimals)} · Max ${fitAt(s.max).toFixed(decimals)}${nNote}</div>`
+          `<div class="readout-line-fit"><span style="color:${lineColor}">${escapeHtml(lineLabel)}</span> — ${fitStats}${nNote}</div>`
         );
       }
     }

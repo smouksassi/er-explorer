@@ -60,35 +60,43 @@ export class DoseProjectionLayer implements Layer {
 
     target.group({ class: `er-dose-projection ${this.id}` }, () => {
       for (const g of groups) {
-        const xQ1 = xScale(g.q1);
-        const xQ3 = xScale(g.q3);
-        const yQ1 = estimateYAt(g.q1);
-        const yQ3 = estimateYAt(g.q3);
+        // Unified minimum-support rule: a non-finite quantile is an ABSTENTION
+        // (the group's n cannot support it) — draw only the finite markers.
+        // The median is data at any n ≥ 1; Q1/Q3 abstain below the caller's
+        // summary threshold and their band/guides/dots simply do not exist.
+        if (Number.isFinite(g.q1) && Number.isFinite(g.q3)) {
+          const xQ1 = xScale(g.q1);
+          const xQ3 = xScale(g.q3);
+          const yQ1 = estimateYAt(g.q1);
+          const yQ3 = estimateYAt(g.q3);
 
-        target.drawRect(
-          { x: xQ1, y: plotRect.y + 2, width: Math.max(1, xQ3 - xQ1), height: plotRect.height - 4 },
-          { fill: g.color, opacity: 0.06, rx: 8 }
-        );
+          target.drawRect(
+            { x: xQ1, y: plotRect.y + 2, width: Math.max(1, xQ3 - xQ1), height: plotRect.height - 4 },
+            { fill: g.color, opacity: 0.06, rx: 8 }
+          );
 
-        target.drawLine(
-          [
-            { x: xQ1, y: yQ1 },
-            { x: xQ1, y: bottom }
-          ],
-          { stroke: g.color, strokeWidth: 1.4, dash: "4 4", opacity: 0.75 }
-        );
-        target.drawLine(
-          [
-            { x: xQ3, y: yQ3 },
-            { x: xQ3, y: bottom }
-          ],
-          { stroke: g.color, strokeWidth: 1.4, dash: "4 4", opacity: 0.75 }
-        );
-        target.drawCircle(xQ1, yQ1, 4.6, { fill: g.color, stroke: "#fff", strokeWidth: 1.2 });
-        target.drawCircle(xQ3, yQ3, 4.6, { fill: g.color, stroke: "#fff", strokeWidth: 1.2 });
-        target.drawCircle(xScale(g.median), estimateYAt(g.median), 4, { fill: MEDIAN_COLOR, stroke: "#fff", strokeWidth: 1.1 });
+          target.drawLine(
+            [
+              { x: xQ1, y: yQ1 },
+              { x: xQ1, y: bottom }
+            ],
+            { stroke: g.color, strokeWidth: 1.4, dash: "4 4", opacity: 0.75 }
+          );
+          target.drawLine(
+            [
+              { x: xQ3, y: yQ3 },
+              { x: xQ3, y: bottom }
+            ],
+            { stroke: g.color, strokeWidth: 1.4, dash: "4 4", opacity: 0.75 }
+          );
+          target.drawCircle(xQ1, yQ1, 4.6, { fill: g.color, stroke: "#fff", strokeWidth: 1.2 });
+          target.drawCircle(xQ3, yQ3, 4.6, { fill: g.color, stroke: "#fff", strokeWidth: 1.2 });
+        }
+        if (Number.isFinite(g.median)) {
+          target.drawCircle(xScale(g.median), estimateYAt(g.median), 4, { fill: MEDIAN_COLOR, stroke: "#fff", strokeWidth: 1.1 });
+        }
 
-        if (g.min !== undefined) {
+        if (g.min !== undefined && Number.isFinite(g.min)) {
           const xMin = xScale(g.min);
           const yMin = estimateYAt(g.min);
           target.drawLine(
@@ -100,7 +108,7 @@ export class DoseProjectionLayer implements Layer {
           );
           target.drawCircle(xMin, yMin, 3.4, { fill: "#ffffff", stroke: g.color, strokeWidth: 1.6 });
         }
-        if (g.max !== undefined) {
+        if (g.max !== undefined && Number.isFinite(g.max)) {
           const xMax = xScale(g.max);
           const yMax = estimateYAt(g.max);
           target.drawLine(

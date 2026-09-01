@@ -106,3 +106,4 @@ export {
   selectionGids,
   selectionGroupLabel
 } from "./selectionProjection";
+export { MIN_FIT_N, MIN_SUMMARY_N, supportTierFor, type SupportTier } from "./support";

@@ -122,14 +122,33 @@ deleted; loess legal on binary (x/N observed stays, axis pads, never clamps).
 Endpoint Models UI: Logistic|Loess / Linear|Loess + user-owned span/degree,
 persisted (loessSettings). Snapshot s12 pins binary+continuous loess with
 grouping; s1–s11 byte-identical. Earlier same-day: vestigial sweep (6960e46).
-NEXT: user visual pass on loess (cross-check in R with
-loess.control(surface="direct")); then the UNIFIED MINIMUM-SUPPORT slice —
-tier table proposed to user 2026-08-31 and provisionally approved
-("we need a unified approach across all stats"): N≥5 full five-number/box,
-2–4 → points + Min·Median·Max only, 1 → single value; curves need N≥5 &
->1 distinct x; readout prints "fit n/a (N=k)" below support; constants
-MIN_SUMMARY_N/MIN_FIT_N in one place. Then: Emax family, provenance check,
-E3 re-challenge.
+NEXT (superseded — landed below): user visual pass on loess (cross-check in R
+with loess.control(surface="direct")).
+
+**UNIFIED MINIMUM-SUPPORT LANDED (2026-09-01) — invariant I11:** the approved
+tier table implemented at the central stat seams only (never per painter):
+`analysis/support.ts` owns MIN_SUMMARY_N = MIN_FIT_N = 5 + supportTierFor
+(full ≥5 / minimal 2–4 / single 1). `summarizeDistribution` is tiered — below
+full, q1/q3/whiskers are **NaN** (the abstention encoding; a forgetting
+consumer draws nothing, never a lie); min/median/max/mean stay honest.
+Dist rows below N=5 render RAW POINTS (renderer `rawPoints` on
+DistributionGroupDatum; decided once in computeDistributionGroupData; row keeps
+label/N/click/selection). DoseProjectionLayer skips non-finite markers →
+abstaining projections show range band + median tick, no Q1–Q3 core (NaN
+filter empties it automatically). `tryFitForCohort` is now the ONE fit gate for
+EVERY curve path — the pooled continuous curve routed through it too
+(renderContinuousScatterViaRenderer accepts curve=null; binary paths already
+tolerated zero curves); P1 placebo point marker unaffected (N=244, 1 distinct
+x still fits). Readout: minimal → Min·Median·Max + "quartiles need N ≥ 5";
+single → the value; fit abstention prints muted "— fit n/a (N=k)" instead of
+silently omitting. Observed x/N & mean±CI unchanged (data, not estimates).
+Tests: analysis support.test.ts (6), renderer rawPoints + NaN-projection
+tests; snapshot s13 pins tiny recoded-race cells end to end (raw-point rows,
+tiered readout, fit n/a, zero "NaN" in ALL baselines); s1–s12 byte-identical.
+KNOWN PRE-EXISTING (not this slice): collapsed endpoint-ROWS strip readout
+prints one endpoint's fit line (see s12 baseline) — old Slice-D open item.
+NEXT: user visual pass on minimum-support + loess R cross-check; then Emax
+family, provenance check (177 vs 176), E3 strip-rule re-challenge.
 
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl
