@@ -391,6 +391,28 @@ const SCENARIOS = [
       await clickRow("600 mg|8");
       await settle();
     }
+  },
+  {
+    // Linetype obeys ONE authority in EVERY painter (2026-09 fix): the binary
+    // painter passed the linetype module's "" (solid) through, but the
+    // continuous painter coerced it to undefined — FitLayer's legacy "7 5"
+    // default re-dashed it (user report: "linetype not working" on brls/prls).
+    // FitLayer now has NO dash policy of its own. This scenario pins the SAME
+    // spec across both families: icgi (binary) and brls (continuous), group +
+    // linetype = sex → per panel, sex 1 curve SOLID, sex 2 curve "8 5" —
+    // identically in every panel, and the pooled strips/readout untouched.
+    name: "s14-linetype-solid-both-families",
+    run: async () => {
+      await setEndpoints(["icgi", "brls"]);
+      await setMode("advanced");
+      await setFacets(["endpoints"], ["var:age"]);
+      await setSel("advancedColorBy", "sex");
+      await setSel("advancedGroupCurves", "sex");
+      await setSel("advancedLinetypeBy", "sex");
+      await setCb("advancedColorDistShapes", false);
+      await resetSelection();
+      await settle();
+    }
   }
 ];
 

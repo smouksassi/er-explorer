@@ -13,7 +13,7 @@ const samples: CurveSample[] = [
 ];
 
 describe("FitLayer", () => {
-  it("draws a stroked, dashed path through the curve samples", () => {
+  it("draws a SOLID stroked path by default — the renderer has no dash policy of its own", () => {
     const renderer = new SVGRenderer();
     const result = renderer.render({
       width: 600,
@@ -24,8 +24,24 @@ describe("FitLayer", () => {
     });
     const svg = result.content as string;
     expect(svg).toContain("er-fit curve");
-    expect(svg).toContain('stroke-dasharray="7 5"');
+    // The old "7 5" default silently re-dashed curves whose linetype rule said
+    // "solid" (2026-09 linetype bug). Dash renders ONLY when a caller states one.
+    expect(svg).not.toContain("stroke-dasharray");
     expect(svg).not.toContain("<circle"); // no scatter layer present
+  });
+
+  it("dashes only with an explicit pattern; empty string means solid (verbatim obedience)", () => {
+    const renderer = new SVGRenderer();
+    const render = (dash: string) =>
+      renderer.render({
+        width: 600,
+        height: 300,
+        xDomain: [0, 100],
+        yDomain: [0, 1],
+        layers: [new FitLayer({ id: "curve", samples, dash })]
+      }).content as string;
+    expect(render("8 5")).toContain('stroke-dasharray="8 5"');
+    expect(render("")).not.toContain("stroke-dasharray");
   });
 
   it("draws nothing for fewer than two samples", () => {

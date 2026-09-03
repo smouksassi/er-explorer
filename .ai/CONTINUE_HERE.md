@@ -147,8 +147,29 @@ tests; snapshot s13 pins tiny recoded-race cells end to end (raw-point rows,
 tiered readout, fit n/a, zero "NaN" in ALL baselines); s1–s12 byte-identical.
 KNOWN PRE-EXISTING (not this slice): collapsed endpoint-ROWS strip readout
 prints one endpoint's fit line (see s12 baseline) — old Slice-D open item.
-NEXT: user visual pass on minimum-support + loess R cross-check; then Emax
-family, provenance check (177 vs 176), E3 strip-rule re-challenge.
+
+**LINETYPE DASH AUTHORITY FIXED (2026-09-02, user-approved veto) — I10
+addendum:** user report "linetype not working" on continuous endpoints,
+probe-confirmed: FitLayer's legacy `"7 5"` default + the continuous painter's
+`c.dash || undefined` coercion turned the linetype module's `""` (solid) back
+into a dash — binary obeyed, continuous didn't (family asymmetry). Fix at the
+ROOT: FitLayer has NO dash policy (`""`/null/omitted = solid); painters pass
+the linetype output verbatim. USER VETO RECORDED: the classic dashed-gray
+pooled curve is GONE — pooled curves are solid in every family ("no difference
+between models... can't afford any leaks"). All 13 prior baselines diffed;
+every diff machine-verified as exactly two token classes (removed `"7 5"`,
+removed dead empty `stroke-dasharray=""` attrs — the old drawTarget emitted
+empty attrs) then re-baselined; s14 pins solid/`"8 5"` per sex identically on
+icgi AND brls panels. LOESS RULING (same session): the N=5 df=0 interpolant
+(race=3 × age>51: enp=5.00, sigma=NaN, no CI ribbon — probe-computed) STAYS
+visible; user owns the model choice (switch to linear / raise span); no df
+guard. Min-support visual pass CONFIRMED by user (raw-point rows, minimal
+projections, loess span sensitivity all OK).
+NEXT (user directive: "fix any open known bugs before adding functionality"):
+1) collapsed endpoint-ROWS strip readout shows only ONE endpoint's fit line
+(Slice-D open item, surfaced twice); 2) degenerate norm-bounds linear endpoint
+in shared-axis cells (E2c logged edge); 3) loess R cross-check still pending
+user-side. THEN: Emax family, provenance check (177 vs 176), E3 re-challenge.
 
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl

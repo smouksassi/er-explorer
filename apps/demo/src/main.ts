@@ -2325,7 +2325,10 @@ function renderContinuousScatterViaRenderer(
       return;
     }
     layers.push(new ConfidenceRibbonLayer({ id: `band-${ci}`, samples: c.samples, color: c.band, opacity: 0.18 }));
-    layers.push(new FitLayer({ id: `curve-${ci}`, samples: c.samples, color: c.color, dash: c.dash || undefined }));
+    // Dash verbatim from the linetype authority ("" = solid). The former
+    // `|| undefined` coercion re-routed "solid" into FitLayer's legacy dashed
+    // default — the binary/continuous family asymmetry (2026-09 linetype bug).
+    layers.push(new FitLayer({ id: `curve-${ci}`, samples: c.samples, color: c.color, dash: c.dash }));
   });
 
   if (projected.length) {
@@ -3387,7 +3390,8 @@ function paintRegularScatterIntoWrap(
       const dash = linetype.dashForRows(part.rows, endpoint, 1);
       return [{ curve: fitted, color, dash, key: part.key, level: part.key || undefined }];
     });
-    // A single unpainted, undashed pooled curve keeps the renderer's default style.
+    // A single unpainted, undashed pooled curve takes the plain pooled styling
+    // (neutral gray, SOLID — dash exists only when the linetype rule states one).
     const neutralPooled =
       builtCurves.length === 1 &&
       builtCurves[0]!.key === "" &&

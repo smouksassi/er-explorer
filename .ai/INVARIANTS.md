@@ -249,3 +249,22 @@ race tiny cells: raw-point strip rows, tiered readout, fit n/a, zero "NaN" in
 any baseline). **Prevention:** any new statistic must route its support
 decision through `supportTierFor` at its producing seam; any literal `< 3`/`< 5`
 support check outside `analysis/support.ts` is a violation.
+
+## I10 addendum — dash has ONE authority; the renderer has NO styling policy (2026-09-02)
+
+**Bug:** `FitLayer` carried a legacy default (`dash: undefined` → `"7 5"`). The
+binary painter passed the linetype module's `""` ("solid") through verbatim;
+the continuous painter coerced it (`c.dash || undefined`) into the default —
+so the SAME spec drew sex=1 solid on a binary panel and dashed on a continuous
+panel (user report 2026-09-02, probe-confirmed). "Solid" and "no opinion" had
+been conflated in one empty string.
+
+**Rule:** `linetypeAccessFor` is the ONE dash authority; every curve painter
+passes its output verbatim; `FitLayer` draws a dash ONLY when the caller states
+a non-empty pattern (`""`/`null`/omitted = solid — no renderer default). The
+classic dashed gray pooled curve is gone by user veto: pooled curves are solid
+in every family. **Guard:** renderer FitLayer tests (solid default, verbatim
+""), snapshot s14 (same spec, binary + continuous panels: sex 1 solid / sex 2
+"8 5" identically). **Prevention:** any layer default that encodes a visual
+CHANNEL (dash, color) rather than geometry is a violation — encoding decisions
+live with the channel authorities in the demo/domain, never in the renderer.

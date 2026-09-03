@@ -8,9 +8,11 @@ export interface FitLayerOptions {
    * renderer's `PredictionResult.estimates`. */
   samples: CurveSample[];
   color?: string;
-  /** Stroke dash pattern. Defaults to `"7 5"` (dashed, matching the current renderer's default
-   * curve style). Pass `null` explicitly for a solid line, e.g. a dose-click projection's
-   * emphasized Q1-Q3 segment. */
+  /** Stroke dash pattern. A non-empty string dashes the stroke; `""`, `null`, or
+   * omitted all mean SOLID. The renderer imposes no styling policy of its own —
+   * the caller's dash authority (the demo's linetype channel) decides, and this
+   * layer obeys verbatim. (The former `"7 5"` default silently re-dashed curves
+   * whose linetype rule said "solid" — the 2026-09 linetype bug.) */
   dash?: string | null;
   strokeWidth?: number;
   opacity?: number;
@@ -20,7 +22,6 @@ export interface FitLayerOptions {
 }
 
 const DEFAULT_COLOR = "#64748b";
-const DEFAULT_DASH = "7 5";
 
 /**
  * A single fitted curve, drawn standalone - deliberately not bundled with its confidence
@@ -40,7 +41,7 @@ export class FitLayer implements Layer {
 
   render(ctx: DrawContext): void {
     const { samples, color = DEFAULT_COLOR, strokeWidth = 2, opacity = 0.85, style = SmoothStyle } = this.options;
-    const dash = this.options.dash === null ? undefined : (this.options.dash ?? DEFAULT_DASH);
+    const dash = this.options.dash || undefined;
     if (samples.length < 2) return;
 
     const points = samples.map((s) => ({ x: ctx.xScale(s.exposure), y: ctx.yScale(s.estimate) }));
