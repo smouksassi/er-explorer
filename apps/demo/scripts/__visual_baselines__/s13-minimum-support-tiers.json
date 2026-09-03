@@ -33,7 +33,7 @@
   }
  ],
  "readouts": [
-  "600 mg · 1   Min AUC = 45.4   Median = 45.6   Max = 45.8   N=2   quartiles need N ≥ 5600 mg · 1 — fit n/a (N=4)600 mg · 8   AUC = 9.7   N=1600 mg · 8 — fit n/a (N=1)"
+  "600 mg · 1   Min AUC = 45.4   Median = 45.6   Max = 45.8   N=2   quartiles need N ≥ 5icgi — fit n/a (N=4)brls — fit n/a (N=4)600 mg · 8   AUC = 9.7   N=1icgi — fit n/a (N=1)brls — fit n/a (N=1)"
  ],
  "status": ""
 }

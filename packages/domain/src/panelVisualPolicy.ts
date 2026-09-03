@@ -138,14 +138,20 @@ export function resolveDistVisualContext(
   const splitByEndpointIds =
     policy.distSplitMode === "endpoints" ? policy.distSplitEndpointIds : [];
 
+  // The strip's readout endpoints ARE the endpoints the strip serves —
+  // `compareEndpointIds`, computed by the enumeration (per-column strip: that
+  // column's endpoint; collapsed endpoint-rows strip: every endpoint merged
+  // into it; split strip: the split list). The old derivation asked a
+  // fabricated pseudo-panel (empty facetKey + fallback endpoint) for its CURVE
+  // endpoints, which under any endpoint facet answered "single" — so a strip
+  // shared by BRLS and PRLS rows read out only the first endpoint's fit line
+  // (Slice-D open item, user-confirmed bug 2026-09-02).
   const readoutEndpointIds =
     splitByEndpointIds.length > 1
       ? splitByEndpointIds
-      : policy.curveEndpointIds.length === 1
-        ? policy.curveEndpointIds
-        : selectedEndpointIds.length
-          ? [...selectedEndpointIds]
-          : [input.fallbackEndpointId];
+      : input.compareEndpointIds.length
+        ? [...input.compareEndpointIds]
+        : [input.fallbackEndpointId];
 
   return {
     splitByEndpointIds,

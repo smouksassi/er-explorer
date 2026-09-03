@@ -33,7 +33,7 @@
   }
  ],
  "readouts": [
-  "1200 mg · 1   Min AUC = 12.1   Q1 = 71.3   Median = 81.3   Q3 = 93.3   Max = 153.7   N=1041200 mg · 1 — fit @ Min 0.531 · Q1 0.675 · Med 0.672 · Q3 0.672 · Max 0.8511200 mg · 2   Min AUC = 13.9   Q1 = 92.8   Median = 105.1   Q3 = 123.6   Max = 173.7   N=1341200 mg · 2 — fit @ Min 0.606 · Q1 0.793 · Med 0.816 · Q3 0.850 · Max 0.902"
+  "1200 mg · 1   Min AUC = 12.1   Q1 = 71.3   Median = 81.3   Q3 = 93.3   Max = 153.7   N=104icgi — fit @ Min 0.531 · Q1 0.675 · Med 0.672 · Q3 0.672 · Max 0.851brls — fit @ Min 23.0 · Q1 21.9 · Med 22.1 · Q3 22.3 · Max 23.2   1 missing from N=1041200 mg · 2   Min AUC = 13.9   Q1 = 92.8   Median = 105.1   Q3 = 123.6   Max = 173.7   N=134icgi — fit @ Min 0.606 · Q1 0.793 · Med 0.816 · Q3 0.850 · Max 0.902brls — fit @ Min 23.6 · Q1 24.0 · Med 24.0 · Q3 24.0 · Max 23.2"
  ],
  "status": ""
 }

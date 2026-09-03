@@ -165,11 +165,22 @@ icgi AND brls panels. LOESS RULING (same session): the N=5 df=0 interpolant
 visible; user owns the model choice (switch to linear / raise span); no df
 guard. Min-support visual pass CONFIRMED by user (raw-point rows, minimal
 projections, loess span sensitivity all OK).
+**SHARED-STRIP READOUT FIXED (2026-09-03) — Slice-D open item closed:**
+`resolveDistVisualContext` re-derived readout endpoints from a FABRICATED
+pseudo-panel (empty facetKey + fallback endpoint); under any endpoint facet
+that answered "single", so a strip shared by several endpoint rows read out
+only the first endpoint's fit line. Rule now: the strip's readout endpoints
+ARE `compareEndpointIds` — the list the enumeration computed (per-column
+strip: its own endpoint, E3 P1; collapsed strip: every endpoint merged;
+split strip: the split list). Domain tests pin both cases. Baseline diffs
+machine-verified READOUT-ONLY (stacks/titles/status byte-identical) in
+s6/s12/s13: each clicked group now prints one fit line per endpoint
+(endpoint-labeled), incl. per-endpoint "fit n/a" abstentions and per-endpoint
+missing-N notes; re-baselined.
 NEXT (user directive: "fix any open known bugs before adding functionality"):
-1) collapsed endpoint-ROWS strip readout shows only ONE endpoint's fit line
-(Slice-D open item, surfaced twice); 2) degenerate norm-bounds linear endpoint
-in shared-axis cells (E2c logged edge); 3) loess R cross-check still pending
-user-side. THEN: Emax family, provenance check (177 vs 176), E3 re-challenge.
+1) degenerate norm-bounds linear endpoint in shared-axis cells (E2c logged
+edge); 2) loess R cross-check still pending user-side. THEN: Emax family,
+provenance check (177 vs 176), E3 re-challenge.
 
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl

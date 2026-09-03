@@ -105,6 +105,41 @@ describe("resolveDistVisualContext", () => {
     expect(ctx.splitByEndpointIds).toEqual(["icgi", "icgi2"]);
     expect(ctx.omitPerEndpointFitInReadout).toBe(false);
   });
+
+  it("collapsed endpoint-ROWS strip reads out EVERY endpoint it serves (one fit line each)", () => {
+    // Endpoints faceted to rows: BRLS and PRLS scatter panels share ONE strip
+    // (Slice D collapse). The readout endpoints are the strip's own list, not
+    // a pseudo-panel's single curve endpoint (the bug that dropped PRLS).
+    const spec: ViewLayoutSpec = {
+      ...base,
+      rowDimensions: [{ kind: "endpoints", ids: ["brls", "prls"], order: ["brls", "prls"] }],
+      color: { kind: "dose" },
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
+    };
+    const ctx = resolveDistVisualContext(
+      spec,
+      { compareEndpointIds: ["brls", "prls"], fallbackEndpointId: "brls" },
+      ["brls", "prls"]
+    );
+    expect(ctx.splitByEndpointIds).toEqual([]);
+    expect(ctx.readoutEndpointIds).toEqual(["brls", "prls"]);
+    expect(ctx.omitPerEndpointFitInReadout).toBe(false);
+  });
+
+  it("per-column strip reads out ONLY its own endpoint (E3 P1)", () => {
+    const spec: ViewLayoutSpec = {
+      ...base,
+      colDimensions: [{ kind: "endpoints", ids: ["icgi", "brls"], order: ["icgi", "brls"] }],
+      color: { kind: "dose" },
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
+    };
+    const ctx = resolveDistVisualContext(
+      spec,
+      { compareEndpointIds: ["brls"], fallbackEndpointId: "brls" },
+      ["icgi", "brls"]
+    );
+    expect(ctx.readoutEndpointIds).toEqual(["brls"]);
+  });
 });
 
 describe("resolveLegendShowsEndpoints", () => {
