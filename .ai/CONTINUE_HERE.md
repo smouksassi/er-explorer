@@ -177,10 +177,32 @@ machine-verified READOUT-ONLY (stacks/titles/status byte-identical) in
 s6/s12/s13: each clicked group now prints one fit line per endpoint
 (endpoint-labeled), incl. per-endpoint "fit n/a" abstentions and per-endpoint
 missing-N notes; re-baselined.
+**ORPHAN-PROJECTION FALLBACK EXTERMINATED (2026-09-03) — I8 addendum:** the
+small-groups test protocol (run headlessly, all tiers PASS) caught the
+continuous painter's samplesForGroup legacy fallback (suffix/dose/first-curve)
+drawing an ABSTAINED group's projection markers + observed pill on a FOREIGN
+curve (binary never had orphans — per-curve attachment). Rule: projection
+renders iff curveKey structurally matches a curve; orphans render nothing
+(points still highlight, readout still speaks). One `ridableProjected` filter
+gates bands/lines/markers/pill/callout-hosts; dead `level` plumbing deleted.
+s13 diff = exactly the orphan geometry (2 groups, 12 circles, 4 hit areas) on
+the brls stack; re-baselined. User mixed-scales visual pass PASSED (readout
+layout-invariance confirmed across endpoint-rows / columns / compare).
+
+**LOGGED, not built (user rulings 2026-09-03):**
+- Linetype=Endpoints stays SOLID in single-endpoint cells (declared E5 legacy
+  rule) — user notes per-endpoint dash under endpoint FACETS is legal by
+  constancy and useful (endpoint identity across panels); candidate rule
+  extension, decide before Emax.
+- SUSPECTED BUG (probe 2026-09-03, awaiting user confirm): per-COLUMN strips
+  under color=Endpoints render NEUTRAL; documented Slice-D rule + constancy
+  say a strip serving ONE endpoint wears that endpoint's color. Collapsed
+  shared strips stay neutral by design.
 NEXT (user directive: "fix any open known bugs before adding functionality"):
-1) degenerate norm-bounds linear endpoint in shared-axis cells (E2c logged
-edge); 2) loess R cross-check still pending user-side. THEN: Emax family,
-provenance check (177 vs 176), E3 re-challenge.
+1) per-column strip endpoint color (above, on confirm); 2) degenerate
+norm-bounds linear endpoint in shared-axis cells (E2c logged edge; user repro
+requested: compare with brls min=max); 3) loess R cross-check pending
+user-side. THEN: Emax family, provenance check (177 vs 176), E3 re-challenge.
 
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl

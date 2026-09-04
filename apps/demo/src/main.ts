@@ -2252,7 +2252,7 @@ function renderContinuousScatterViaRenderer(
   height = SCATTER_CHART_HEIGHT,
   opts?: {
     /** §J curve groups (one per grouping partition); replaces the single pooled curve. */
-    curves?: Array<{ curve: PredictionResult; color: string; dash?: string; key?: string; level?: string }>;
+    curves?: Array<{ curve: PredictionResult; color: string; dash?: string; key?: string }>;
     /** Point color under the active color channel; default = dose palette. */
     pointColorFor?: (p: ScatterPoint) => string;
   }
@@ -2264,8 +2264,7 @@ function renderContinuousScatterViaRenderer(
         color: c.color,
         band: c.color,
         dash: c.dash,
-        key: c.key,
-        level: c.level
+        key: c.key
       }))
     : curve
       ? [
@@ -2274,27 +2273,19 @@ function renderContinuousScatterViaRenderer(
             color: "#64748b",
             band: "#94a3b8",
             dash: undefined as string | undefined,
-            key: undefined as string | undefined,
-            level: undefined as string | undefined
+            key: undefined as string | undefined
           }
         ]
       : [];
   const allSamples = curveOverlays.flatMap((c) => c.samples);
-  // A projected group rides ITS OWN curve, matched structurally by curveKey
-  // (I4/I8). Legacy producers without curveKey (guided compare) fall back to
-  // suffix/dose matching; the single pooled curve is the last resort. With no
-  // curve at all (fit below minimum support) there is nothing to ride.
-  const samplesForGroup = (p: Pick<ProjectedGroup, "groupId" | "curveKey">): CurveSample[] => {
-    if (p.curveKey !== undefined) {
-      const byKey = curveOverlays.find((c) => (c.key ?? "") === p.curveKey);
-      if (byKey) return byKey.samples;
-    }
-    const { dose, suffix } = parseDistGroupId(String(p.groupId));
-    const match =
-      (suffix ? curveOverlays.find((c) => c.level === suffix) : undefined) ??
-      curveOverlays.find((c) => c.level === dose);
-    return (match ?? curveOverlays[0])?.samples ?? [];
-  };
+  // I8, no fallbacks: a projected group rides ONLY its own curve, matched
+  // structurally by curveKey (the pipeline always sets it; "" = pooled). A
+  // group whose fit abstained has no curve and therefore NO projection
+  // geometry — its raw points still highlight and the readout still speaks.
+  // (The old suffix/dose/first-curve fallback let an uncurved group ride a
+  // FOREIGN group's curve on continuous panels only — probe-caught 2026-09-03.)
+  const samplesForGroup = (p: Pick<ProjectedGroup, "curveKey">): CurveSample[] =>
+    curveOverlays.find((c) => (c.key ?? "") === (p.curveKey ?? ""))?.samples ?? [];
   const yDomain = computeContinuousYDomain(points, allSamples);
   const plotHeight = height;
 
@@ -2331,7 +2322,12 @@ function renderContinuousScatterViaRenderer(
     layers.push(new FitLayer({ id: `curve-${ci}`, samples: c.samples, color: c.color, dash: c.dash }));
   });
 
-  if (projected.length) {
+  // One law for EVERYTHING a projection draws (markers, bands, observed pill):
+  // no curve to ride — nothing renders. Matches the binary painter, which
+  // attaches projections per curve and never sees orphans.
+  const ridableProjected = projected.filter((p) => samplesForGroup(p).length >= 2);
+
+  if (ridableProjected.length) {
     const rangeSamplesFor = (p: ProjectedGroup) => {
       const lo = p.min ?? p.whiskerLow;
       const hi = p.max ?? p.whiskerHigh;
@@ -2340,13 +2336,13 @@ function renderContinuousScatterViaRenderer(
     const coreSamplesFor = (p: ProjectedGroup) =>
       samplesForGroup(p).filter((s) => s.exposure >= p.q1 && s.exposure <= p.q3);
 
-    projected.forEach((p, i) => {
+    ridableProjected.forEach((p, i) => {
       layers.push(new ConfidenceRibbonLayer({ id: `proj-band-${i}`, samples: rangeSamplesFor(p), color: p.color, opacity: 0.1 }));
       layers.push(new FitLayer({ id: `proj-range-${i}`, samples: rangeSamplesFor(p), color: p.color, dash: null, strokeWidth: 1.8, opacity: 0.48 }));
       layers.push(new FitLayer({ id: `proj-core-${i}`, samples: coreSamplesFor(p), color: p.color, dash: null, strokeWidth: 3.8, opacity: 0.98 }));
     });
 
-    projected.forEach((p, i) => {
+    ridableProjected.forEach((p, i) => {
       layers.push(
         new DoseProjectionLayer({
           id: `projection-markers-${i}`,
@@ -2358,7 +2354,7 @@ function renderContinuousScatterViaRenderer(
 
     // ADR-0013: labels come from the family adapter's summary — no family
     // branching here. Capital N = the clicked group's own observed count.
-    const observedStats = projected
+    const observedStats = ridableProjected
       .filter((p): p is ProjectedGroup & { observedSummary: ObservedGroupSummary } => Boolean(p.observedSummary))
       .map((p) => ({
         x: p.median,
@@ -2381,7 +2377,7 @@ function renderContinuousScatterViaRenderer(
 
   if (referenceLines.length) {
     const multiCurve = curveOverlays.length > 1;
-    const projectionHostKeys = new Set(projected.map((p) => p.curveKey ?? ""));
+    const projectionHostKeys = new Set(ridableProjected.map((p) => p.curveKey ?? ""));
     const markerOverlays = curveOverlays.filter((c) =>
       curveShowsFitCallout(projectionHostKeys.has(c.key ?? ""), curveOverlays.length)
     );
@@ -2434,7 +2430,7 @@ function renderContinuousScatterViaRenderer(
   }
 
   if (state.showFittedAtObservedBin && observedBins.length) {
-    const hostKeys = new Set(projected.map((p) => p.curveKey ?? ""));
+    const hostKeys = new Set(ridableProjected.map((p) => p.curveKey ?? ""));
     curveOverlays.forEach((c, ci) => {
       if (!curveShowsFitCallout(hostKeys.has(c.key ?? ""), curveOverlays.length)) return;
       layers.push(
@@ -3375,7 +3371,7 @@ function paintRegularScatterIntoWrap(
     const pooledFit = tryFitForCohort(metric, endpoint, recordRows);
     const curve = pooledFit ? curveFor(pooledFit.fit, pooledFit.xs, pooledFit.ys, xDomain) : null;
 
-    let levelCurves: Array<{ curve: PredictionResult; color: string; key?: string; level?: string }> | undefined;
+    let levelCurves: Array<{ curve: PredictionResult; color: string; key?: string }> | undefined;
     const builtCurves = curvePartitions.flatMap((part) => {
       let fitted: PredictionResult;
       if (part.key === "") {
@@ -3388,7 +3384,7 @@ function paintRegularScatterIntoWrap(
       }
       const color = channelColorFor(part.rows);
       const dash = linetype.dashForRows(part.rows, endpoint, 1);
-      return [{ curve: fitted, color, dash, key: part.key, level: part.key || undefined }];
+      return [{ curve: fitted, color, dash, key: part.key }];
     });
     // A single unpainted, undashed pooled curve takes the plain pooled styling
     // (neutral gray, SOLID — dash exists only when the linetype rule states one).

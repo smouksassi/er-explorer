@@ -268,3 +268,28 @@ in every family. **Guard:** renderer FitLayer tests (solid default, verbatim
 "8 5" identically). **Prevention:** any layer default that encodes a visual
 CHANNEL (dash, color) rather than geometry is a violation — encoding decisions
 live with the channel authorities in the demo/domain, never in the renderer.
+
+## I8 addendum — no ride, no render; no fallback association (2026-09-03)
+
+**Bug:** the continuous painter's `samplesForGroup` kept a legacy fallback
+chain (suffix/dose/level match → FIRST CURVE) for "producers without curveKey".
+Every producer now routes through the one pipeline, which ALWAYS sets curveKey
+— so the fallback's only reachable effect was an I8 violation: a clicked group
+whose fit ABSTAINED (below MIN_FIT_N) drew its projection markers and observed
+pill on a FOREIGN group's curve, on continuous panels only (binary attaches
+projections per curve and never saw orphans). Probe-caught during the
+small-groups test protocol.
+
+**Rule:** a projection renders IFF its curveKey structurally matches a curve
+("" = pooled). An orphaned projection renders NOTHING on the scatter — the
+group's raw points still highlight and the readout still reports
+Min·Median·Max + "fit n/a (N=k)". One filter (`ridableProjected`) gates every
+projection artifact: bands, range/core lines, markers, observed pill, fit-
+callout host keys. The dead `level` plumbing on curve overlays was deleted
+with the fallback.
+
+**Guard:** snapshot s13 clicks two uncurved groups (race 1 N=4, race 8 N=1)
+on binary AND continuous panels — zero projection geometry on both, readouts
+unchanged. **Prevention:** any association by string parsing or positional
+fallback (first curve, level match) instead of the structural curveKey is a
+violation.
