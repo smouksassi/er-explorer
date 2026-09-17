@@ -805,7 +805,11 @@ function refreshAdvancedColorOptions(): void {
  */
 function resolveDoseRowPaint(
   spec: ViewLayoutSpec | null,
-  scatterPanel: ScatterPanelSpec | undefined
+  scatterPanel: ScatterPanelSpec | undefined,
+  /** The mark's endpoint scope when it is WIDER than one cell — a collapsed
+   * dist strip serves every endpoint of its scatter panels; constancy must be
+   * evaluated over that set, not the first cell's. Absent = the cell itself. */
+  stripEndpointIds?: readonly string[]
 ): { neutral?: boolean; fixedColor?: string } {
   if (!spec) return {};
   if (!scatterPanel) return spec.color.kind !== "dose" ? { neutral: true } : {};
@@ -819,6 +823,15 @@ function resolveDoseRowPaint(
     )
   );
   if (ctx.distRows.palette === "neutral") return { neutral: true };
+  if (ctx.distRows.palette === "endpoint") {
+    // Constancy over the mark's scope: a single-endpoint scope wears the
+    // endpoint accent (per-column strips, and the matching projection accent —
+    // this module's contract is that the two agree); a wider scope is neutral.
+    const scope = stripEndpointIds ?? ctx.endpointIds;
+    return scope.length === 1 && ctx.distRows.endpointId
+      ? { fixedColor: endpointColor(ctx.distRows.endpointId as Endpoint) }
+      : { neutral: true };
+  }
   if (
     ctx.distRows.palette === "variable" &&
     !ctx.distRows.splitLevels.length &&
@@ -3509,7 +3522,14 @@ function paintRegularScatterIntoWrap(
       const refLines = computeDisplayReferenceLines(metric, endpoint, cohort);
       // ONE pipeline (E2c): projections match the (neutral) strip rows — one
       // channel; the curve alone carries the endpoint color.
-      const projected = projectedGroupsForDistSelection(metric, endpoint, active, cohort, { spec });
+      // ONE paint decider for dose rows AND projection accents (module
+      // contract): under constancy a single-endpoint cell's projections wear
+      // the endpoint accent — identically to the continuous painter (I7).
+      const rowPaint = resolveDoseRowPaint(spec ?? null, panel);
+      const projected = projectedGroupsForDistSelection(metric, endpoint, active, cohort, {
+        spec,
+        colorOverride: rowPaint.fixedColor
+      });
       // §J: grouping is legal under the endpoints channel too — one curve per
       // group, each wearing the endpoint color (endpoint is constant per curve).
       const curves: BinaryCurveOverlay[] = curvePartitions.flatMap((part) => {
@@ -3923,7 +3943,11 @@ function paintDistributionChart(
           (() => {
             const scatterId = distPanel?.scatterPanelIds[0];
             return scatterId ? scatterPanelById.get(scatterId) : undefined;
-          })()
+          })(),
+          // The strip's OWN endpoint scope (enumeration truth): a per-column
+          // strip serves one endpoint, a collapsed rows-strip serves them all —
+          // constancy is evaluated over this set, not the first cell's.
+          distPanel?.readoutEndpointIds ?? readoutEndpoints
         );
   const distGroups = buildDistributionGroups(metric, splitByEndpoints, {
     cohortRowIndices,

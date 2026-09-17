@@ -213,8 +213,17 @@ only: s4 gate-dash removed, s12/s13 brls identity "4 3" appears in faceted
 cells (linetype explicitly mapped there); s1–s3 byte-identical via the
 preset-written mapping. Legacy sessions without linetype now resolve none
 (user-accepted).
-NEXT: 1) per-column strip endpoint color (item 1, confirmed); THEN Emax
-family, provenance check (177 vs 176), E3 strip-rule re-challenge.
+**ITEM-1 FIX LANDED (2026-09-17): endpoint accent by constancy over the
+mark's scope.** Domain: DistRowPolicy gains palette "endpoint"+endpointId
+(single-endpoint cell under color=endpoints); demo resolveDoseRowPaint takes
+the strip's endpoint scope (readoutEndpointIds) — per-column strips wear
+their endpoint's ink, collapsed rows-strips stay neutral. Projection accents
+follow the same decider in BOTH painters (the binary color=endpoints branch
+had skipped resolveDoseRowPaint — I7 symmetry restored). Snapshots s15/s16
+pin both halves; s1–s14 byte-identical (the bug area was unpinned — that is
+how it survived). Battery: 16 scenarios.
+NEXT: Emax family adapter (ADR-0013 fourth family), provenance check
+(177 vs 176), E3 strip-rule re-challenge.
 
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl

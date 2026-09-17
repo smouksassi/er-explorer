@@ -316,3 +316,26 @@ snapshots — s1–s3 byte-identical (preset-written mapping), s4 gate-dash remo
 single-endpoint cells (mapped = unconditional), s8/s14 variable linetype
 untouched. **Prevention:** any condition on a channel's application other than
 the mapping itself + constancy is a violation.
+
+## Endpoint accent on strips/projections — constancy over the mark's scope (2026-09-17)
+
+**User-confirmed bug:** per-COLUMN strips under color=Endpoints rendered
+neutral. **Rule (the SAME constancy law as a single-level variable cell):**
+under the endpoints channel, dist rows and dose-click projection accents wear
+an endpoint's accent iff the endpoint is constant over the MARK'S OWN SCOPE —
+a scatter cell is its own scope; a dist strip's scope is every endpoint it
+serves (`readoutEndpointIds`, the enumeration truth). So: per-column strip →
+its endpoint's ink; collapsed rows-strip (serves several endpoints) → neutral;
+multi-endpoint overlay cell rows → neutral; projections in single-endpoint
+cells → that endpoint's accent (both painters — the binary color=endpoints
+branch had skipped resolveDoseRowPaint; threading it restored I7 symmetry).
+Policy lives in domain (`DistRowPolicy.palette: "endpoint"` + endpointId in
+resolveCellContext); demo supplies the strip scope to resolveDoseRowPaint.
+
+**Guard:** cellContext test (single-endpoint cell → palette "endpoint";
+overlay cell → neutral); snapshots s15 (per-column strips + matching
+projection accents, binary AND continuous identical) and s16 (collapsed
+rows-strip neutral while its cells' projections wear their own accents).
+**Prevention:** any strip/projection paint decision that bypasses
+resolveCellContext/resolveDoseRowPaint, or evaluates constancy over a proxy
+scope (first cell instead of the strip), is a violation.

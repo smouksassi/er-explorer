@@ -68,9 +68,15 @@ export interface ObservedGroup {
 export interface DistRowPolicy {
   /** Color-variable levels each dose row splits into; empty = one row per dose. */
   splitLevels: string[];
-  /** Palette under the one-channel rule: dose colors, variable-level colors, or neutral ink (color=endpoints). */
-  palette: "dose" | "variable" | "neutral";
+  /**
+   * Palette under the one-channel rule: dose colors, variable-level colors,
+   * a single constant endpoint's accent ("endpoint" — constancy, same law as
+   * the variable channel's single-level cell), or neutral ink.
+   */
+  palette: "dose" | "variable" | "endpoint" | "neutral";
   variableId?: string;
+  /** The constant endpoint whose accent rows wear when `palette === "endpoint"`. */
+  endpointId?: string;
 }
 
 /** Everything a paint path may know about one cell. */
@@ -297,9 +303,18 @@ export function resolveCellContext(input: CellResolutionInput): ResolvedCellCont
       rows: facetCohort,
       colorKey: endpointId
     }));
-    // One color channel per view: the strip describes exposure, not endpoints —
-    // rows render neutral; dose identity is the row label (ADR-0012).
-    distRows = { splitLevels: [], palette: "neutral" };
+    // Constancy — the SAME law as the variable branch's single-level case
+    // above: a cell whose endpoint set is one endpoint has the channel constant
+    // over its rows, so dist rows wear that endpoint's accent (per-column
+    // strips, single-endpoint cells; user-confirmed bug 2026-09-17). A
+    // multi-endpoint cell stays neutral — one strip cannot wear two endpoints;
+    // dose identity is the row label (ADR-0012). NOTE: the CALLER owns the
+    // mark's scope — a collapsed strip serving several single-endpoint cells
+    // must evaluate constancy over the strip's own endpoint set, not one cell's.
+    distRows =
+      endpointIds.length === 1
+        ? { splitLevels: [], palette: "endpoint", endpointId: endpointIds[0]! }
+        : { splitLevels: [], palette: "neutral" };
   } else {
     colorChannel = { kind: "dose" };
     observedGroups = endpointIds.map((endpointId) => ({

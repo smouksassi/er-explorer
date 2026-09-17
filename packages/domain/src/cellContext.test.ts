@@ -84,7 +84,7 @@ describe("resolveCellContext — color = endpoints", () => {
     expect(ctx.distRows.splitLevels).toEqual([]);
   });
 
-  it("endpoint-faceted cell: single endpoint curve keyed to its endpoint color, dist still neutral", () => {
+  it("endpoint-faceted cell: constant endpoint → dist rows wear ITS accent (constancy, 2026-09-17)", () => {
     const faceted: ViewLayoutSpec = {
       ...spec,
       rowDimensions: [{ kind: "endpoints", ids: ["icgi", "icgi2"], order: ["icgi", "icgi2"] }]
@@ -106,8 +106,11 @@ describe("resolveCellContext — color = endpoints", () => {
     expect(ctx.curveGroups).toEqual([
       { endpointId: "icgi2", groupKey: "", level: undefined, rows: ROWS, colorKey: "icgi2" }
     ]);
-    // ADR-0012 one-channel rule: the strip describes exposure — never endpoint-tinted.
-    expect(ctx.distRows.palette).toBe("neutral");
+    // Constancy — the same law as a single-level variable cell: one endpoint in
+    // the cell → the channel is constant → rows wear its accent. (A collapsed
+    // strip serving SEVERAL such cells evaluates constancy over its own
+    // endpoint set — the caller's scope — and renders neutral.)
+    expect(ctx.distRows).toEqual({ splitLevels: [], palette: "endpoint", endpointId: "icgi2" });
   });
 });
 

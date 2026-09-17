@@ -413,6 +413,42 @@ const SCENARIOS = [
       await resetSelection();
       await settle();
     }
+  },
+  {
+    // Color=Endpoints strip constancy (user-confirmed bug 2026-09-17): a
+    // per-COLUMN strip serves exactly ONE endpoint — its rows wear that
+    // endpoint's accent (icgi strip blue, brls strip green), and the pooled
+    // click's projection accent matches (resolveDoseRowPaint contract).
+    name: "s15-endpoint-color-per-column-strips",
+    run: async () => {
+      await setEndpoints(["icgi", "brls"]);
+      await setMode("advanced");
+      await setFacets([], ["endpoints"]);
+      await setSel("advancedColorBy", "endpoints");
+      await setSel("advancedGroupCurves", "");
+      await setSel("advancedLinetypeBy", "none");
+      await setCb("advancedColorDistShapes", false);
+      await resetSelection();
+      await settle();
+      await clickRow("1200 mg");
+      await settle();
+    }
+  },
+  {
+    // The scope half of the same law: endpoints on ROWS collapse to ONE shared
+    // strip serving BOTH endpoints — the channel is not constant over the
+    // strip, so its rows stay NEUTRAL (and the projection accent likewise).
+    name: "s16-endpoint-color-collapsed-strip-neutral",
+    run: async () => {
+      // Two passes: clearing columns first lets endpoints move to rows (the
+      // rows-then-cols single pass loses to the "columns win" dedupe mid-sync).
+      await setFacets([], []);
+      await setFacets(["endpoints"], []);
+      await resetSelection();
+      await settle();
+      await clickRow("1200 mg");
+      await settle();
+    }
   }
 ];
 
