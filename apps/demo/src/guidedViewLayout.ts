@@ -45,6 +45,9 @@ export function guidedToViewLayoutSpec(input: GuidedLayoutInput): ViewLayoutSpec
       rowDimensions: [],
       colDimensions: [xMetricsDim(metrics, input.exposureColumnOrder)],
       color: { kind: "endpoints" },
+      // Law B: presets WRITE channel mappings, rules carry no gates — the
+      // overlay's dash-by-endpoint look is this explicit mapping, not a default.
+      linetype: { kind: "endpoints" },
       grouping: { variableIds: [] },
       endpointOverlay: true,
       distribution: {

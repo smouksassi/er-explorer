@@ -579,10 +579,10 @@
         </div>
         <div class="field"><label for="advancedLinetypeBy">Linetype (curves)</label>
           <select id="advancedLinetypeBy">
-            <option value="endpoints">Endpoints (default)</option>
-            <option value="none">None (all solid)</option>
+            <option value="none">(none — all solid)</option>
+            <option value="endpoints">Endpoints (identity dash)</option>
           </select>
-          <p class="field-hint">Second paint channel for curve strokes: dash by endpoint (overlay default) or by a covariate's levels — a curve dashes only when its group is a single level (same rule as color). Points and boxplots never dash.</p>
+          <p class="field-hint">Second paint channel for curve strokes. Unmapped (none) = all solid. <strong>Endpoints</strong> = each endpoint keeps its own dash everywhere it appears (identity, like its color); the Overlay preset maps this automatically. A covariate dashes a curve only when its group is a single level (same constancy rule as color). Points and boxplots never dash.</p>
         </div>
         <div class="field"><label><input type="checkbox" id="advancedColorDistShapes" /> Color-split boxplots within dose rows</label>
           <p class="field-hint">For <strong>Endpoints</strong> color without endpoint facets: split each dose into side-by-side endpoint rows (Guided compare). When endpoints are faceted, boxplots use that panel’s endpoint color automatically.</p>

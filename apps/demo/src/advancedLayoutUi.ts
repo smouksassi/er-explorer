@@ -105,10 +105,11 @@ export function readAdvancedSpecFromUi(
     // any channel. Whether the groups are visually distinguishable is the
     // constancy theorem's job, not a UI restriction.
     grouping: { variableIds: groupCurvesValue ? [groupCurvesValue] : [] },
+    // Law B: no value / "none" = unmapped channel (paints nothing).
     linetype:
-      linetypeValue === "none"
+      linetypeValue === "none" || !linetypeValue
         ? ({ kind: "none" } as LinetypeEncoding)
-        : linetypeValue === "endpoints" || !linetypeValue
+        : linetypeValue === "endpoints"
           ? ({ kind: "endpoints" } as LinetypeEncoding)
           : ({ kind: "variable", variableId: linetypeValue, binning } as LinetypeEncoding),
     endpointOverlay: false,
@@ -153,7 +154,7 @@ export function applyAdvancedSpecToUi(
   if ([...linetypeEl.options].some((o) => o.value === ltValue)) {
     linetypeEl.value = ltValue;
   } else {
-    linetypeEl.value = "endpoints";
+    linetypeEl.value = "none";
   }
   colorDistShapesEl.checked = spec.distribution.colorDistShapes;
 }

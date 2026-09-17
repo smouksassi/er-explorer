@@ -780,11 +780,12 @@ function refreshAdvancedColorOptions(): void {
     advancedGroupCurvesEl.value = keepGroup;
   }
 
-  // Linetype (§H3a): endpoints (default) | none | any covariate — a second
-  // paint channel for curve strokes.
+  // Linetype (§H3a, law B): none (default — unmapped paints nothing) |
+  // endpoints (identity dash) | any covariate. A second paint channel for
+  // curve strokes; mapped = applies unconditionally, no gates.
   const keepLinetype = advancedLinetypeByEl.value;
   advancedLinetypeByEl.innerHTML =
-    '<option value="endpoints">Endpoints (default)</option><option value="none">None (all solid)</option>';
+    '<option value="none">(none — all solid)</option><option value="endpoints">Endpoints (identity dash)</option>';
   for (const col of filterColumnOptions()) {
     const opt = document.createElement("option");
     opt.value = col.id;
@@ -1477,16 +1478,20 @@ function constantOver(rows: number[], valueOf: (rowIndex: number) => string | nu
 function linetypeAccessFor(spec: ViewLayoutSpec | null): {
   kind: "none" | "endpoints" | "variable";
   variableId?: string;
-  dashForRows: (rows: number[], endpoint: Endpoint, cellEndpointCount: number) => string;
+  dashForRows: (rows: number[], endpoint: Endpoint) => string;
   legend?: Array<{ level: string; dash: string }>;
 } {
   const lt = resolveLinetype(spec);
   if (!spec || lt.kind === "none" || !dataset) return { kind: "none", dashForRows: () => "" };
   if (lt.kind === "endpoints") {
+    // Law B: a mapped channel applies UNCONDITIONALLY. Endpoints are an
+    // identity scale — an endpoint wears its dash everywhere it appears (alone,
+    // faceted, overlaid), exactly as it wears its identity color. The old
+    // cell-count / color=endpoints gates were the special cases exterminated
+    // 2026-09-17 (user ruling: "no gating, no special cases").
     return {
       kind: "endpoints",
-      dashForRows: (_rows, endpoint, cellEndpointCount) =>
-        cellEndpointCount > 1 || spec.color.kind === "endpoints" ? endpointDash(endpoint) : ""
+      dashForRows: (_rows, endpoint) => endpointDash(endpoint)
     };
   }
   const ds = requireDataset();
@@ -3383,7 +3388,7 @@ function paintRegularScatterIntoWrap(
         fitted = curveFor(f.fit, f.xs, f.ys, xDomain);
       }
       const color = channelColorFor(part.rows);
-      const dash = linetype.dashForRows(part.rows, endpoint, 1);
+      const dash = linetype.dashForRows(part.rows, endpoint);
       return [{ curve: fitted, color, dash, key: part.key }];
     });
     // A single unpainted, undashed pooled curve takes the plain pooled styling
@@ -3461,7 +3466,7 @@ function paintRegularScatterIntoWrap(
           {
             curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
             color: channelColorFor(part.rows) ?? "#334155",
-            dash: linetype.dashForRows(part.rows, endpoint, 1),
+            dash: linetype.dashForRows(part.rows, endpoint),
             projected: projectedForCurveKey(doseProjected, part.key)
           }
         ];
@@ -3473,7 +3478,7 @@ function paintRegularScatterIntoWrap(
             {
               curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
               color: channelColorFor(recordRows) ?? "#334155",
-              dash: linetype.dashForRows(recordRows, endpoint, 1),
+              dash: linetype.dashForRows(recordRows, endpoint),
               projected: doseProjected
             }
           ];
@@ -3514,7 +3519,7 @@ function paintRegularScatterIntoWrap(
           {
             curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
             color: epColor,
-            dash: linetype.dashForRows(part.rows, endpoint, 1),
+            dash: linetype.dashForRows(part.rows, endpoint),
             projected: projectedForCurveKey(projected, part.key)
           }
         ];
@@ -3546,7 +3551,7 @@ function paintRegularScatterIntoWrap(
             {
               curve: curveFor(fitResult.fit, fitResult.xs, fitResult.ys, xDomain),
               color: channelColorFor(part.rows) ?? "#334155",
-              dash: linetype.dashForRows(part.rows, endpoint, 1),
+              dash: linetype.dashForRows(part.rows, endpoint),
               // Granularity rule (I8): a group's projection rides only its own curve.
               projected: projectedForCurveKey(projected, part.key)
             }
@@ -3557,7 +3562,7 @@ function paintRegularScatterIntoWrap(
         // Degenerate facet+dose-color: a single-arm cell keeps its arm color
         // (constancy — same rule variables already have); multi-arm stays neutral.
         const armColor = channelColorFor(recordRows);
-        const pooledDash = fitResult ? linetype.dashForRows(recordRows, endpoint, 1) : "";
+        const pooledDash = fitResult ? linetype.dashForRows(recordRows, endpoint) : "";
         curves = fitResult
           ? [
               {
@@ -3684,7 +3689,7 @@ function paintCompareScatterIntoWrap(
           rawCurve: linear ? rawCurve : undefined,
           fitLabelDecimals: linear ? 1 : 2,
           color: neutralCurves ? NEUTRAL_COMPARE_COLOR : endpointColor(endpoint),
-          dash: linetype.dashForRows(part.rows, endpoint, endpoints.length),
+          dash: linetype.dashForRows(part.rows, endpoint),
           projected: projectedForCurveKey(projected, part.key)
         }
       ];

@@ -293,3 +293,26 @@ on binary AND continuous panels — zero projection geometry on both, readouts
 unchanged. **Prevention:** any association by string parsing or positional
 fallback (first curve, level match) instead of the structural curveKey is a
 violation.
+
+## Linetype law B — unmapped paints nothing; mapped applies unconditionally (2026-09-17)
+
+**User ruling ("B — no gating, no special cases"):** the linetype channel obeys
+one law with zero gates. `resolveLinetype` absent = **none** (an unmapped
+channel paints nothing — all curves solid). Mapped `endpoints` = an IDENTITY
+scale: each endpoint wears its dash everywhere it appears — alone, faceted, or
+overlaid — exactly as it wears its identity color; the old
+`cellEndpointCount > 1 || color.kind === "endpoints"` gates are DELETED.
+Mapped `variable` = positional scale trained on the filtered base cohort, by
+constancy — deliberately the same training rule as variable color (a level
+filtered down to be alone takes position 0 = solid, just as it takes the first
+palette color; endpoint scales are identity, variable scales are trained — the
+same split in BOTH channels is symmetry, not exception). Presets WRITE channel
+mappings: the Overlay guided preset sets `linetype: endpoints` in its spec, so
+its dash-by-endpoint look is an explicit mapping, not a rule default.
+
+**Guard:** domain resolveLinetype tests (absent = none, mappings pass through);
+snapshots — s1–s3 byte-identical (preset-written mapping), s4 gate-dash removed
+(unmapped = solid), s12/s13 brls identity dash "4 3" on group curves in faceted
+single-endpoint cells (mapped = unconditional), s8/s14 variable linetype
+untouched. **Prevention:** any condition on a channel's application other than
+the mapping itself + constancy is a violation.

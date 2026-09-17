@@ -189,20 +189,32 @@ s13 diff = exactly the orphan geometry (2 groups, 12 circles, 4 hit areas) on
 the brls stack; re-baselined. User mixed-scales visual pass PASSED (readout
 layout-invariance confirmed across endpoint-rows / columns / compare).
 
-**LOGGED, not built (user rulings 2026-09-03):**
-- Linetype=Endpoints stays SOLID in single-endpoint cells (declared E5 legacy
-  rule) — user notes per-endpoint dash under endpoint FACETS is legal by
-  constancy and useful (endpoint identity across panels); candidate rule
-  extension, decide before Emax.
-- SUSPECTED BUG (probe 2026-09-03, awaiting user confirm): per-COLUMN strips
-  under color=Endpoints render NEUTRAL; documented Slice-D rule + constancy
-  say a strip serving ONE endpoint wears that endpoint's color. Collapsed
-  shared strips stay neutral by design.
-NEXT (user directive: "fix any open known bugs before adding functionality"):
-1) per-column strip endpoint color (above, on confirm); 2) degenerate
-norm-bounds linear endpoint in shared-axis cells (E2c logged edge; user repro
-requested: compare with brls min=max); 3) loess R cross-check pending
-user-side. THEN: Emax family, provenance check (177 vs 176), E3 re-challenge.
+**USER TEST PASS 2026-09-17 (post-break, itemized feedback):**
+- Item 1 CONFIRMED BUG: per-COLUMN strips under color=Endpoints render
+  NEUTRAL (screenshots: endpoint columns, icgi/icgi2 strips both gray). Fix:
+  a strip serving ONE endpoint wears that endpoint's color (constancy);
+  collapsed shared rows-strip stays neutral by design; color-split checkbox
+  stays disabled under endpoint facets (sub-rows redundant there). NEXT UP.
+- Item 2 PASSED: degenerate norm bounds (brls 23–23) fail soft + honestly —
+  legend flags "scale invalid", panel falls back to native scale, no NaN.
+  E2c logged edge CLOSED as verified-safe.
+- Item 3 PASSED: loess R parity — predict(surface="direct") @ AUC 94.2/173.7
+  = 23.27986/23.11810 → app 1-decimal 23.3/23.1. Loess family fully verified.
+
+**LINETYPE LAW B LANDED (2026-09-17, user ruling "no gating, no special
+cases"):** absent linetype = NONE (unmapped channel paints nothing); mapped
+endpoints = identity dash UNCONDITIONALLY (old cell-count/color=endpoints
+gates deleted); mapped variable = positional scale trained on filtered base
+cohort (same training rule as variable color — a lone filtered level takes
+position 0 = solid AND first palette color; symmetric, not special). Overlay
+preset WRITES linetype:endpoints into its spec (presets are spec-writers).
+UI default "(none — all solid)". Baseline diffs machine-verified dash-attrs-
+only: s4 gate-dash removed, s12/s13 brls identity "4 3" appears in faceted
+cells (linetype explicitly mapped there); s1–s3 byte-identical via the
+preset-written mapping. Legacy sessions without linetype now resolve none
+(user-accepted).
+NEXT: 1) per-column strip endpoint color (item 1, confirmed); THEN Emax
+family, provenance check (177 vs 176), E3 strip-rule re-challenge.
 
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl

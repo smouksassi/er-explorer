@@ -320,3 +320,25 @@ describe("implicit facets stay derived (user can re-place scale-bearing dims)", 
     expect(again.colDimensions.find((d) => d.kind === "xMetrics")?.implicit).toBe(true);
   });
 });
+
+// Law B (2026-09-17, user ruling "no gating, no special cases"): an unmapped
+// linetype channel paints nothing; presets that want endpoint dashes WRITE the
+// mapping. The old absent=endpoints default carried hidden cell-count /
+// color-channel gates.
+import { resolveLinetype } from "./viewLayout";
+
+describe("resolveLinetype — law B", () => {
+  it("absent linetype = none (unmapped channel paints nothing)", () => {
+    expect(resolveLinetype(null)).toEqual({ kind: "none" });
+    expect(resolveLinetype(undefined)).toEqual({ kind: "none" });
+    expect(resolveLinetype({} as never)).toEqual({ kind: "none" });
+  });
+
+  it("an explicit mapping passes through untouched", () => {
+    expect(resolveLinetype({ linetype: { kind: "endpoints" } } as never)).toEqual({ kind: "endpoints" });
+    expect(resolveLinetype({ linetype: { kind: "variable", variableId: "sex" } } as never)).toEqual({
+      kind: "variable",
+      variableId: "sex"
+    });
+  });
+});
