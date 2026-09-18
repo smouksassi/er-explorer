@@ -222,8 +222,26 @@ follow the same decider in BOTH painters (the binary color=endpoints branch
 had skipped resolveDoseRowPaint — I7 symmetry restored). Snapshots s15/s16
 pin both halves; s1–s14 byte-identical (the bug area was unpinned — that is
 how it survived). Battery: 16 scenarios.
-NEXT: Emax family adapter (ADR-0013 fourth family), provenance check
-(177 vs 176), E3 strip-rule re-challenge.
+**EMAX LANDED (2026-09-18) — ADR-0013's fourth family, contract proven a
+second time:** `packages/model-emax` (dependency-free, grid+golden-section
+fitting with NO starting values — the ggquickeda pain point this directly
+targets). CONTINUOUS ENDPOINTS ONLY (binary Emax designed then parked by
+user — see project memory / .ai/INVARIANTS.md). Two toggles: estimate γ
+(default off) and estimate E0 (default on; off = no placebo/SoC anchor, E0
+fixed at 0; sign of Emax alone decides inhibitory). CI = delta-method band
+(loess precedent: both CI settings draw it, bootstrap is future work). NEW:
+universal `describeFit()` in main.ts (switches on EndpointFit.kind, all 4
+families) — equation+params via (a) readout-line title tooltip (per-fit
+correct even on a shared strip) and (b) a live preview line under every
+Endpoint Models select, refreshed on ANY settings change (loess span/degree
+included — symmetric treatment, not Emax-only). Snapshot s17 pins the
+fourth-family proof; s1–s16 byte-identical — zero pipeline changes, only a
+new adapter. Also fixed: verify-build.mjs was missing model-loess AND
+model-emax from its package list (worked before only via a stale local
+dist/); both added.
+NEXT: user visual pass on Emax (try span/E0/γ toggles, R nls() cross-check
+per the UI hint); then provenance check (177 vs 176), E3 strip-rule
+re-challenge, and eventually the deferred GAM-based binary loess redesign.
 
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl

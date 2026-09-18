@@ -16,7 +16,10 @@ function run(label, args) {
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
 
-const packages = ["domain", "analysis", "model-linear", "data", "renderer", "session-engine"];
+// model-loess/model-emax were missing here (a latent gap: verify-build only
+// worked because a stale dist/ from an earlier manual `pnpm build` stuck
+// around — a fresh checkout would fail `tsc apps/demo` on either import).
+const packages = ["domain", "analysis", "model-linear", "model-loess", "model-emax", "data", "renderer", "session-engine"];
 for (const pkg of packages) {
   run(`tsc packages/${pkg}`, ["-p", `packages/${pkg}/tsconfig.build.json`]);
 }

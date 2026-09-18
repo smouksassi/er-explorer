@@ -169,6 +169,10 @@
     font-size: 12px; font-weight: 600;
   }
   .compare-norm-row { grid-template-columns: minmax(0, 1fr) 1fr 1fr auto; }
+  .loess-controls, .emax-controls, .endpoint-model-equation { grid-column: 1 / -1; }
+  .emax-controls { display: flex; gap: 14px; font-weight: 400; }
+  .emax-controls label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .endpoint-model-equation { font-weight: 400; font-size: 11px; line-height: 1.4; }
   .compare-norm-row input[type="number"] {
     width: 100%; border: 1px solid var(--stroke); border-radius: 8px; padding: 5px 6px;
     background: var(--elevated); color: var(--text); font-size: 12px;
@@ -457,6 +461,7 @@
         <span class="field-label">Endpoint models</span>
         <div id="endpointModelsList" class="endpoint-model-list"></div>
         <p class="field-hint">Loess matches R's <code>stats::loess</code> (gaussian; defaults span 0.75, degree 2). Cross-check in R with <code>loess.control(surface="direct")</code> — R's default surface interpolates. CI = pointwise SE × t. Loess needs ≥ 5 points per fitted group; smoothers on binary endpoints may leave 0–1 (the axis pads; values are never clamped).</p>
+        <p class="field-hint">Emax: E = E0 + Emax·x/(EC50+x) (continuous endpoints only). Fitting is deterministic — no starting values: EC50 (and γ, if estimated) are found by grid search + golden-section refinement, never a local optimizer from a guess. Turn off "estimate E0" when there is no placebo/standard-of-care anchor (E0 fixed at 0); a negative Emax alone gives an inhibitory curve. Needs ≥ 5 points and ≥ 3 distinct positive doses per fitted group. CI = delta-method (Gauss-Newton) SE × t; cross-check with R's <code>nls()</code>.</p>
       </div>
       <div class="field" id="compareNormSection" hidden>
         <span class="field-label">Compare scale (linear)</span>

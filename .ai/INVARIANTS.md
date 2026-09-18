@@ -339,3 +339,72 @@ rows-strip neutral while its cells' projections wear their own accents).
 **Prevention:** any strip/projection paint decision that bypasses
 resolveCellContext/resolveDoseRowPaint, or evaluates constancy over a proxy
 scope (first cell instead of the strip), is a violation.
+
+## ADR-0013 fourth family: Emax/Hill (2026-09-18)
+
+**Scope decision (user ruling):** Emax is CONTINUOUS-ENDPOINTS-ONLY. Binary
+Emax was designed (reparametrized bounded-MLE on the probability scale, to
+avoid both a weak logit-scale variant and clamping) but explicitly parked:
+"a nonlinear Emax funciton inside a nonlinear logit becomes quickly very hard
+to have enough data for." The proper long-term binary smoother is a GAM-based
+replacement for the current unconstrained binary loess (deferred design note,
+project memory) — not a bounded Emax bolt-on. The Endpoint Models UI omits
+"Emax" from the option list for binary endpoints; `fitForCohort`'s emax
+branch additionally guards `isContinuousEndpoint(endpoint)` defensively (a
+stale session's "emax" on a now-binary endpoint falls through to logistic).
+
+**Fitting is deterministic — no starting values, ever.** For fixed (EC50, γ)
+the model E = E0 + Emax·x^γ/(EC50^γ+x^γ) is exactly linear in (E0, Emax) via
+u(x) = x^γ/(EC50^γ+x^γ); the only nonlinear search (over EC50, and γ when
+estimated) is an exhaustive log-spaced grid — which can't miss a far-off
+optimum — followed by golden-section refinement — which needs only a bracket,
+never a guess. This directly targets the failure mode of naive Emax fitting
+(local-optimizer initial-value sensitivity; user's own ggquickeda Emax "prone
+to not working depending on initials"). `packages/model-emax` is dependency-
+free and self-guards (`EMAX_MIN_N=5`, `EMAX_MIN_DISTINCT_POSITIVE_X=3` — EC50
+is not identifiable below 3 distinct doses even with N≥5), matching the
+model-loess precedent.
+
+**Two independent, symmetric per-endpoint toggles** (persisted, session-
+round-tripped): estimate γ (default OFF, fixed=1 — plain Emax) and estimate
+E0 (default ON; OFF fixes E0 at exactly 0 for the "no placebo/SoC anchor"
+case — the curve is forced through the origin). No separate inhibitory flag:
+the SIGN of Emax alone decides stimulatory vs. inhibitory, symmetric with
+every other family (nothing else in the app has a stimulatory/inhibitory
+switch either).
+
+**CI = delta-method (Gauss-Newton) SE × t**, same shape as loess's H4b band
+(numeric Jacobian of the mean function w.r.t. active parameters at the
+optimum → Cov(θ) ≈ σ²·(JᵗJ)⁻¹ → variance of a prediction via g^T·Cov·g).
+Bootstrap is future work — like loess, both CI settings currently draw the
+same band; documented in the UI hint, not hidden.
+
+**Universal equation/parameter display (`describeFit`, new leaf function in
+main.ts, switches on `EndpointFit.kind`):** every family — logistic, linear,
+loess, emax — describes itself; shown via (a) a `title` tooltip on the
+readout's `.readout-line-fit` line (per-fit, so a shared strip's icgi line
+and brls line each show THEIR OWN family's equation) and (b) a live preview
+line under each endpoint's model select in the Endpoint Models UI (recomputed
+on every settings change, loess's span/degree included — the toggle-refresh
+treatment applies identically to every family, not just Emax). This is a
+DISPLAY concern, not a pipeline seam — ADR-0013's "adapter only" contract is
+about the selection/projection/readout/painter machinery, which `describeFit`
+does not touch; a family that skipped it would just show no equation.
+
+**Verification:** model-emax's own test suite (14 tests) is the primary
+correctness property — mirroring model-loess's "exact polynomial
+reproduction" pattern — exact E0/Emax/EC50/γ recovery on NOISELESS data with
+NO starting values supplied anywhere, for plain Emax, γ-estimated (sigmoid),
+E0-fixed-at-0, and negative-Emax (inhibitory) cases; plus determinism,
+abstention guards, CI shape, and the describe contract. Snapshot s17 pins the
+fourth-family proof itself: brls (γ estimated) + prls (E0 off) under the
+SAME grouping/linetype/click pipeline as every other family — s1–s16 stayed
+byte-identical across the whole slice, meaning Emax required zero changes to
+any existing pipeline, only a new adapter (the ADR-0013 promise, proven a
+second time after loess).
+
+**Also fixed in this slice (latent gap, unrelated to Emax specifically):**
+`verify-build.mjs`'s package list never included `model-loess` (or now
+`model-emax`) — it only "worked" because a stale `dist/` from an earlier
+manual build persisted locally; a fresh checkout would have failed
+`tsc apps/demo` on either import. Both are now in the list.

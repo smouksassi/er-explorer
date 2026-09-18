@@ -449,6 +449,49 @@ const SCENARIOS = [
       await clickRow("1200 mg");
       await settle();
     }
+  },
+  {
+    // Emax (ADR-0013's FOURTH family, continuous-only): brls (γ estimated —
+    // sigmoidicity on) and prls (E0 fixed off — no placebo/SoC anchor toggle)
+    // prove both per-endpoint toggles land on the shared curve/projection/
+    // readout pipeline with the same zero-pipeline-change contract as
+    // logistic/linear/loess. Deterministic fitting (grid + golden-section,
+    // no starting values) means this scenario is exactly reproducible.
+    name: "s17-emax-fourth-family",
+    run: async () => {
+      await setEndpoints(["brls", "prls"]);
+      await page.locator('.nav-btn[data-rail="analysis"]').click();
+      await page.evaluate(() => {
+        for (const ep of ["brls", "prls"]) {
+          const sel = document.querySelector(`select[data-endpoint-model="${ep}"]`);
+          if (sel && sel.value !== "emax") {
+            sel.value = "emax";
+            sel.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        }
+      });
+      await page.evaluate(() => {
+        const gamma = document.querySelector('input[data-emax-gamma="brls"]');
+        if (gamma && !gamma.checked) {
+          gamma.checked = true;
+          gamma.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        const e0 = document.querySelector('input[data-emax-e0="prls"]');
+        if (e0 && e0.checked) {
+          e0.checked = false;
+          e0.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+      await setMode("advanced");
+      await setFacets(["endpoints"], []);
+      await setSel("advancedColorBy", "sex");
+      await setSel("advancedGroupCurves", "sex");
+      await setSel("advancedLinetypeBy", "endpoints");
+      await resetSelection();
+      await settle();
+      await clickRow("1200 mg");
+      await settle();
+    }
   }
 ];
 

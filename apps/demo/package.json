@@ -16,7 +16,8 @@
     "@er-explorer/model-linear": "workspace:*",
     "@er-explorer/renderer": "workspace:*",
     "@er-explorer/session-engine": "workspace:*",
-    "@er-explorer/model-loess": "workspace:*"
+    "@er-explorer/model-loess": "workspace:*",
+    "@er-explorer/model-emax": "workspace:*"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",

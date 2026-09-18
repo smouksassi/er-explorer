@@ -1,7 +1,12 @@
 import type { DatasetContext, EndpointId } from "./datasetContext";
 import type { PredictionResult } from "@er-explorer/analysis";
 
-export type EndpointAnalysisModel = "logistic" | "linear" | "loess";
+/** "emax" is CONTINUOUS-endpoints-only (parked for binary — a nonlinear Emax
+ * nested inside a nonlinear logit link needs more data than is typically
+ * available; see `.ai/CONTINUE_HERE.md`). The Endpoint Models UI enforces
+ * this by omitting the option for binary endpoints — nothing downstream
+ * needs to re-check it. */
+export type EndpointAnalysisModel = "logistic" | "linear" | "loess" | "emax";
 
 /**
  * The DATA KIND of an endpoint (binary responder vs continuous scale) — decides

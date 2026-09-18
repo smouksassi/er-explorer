@@ -44,6 +44,9 @@ importers:
       '@er-explorer/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@er-explorer/model-emax':
+        specifier: workspace:*
+        version: link:../../packages/model-emax
       '@er-explorer/model-linear':
         specifier: workspace:*
         version: link:../../packages/model-linear
@@ -88,6 +91,12 @@ importers:
         version: 2.1.9(@types/node@20.19.43)
 
   packages/domain:
+    devDependencies:
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@20.19.43)
+
+  packages/model-emax:
     devDependencies:
       vitest:
         specifier: ^2.1.8

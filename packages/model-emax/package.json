@@ -1,0 +1,26 @@
+{
+  "name": "@er-explorer/model-emax",
+  "version": "0.0.1",
+  "private": false,
+  "description": "Emax/Hill AnalysisModel plugin for ER Explorer - deterministic grid+refine fitting (no starting values), continuous endpoints only.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    "import": "./dist/index.js",
+    "require": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm typecheck && vitest run",
+    "lint": "eslint . --ext .ts",
+    "clean": "rimraf dist tsconfig.build.tsbuildinfo tsconfig.tsbuildinfo"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  },
+  "files": ["dist"],
+  "keywords": ["er-explorer", "analysis", "emax", "hill", "plugin"],
+  "license": "MIT"
+}

@@ -19,6 +19,7 @@ import {
 } from "@er-explorer/analysis";
 import { linearAnalysisModel, type LinearParams } from "@er-explorer/model-linear";
 import { fitLoess, predictLoess, predictLoessAt, type LoessFit } from "@er-explorer/model-loess";
+import { fitEmax, predictEmax, predictEmaxAt, describeEmaxFit, type EmaxFit } from "@er-explorer/model-emax";
 import {
   SVGRenderer,
   GridLayer,
@@ -329,6 +330,12 @@ function loessSettingsFor(endpoint: Endpoint): { span: number; degree: 1 | 2 } {
   return state.loessSettings[endpoint] ?? { span: 0.75, degree: 2 };
 }
 
+/** Per-endpoint Emax toggles (user-owned; default = plain Emax with a
+ * baseline anchor: γ fixed at 1, E0 estimated). */
+function emaxSettingsFor(endpoint: Endpoint): { estimateGamma: boolean; estimateE0: boolean } {
+  return state.emaxSettings[endpoint] ?? { estimateGamma: false, estimateE0: true };
+}
+
 function ensureEndpointAnalysisDefaults(): void {
   if (!dataset) return;
   for (const e of endpointOrder()) {
@@ -572,6 +579,10 @@ interface DemoState {
   endpointModels: Record<string, EndpointAnalysisModel>;
   /** Per-endpoint loess span/degree (only read when that endpoint's model is "loess"). */
   loessSettings: Record<string, { span: number; degree: 1 | 2 }>;
+  /** Per-endpoint Emax toggles (only read when that endpoint's model is "emax").
+   * estimateGamma default false (γ fixed at 1); estimateE0 default true —
+   * turn off when there is no placebo/SoC anchor (E0 fixed at 0). */
+  emaxSettings: Record<string, { estimateGamma: boolean; estimateE0: boolean }>;
   endpointNormScales: Record<string, EndpointNormScale>;
   dataFilters: DataFilterRule[];
   compareDistByEndpoint: boolean;
@@ -615,6 +626,7 @@ const state: DemoState = {
   endpointColorScheme: "default",
   endpointModels: {},
   loessSettings: {},
+  emaxSettings: {},
   endpointNormScales: {},
   dataFilters: [],
   compareDistByEndpoint: true,
@@ -1200,7 +1212,8 @@ function panelWidth(): number {
 type EndpointFit =
   | { kind: "logistic"; model: LogisticModel }
   | { kind: "linear"; model: LinearParams }
-  | { kind: "loess"; model: LoessFit };
+  | { kind: "loess"; model: LoessFit }
+  | { kind: "emax"; model: EmaxFit };
 
 function fitFor(metric: ExposureMetric, endpoint: Endpoint): { fit: EndpointFit; xs: number[]; ys: number[] } {
   return fitForCohort(metric, endpoint, recordsWithEndpoint(endpoint));
@@ -1221,6 +1234,14 @@ function fitForCohort(
     const model = fitLoess(xs, ys, loessSettingsFor(endpoint));
     if (!model) throw new Error(`Too few points for loess (${metric}/${endpoint})`);
     return { fit: { kind: "loess", model }, xs, ys };
+  }
+  // Emax is continuous-endpoints-only (parked for binary — see
+  // .ai/CONTINUE_HERE.md); a stale session's "emax" on a now-binary endpoint
+  // falls through to logistic rather than attempting continuous math on it.
+  if (family === "emax" && isContinuousEndpoint(endpoint)) {
+    const model = fitEmax(xs, ys, emaxSettingsFor(endpoint));
+    if (!model) throw new Error(`Too few points/doses for Emax (${metric}/${endpoint})`);
+    return { fit: { kind: "emax", model }, xs, ys };
   }
   if (family === "linear") {
     const outcome = linearAnalysisModel.fit({ exposures: xs, responses: ys });
@@ -1681,6 +1702,19 @@ function curveFor(fit: EndpointFit, xs: number[], ys: number[], xDomain: [number
     }
     return { estimates: preds, metadata: {} };
   }
+  if (fit.kind === "emax") {
+    // Delta-method (Gauss-Newton) pointwise band — the ggquickeda-adjacent
+    // recipe, same shape as loess's H4b band. Bootstrap for Emax is future
+    // work (like loess), so both CI settings draw the same band for now.
+    const preds = predictEmax(fit.model, dense);
+    if (state.ciMethod === "none") {
+      return { estimates: preds.map((e) => ({ ...e, lower: NaN, upper: NaN })), metadata: {} };
+    }
+    // Fresh literal copy: PredictionResult.estimates is Array<Record<string, number>>,
+    // which (per TS) a NAMED interface like EmaxPrediction doesn't structurally
+    // satisfy without one — loess's inline-literal return type gets this for free.
+    return { estimates: preds.map((e) => ({ ...e })), metadata: {} };
+  }
   if (fit.kind === "linear") {
     const surface = linearAnalysisModel.predict(fit.model);
     const points = surface.evaluate(dense);
@@ -1718,6 +1752,55 @@ function curveFor(fit: EndpointFit, xs: number[], ys: number[], xDomain: [number
     resamples: state.bootstrapResamples,
     seed: state.bootstrapSeed
   });
+}
+
+/**
+ * Universal equation + parameter-estimate description, one branch per
+ * `EndpointFit.kind` — the same "switch on fit.kind" pattern `curveFor`/
+ * `fitAt` already use. Every family describes itself; this is a leaf DISPLAY
+ * concern (the readout tooltip and the Endpoint Models line), not a pipeline
+ * seam, so ADR-0013's "adapter only" contract is unaffected — a family that
+ * skips this switch simply shows no equation, no wiring elsewhere breaks.
+ */
+function describeFit(fit: EndpointFit): { equation: string; params: Array<{ label: string; value: number; se?: number }> } {
+  if (fit.kind === "emax") return describeEmaxFit(fit.model);
+  if (fit.kind === "loess") {
+    const m = fit.model;
+    return {
+      equation: `local weighted regression (span ${m.span}, degree ${m.degree})`,
+      params: [
+        { label: "enp (effective params)", value: m.enp },
+        { label: "σ (residual)", value: m.sigma }
+      ]
+    };
+  }
+  const seFrom = (cov: { b00: number; b01: number; b11: number } | null): [number | undefined, number | undefined] =>
+    cov ? [Math.sqrt(Math.max(cov.b00, 0)), Math.sqrt(Math.max(cov.b11, 0))] : [undefined, undefined];
+  if (fit.kind === "linear") {
+    const [seIntercept, seSlope] = seFrom(fit.model.covariance);
+    return {
+      equation: "y = a + b·x",
+      params: [
+        { label: "a (intercept)", value: fit.model.intercept, se: seIntercept },
+        { label: "b (slope)", value: fit.model.slope, se: seSlope }
+      ]
+    };
+  }
+  const [seIntercept, seSlope] = seFrom(fit.model.covariance);
+  return {
+    equation: "logit(p) = a + b·x",
+    params: [
+      { label: "a (intercept)", value: fit.model.intercept, se: seIntercept },
+      { label: "b (slope)", value: fit.model.slope, se: seSlope }
+    ]
+  };
+}
+
+/** Plain-text rendering of {@link describeFit} for a `title` tooltip attribute. */
+function describeFitTooltip(fit: EndpointFit): string {
+  const { equation, params } = describeFit(fit);
+  const lines = params.map((p) => `${p.label} = ${p.value.toFixed(3)}${p.se !== undefined ? ` (SE ${p.se.toFixed(3)})` : ""}`);
+  return [equation, ...lines].join("\n");
 }
 
 /** Two-line fit callout: estimate, then optional bracketed CI (no "Fit" prefix — color encodes split vs bin). */
@@ -4440,9 +4523,11 @@ function updateReadout(
         const fitAt = (x: number): number =>
           fit.kind === "loess"
             ? predictLoessAt(fit.model, x).estimate
-            : fit.kind === "linear"
-              ? linearFamily.fittedAt(fit.model as never, x)
-              : logisticFamily.fittedAt(fit.model as never, x);
+            : fit.kind === "emax"
+              ? predictEmaxAt(fit.model, x).estimate
+              : fit.kind === "linear"
+                ? linearFamily.fittedAt(fit.model as never, x)
+                : logisticFamily.fittedAt(fit.model as never, x);
         const lineColor = spec?.color.kind === "endpoints" ? endpointColor(endpoint) : groupColor;
         const lineLabel = lineEndpoints.length > 1 || endpoints.length > 1 ? ds.endpointLabel(endpoint) : label;
         const endpointN = part.rows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).length;
@@ -4458,7 +4543,7 @@ function updateReadout(
               ? `fit @ Min ${fitAt(s.min).toFixed(decimals)} · Med ${fitAt(s.median).toFixed(decimals)} · Max ${fitAt(s.max).toFixed(decimals)}`
               : `fit @ ${s.median.toFixed(1)} → ${fitAt(s.median).toFixed(decimals)}`;
         blocks.push(
-          `<div class="readout-line-fit"><span style="color:${lineColor}">${escapeHtml(lineLabel)}</span> — ${fitStats}${nNote}</div>`
+          `<div class="readout-line-fit" title="${escapeAttr(describeFitTooltip(fit))}"><span style="color:${lineColor}">${escapeHtml(lineLabel)}</span> — ${fitStats}${nNote}</div>`
         );
       }
     }
@@ -4696,6 +4781,23 @@ function resetSelection(): void {
  * Dataset upload / column mapping
  * ---------------------------------------------------------------------- */
 
+/** (b) The Endpoint Models line under each select: the pooled filtered-cohort
+ * fit's equation + parameter estimates, via the universal {@link describeFit}
+ * — computed on the PRIMARY exposure metric (same convention `buildSessionState`
+ * uses); silently omitted when there is no primary metric or the fit abstains
+ * (below minimum support), same as the readout's own "fit n/a" case elsewhere. */
+function pooledFitDescriptionHtml(endpoint: Endpoint): string {
+  const metric = selectedExposureMetrics()[0];
+  if (!metric) return "";
+  const fitResult = tryFitForCohort(metric, endpoint, recordsWithEndpoint(endpoint));
+  if (!fitResult) return "";
+  const { equation, params } = describeFit(fitResult.fit);
+  const paramText = params
+    .map((p) => `${p.label} = ${p.value.toFixed(3)}${p.se !== undefined ? ` ± ${p.se.toFixed(3)}` : ""}`)
+    .join(" &nbsp; ");
+  return `<div class="endpoint-model-equation muted">${escapeHtml(equation)} &nbsp; — &nbsp; ${paramText}</div>`;
+}
+
 function syncEndpointModelsUi(): void {
   if (!dataset) {
     endpointModelsListEl.innerHTML = "";
@@ -4707,25 +4809,40 @@ function syncEndpointModelsUi(): void {
     .map((e) => {
       const model = state.endpointModels[e] ?? inferDefaultEndpointModel(ds, e);
       // Model options follow the DATA KIND (ADR-0013): binary endpoints choose
-      // Logistic or Loess; continuous choose Linear or Loess. Loess exposes its
-      // R-default tuning (span 0.75, degree 2) — user-owned, per endpoint.
+      // Logistic or Loess; continuous choose Linear, Loess, or Emax (Emax is
+      // continuous-only — see .ai/CONTINUE_HERE.md). Loess/Emax expose their
+      // user-owned tuning per endpoint.
       const continuous = endpointDataKind(ds, e) === "continuous";
       const nativeOption = continuous
         ? `<option value="linear" ${model === "linear" ? "selected" : ""}>Linear</option>`
         : `<option value="logistic" ${model === "logistic" ? "selected" : ""}>Logistic</option>`;
+      const emaxOption = continuous
+        ? `<option value="emax" ${model === "emax" ? "selected" : ""}>Emax</option>`
+        : "";
       const loess = loessSettingsFor(e);
       const loessControls =
         model === "loess"
           ? `<span class="loess-controls">span <input type="number" data-loess-span="${escapeAttr(e)}" value="${loess.span}" min="0.1" max="2" step="0.05" style="width:64px" />
              deg <select data-loess-degree="${escapeAttr(e)}" style="width:52px"><option value="1" ${loess.degree === 1 ? "selected" : ""}>1</option><option value="2" ${loess.degree === 2 ? "selected" : ""}>2</option></select></span>`
           : "";
+      const emax = emaxSettingsFor(e);
+      const emaxControls =
+        model === "emax"
+          ? `<span class="emax-controls">
+               <label><input type="checkbox" data-emax-gamma="${escapeAttr(e)}" ${emax.estimateGamma ? "checked" : ""} /> estimate γ (sigmoidicity)</label>
+               <label><input type="checkbox" data-emax-e0="${escapeAttr(e)}" ${emax.estimateE0 ? "checked" : ""} /> estimate E0 (baseline)</label>
+             </span>`
+          : "";
       return `<div class="endpoint-model-row" data-endpoint="${escapeAttr(e)}">
         <span>${escapeHtml(ds.endpointLabel(e))}</span>
         <select data-endpoint-model="${escapeAttr(e)}">
           ${nativeOption}
           <option value="loess" ${model === "loess" ? "selected" : ""}>Loess</option>
+          ${emaxOption}
         </select>
         ${loessControls}
+        ${emaxControls}
+        ${pooledFitDescriptionHtml(e)}
       </div>`;
     })
     .join("");
@@ -4733,7 +4850,10 @@ function syncEndpointModelsUi(): void {
     sel.onchange = () => {
       const ep = sel.dataset.endpointModel as Endpoint | undefined;
       if (!ep) return;
-      const val = sel.value === "linear" || sel.value === "loess" ? (sel.value as EndpointAnalysisModel) : "logistic";
+      const val =
+        sel.value === "linear" || sel.value === "loess" || sel.value === "emax"
+          ? (sel.value as EndpointAnalysisModel)
+          : "logistic";
       state.endpointModels[ep] = val;
       if (isContinuousEndpoint(ep)) ensureNormScaleForEndpoint(ep);
       syncCompareNormUi(selectedEndpoints(), guidedOverlayActive(selectedEndpoints().length));
@@ -4748,6 +4868,9 @@ function syncEndpointModelsUi(): void {
       const span = Number(inp.value);
       if (!Number.isFinite(span) || span < 0.1 || span > 2) return;
       state.loessSettings[ep] = { ...loessSettingsFor(ep), span };
+      // Refresh the (b) pooled-fit equation preview too — every model's
+      // settings change should update it identically, loess included.
+      syncEndpointModelsUi();
       render();
     };
   });
@@ -4756,6 +4879,25 @@ function syncEndpointModelsUi(): void {
       const ep = sel.dataset.loessDegree as Endpoint | undefined;
       if (!ep) return;
       state.loessSettings[ep] = { ...loessSettingsFor(ep), degree: sel.value === "1" ? 1 : 2 };
+      syncEndpointModelsUi();
+      render();
+    };
+  });
+  endpointModelsListEl.querySelectorAll<HTMLInputElement>("input[data-emax-gamma]").forEach((inp) => {
+    inp.onchange = () => {
+      const ep = inp.dataset.emaxGamma as Endpoint | undefined;
+      if (!ep) return;
+      state.emaxSettings[ep] = { ...emaxSettingsFor(ep), estimateGamma: inp.checked };
+      syncEndpointModelsUi();
+      render();
+    };
+  });
+  endpointModelsListEl.querySelectorAll<HTMLInputElement>("input[data-emax-e0]").forEach((inp) => {
+    inp.onchange = () => {
+      const ep = inp.dataset.emaxE0 as Endpoint | undefined;
+      if (!ep) return;
+      state.emaxSettings[ep] = { ...emaxSettingsFor(ep), estimateE0: inp.checked };
+      syncEndpointModelsUi();
       render();
     };
   });
@@ -5388,6 +5530,7 @@ function buildSessionState(): SessionState {
       endpointColorScheme: state.endpointColorScheme,
       endpointModels: { ...state.endpointModels },
       loessSettings: { ...state.loessSettings },
+      emaxSettings: { ...state.emaxSettings },
       endpointNormScales: { ...state.endpointNormScales },
       dataFilters: state.dataFilters.map((r) => ({ ...r, values: [...r.values] })),
       compareDistByEndpoint: state.compareDistByEndpoint,
@@ -5592,6 +5735,10 @@ function loadSessionFromFile(file: File): void {
       const loessRaw = session.settings["loessSettings"];
       if (loessRaw && typeof loessRaw === "object" && !Array.isArray(loessRaw)) {
         state.loessSettings = { ...(loessRaw as Record<string, { span: number; degree: 1 | 2 }>) };
+      }
+      const emaxRaw = session.settings["emaxSettings"];
+      if (emaxRaw && typeof emaxRaw === "object" && !Array.isArray(emaxRaw)) {
+        state.emaxSettings = { ...(emaxRaw as Record<string, { estimateGamma: boolean; estimateE0: boolean }>) };
       }
       const normRaw = session.settings["endpointNormScales"];
       if (normRaw && typeof normRaw === "object" && !Array.isArray(normRaw)) {
