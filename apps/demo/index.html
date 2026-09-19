@@ -300,6 +300,9 @@
   .readout.readout-collapsed { max-height: 3.25rem; min-height: 3.25rem; overflow: auto; }
   .readout-line-exposure { margin-bottom: 2px; }
   .readout-line-fit { margin-bottom: 4px; }
+  /* [title] only matches a line with a real fit attached (the "fit n/a"
+     case carries no title) - the cue never lies about what's hoverable. */
+  .readout-line-fit[title] { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
   .filter-rules { display: flex; flex-direction: column; gap: 10px; }
   .filter-rule {
     border: 1px solid var(--stroke); border-radius: 10px; padding: 10px; background: var(--elevated);
