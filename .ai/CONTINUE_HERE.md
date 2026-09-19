@@ -271,8 +271,16 @@ dash/label fall back to the same generic mechanisms icgi7 already uses;
 defaults to Linear like any continuous endpoint, user picks Emax themselves.
 All 17 snapshots stayed byte-identical (an available-but-unselected endpoint
 is fully inert to existing defaults — verified).
-NEXT: provenance check (177 vs 176), E3 strip-rule re-challenge, and
-eventually the deferred GAM-based binary loess redesign (see project memory).
+**PROVENANCE CHECK CLOSED (2026-09-19):** re-verified — 176 missing CRCL rows
+(25%), consistent across the raw bundled CSV, the generated dataset, and the
+app's own mapping-panel display. User confirmed 176 matches their R-side
+count now; the old "177 vs 176" discrepancy is resolved (most likely a side
+effect of the QA-round-13 missing-as-zero bin fix or the later I9
+"(missing)"-level work, neither of which explicitly closed this backlog line
+at the time). No code change needed.
+NEXT: E3 strip-rule re-challenge — user opted to discuss now (session
+in progress); then eventually the deferred GAM-based binary loess redesign
+(see project memory).
 
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl
