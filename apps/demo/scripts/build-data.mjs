@@ -41,7 +41,8 @@ const records = raw.slice(1).map((line, i) => {
     icgi2: Number(row.ICGI2),
     icgi3: Number(row.ICGI3),
     brls: numOrNull(row.BRLS),
-    prls: numOrNull(row.PRLS)
+    prls: numOrNull(row.PRLS),
+    icgiemax: numOrNull(row.ICGIEMAX)
   };
 });
 
@@ -66,6 +67,11 @@ const body = `export interface ExposureResponseRecord {
   icgi3: number;
   brls: number | null;
   prls: number | null;
+  /** Synthetic (baked-in, seeded, reproducible): a genuine, well-identified
+   * Emax showcase endpoint keyed to each row's real AUC — E0=10, Emax=25,
+   * EC50=90, γ=1.4, noise SD=3. Demonstrates the fourth model family
+   * out-of-the-box in the same dataset as everything else. */
+  icgiemax: number | null;
 }
 
 export const RECORDS: ExposureResponseRecord[] = ${JSON.stringify(records)};\n`;

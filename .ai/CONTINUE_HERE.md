@@ -239,9 +239,40 @@ fourth-family proof; s1–s16 byte-identical — zero pipeline changes, only a
 new adapter. Also fixed: verify-build.mjs was missing model-loess AND
 model-emax from its package list (worked before only via a stale local
 dist/); both added.
-NEXT: user visual pass on Emax (try span/E0/γ toggles, R nls() cross-check
-per the UI hint); then provenance check (177 vs 176), E3 strip-rule
-re-challenge, and eventually the deferred GAM-based binary loess redesign.
+**USER R CROSS-CHECK (2026-09-19):** `nls()` on real BRLS/AUC → "singular
+gradient" (fails). `minpack.lm::nlsLM()` "converges" to EC50 = −14 (nonsensical,
+outside AUC range), RSS 52168 — WORSE than a flat-line null model (RSS 17455).
+Our own fit ties the null model (RSS 17448) with EC50 pinned to the grid's
+lower edge. Conclusion, independently triple-confirmed: BRLS genuinely has no
+Emax-shaped signal vs AUC; R's local optimizer fell into exactly the trap this
+design exists to avoid. Simulated well-behaved data (E0=20/Emax=15/EC50=80)
+recovered all three params within 1 SE, cross-checkable in R (CSV + R script
+sent to user).
+
+**BOUNDARY-PINNED WARNING LANDED (2026-09-19) — the follow-up from the above:**
+a best grid index sitting at EITHER edge (EC50 or γ) means the golden-section
+refine could not escape the coarse grid's outer bound — the honest signature
+of a poorly-identified parameter. `EmaxFit.ec50Boundary`/`gammaBoundary:
+"lower"|"upper"|null`; `describeFit`'s shared shape gained an optional
+`warning?: string` (universal slot, only Emax populates it today). Surfaced
+on BOTH existing display sites (readout tooltip + Endpoint Models preview,
+new `.endpoint-model-warning` block) — neither is part of the snapshot
+capture() shape, so all 17 baselines stayed byte-identical (verified).
+model-emax tests: 17 (was 14) — 3 new pin the step-only/well-identified/
+γ-sharp-step cases.
+
+**ICGIEMAX SYNTHETIC ENDPOINT LANDED (2026-09-19):** a new continuous
+endpoint baked into `apps/demo/data/icgi.csv`, keyed to each row's real AUC
+(E0=10, Emax=25, EC50=90, γ=1.4 — deliberately non-1 so "estimate γ" has
+something genuine to recover; noise SD=3; seeded/reproducible). All wiring is
+data-driven (CSV → build-data.mjs → datasetContext.ts → columnMapping.ts's
+EFFICGI_DEFAULT_ROLES) with zero per-endpoint-name special cases — color/
+dash/label fall back to the same generic mechanisms icgi7 already uses;
+defaults to Linear like any continuous endpoint, user picks Emax themselves.
+All 17 snapshots stayed byte-identical (an available-but-unselected endpoint
+is fully inert to existing defaults — verified).
+NEXT: provenance check (177 vs 176), E3 strip-rule re-challenge, and
+eventually the deferred GAM-based binary loess redesign (see project memory).
 
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl

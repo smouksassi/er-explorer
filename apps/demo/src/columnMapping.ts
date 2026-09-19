@@ -40,7 +40,8 @@ export const EFFICGI_DEFAULT_ROLES: Record<string, DemoColumnRole> = {
   icgi2: "endpoint",
   icgi3: "endpoint",
   brls: "endpoint",
-  prls: "endpoint"
+  prls: "endpoint",
+  icgiemax: "endpoint"
 };
 
 export function normalizeColumnKey(columnId: string): string {

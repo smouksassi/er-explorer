@@ -26,7 +26,7 @@ export type EndpointId = string;
 const DOSE_PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f"];
 
 export const DEFAULT_EXPOSURE_ORDER: MetricId[] = ["auc", "cmax"];
-export const DEFAULT_ENDPOINT_ORDER: EndpointId[] = ["icgi", "icgi7", "icgi2", "icgi3", "brls", "prls"];
+export const DEFAULT_ENDPOINT_ORDER: EndpointId[] = ["icgi", "icgi7", "icgi2", "icgi3", "brls", "prls", "icgiemax"];
 
 const LEGACY_CONTINUOUS_ENDPOINTS = new Set<string>(["brls", "prls"]);
 
@@ -101,7 +101,8 @@ export class DatasetContext {
       icgi2: r.icgi2,
       icgi3: r.icgi3,
       brls: r.brls,
-      prls: r.prls
+      prls: r.prls,
+      icgiemax: r.icgiemax
     }));
   }
 

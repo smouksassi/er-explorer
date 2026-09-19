@@ -408,3 +408,66 @@ second time after loess).
 `model-emax`) — it only "worked" because a stale `dist/` from an earlier
 manual build persisted locally; a fresh checkout would have failed
 `tsc apps/demo` on either import. Both are now in the list.
+
+## Emax addendum: boundary-pinned parameters are flagged, never hidden (2026-09-19)
+
+**Motivating find:** the user's real BRLS data has essentially no Emax-shaped
+signal against AUC (independently confirmed: our fit, R's `nls()` — singular
+gradient — and R's `minpack.lm::nlsLM()` — converged to a nonsensical negative
+EC50 = −14, RSS 52168, WORSE than a flat-line null model at RSS 17455 — all
+agree). Our own fit tied the null model (RSS 17448) with EC50 pinned to
+`xMinPos/50`, EXACTLY the grid's lower edge — proving the local-optimum trap
+`nlsLM` fell into is a real failure class this design avoids, but also
+surfacing a gap: a boundary-pinned parameter was silently presented as an
+ordinary point estimate.
+
+**Rule:** the golden-section refine only ever narrows within the neighborhood
+of the coarse grid's best index — it can never search past `ec50Grid[0]`/
+`[last]` or `gammaGrid[0]`/`[last]`. A best index sitting AT either edge is
+therefore a reliable, cheap-to-compute signature that the unconstrained
+optimum wants to go further and the search grid stopped it there (a flat or
+edge-monotone RSS surface) — not a numerical accident. `EmaxFit` carries
+`ec50Boundary`/`gammaBoundary: "lower" | "upper" | null`; `describeEmaxFit`
+turns a non-null flag into a `warning` string. `describeFit`'s shared return
+shape gained an optional `warning?: string` slot (universal across all four
+families, even though only Emax populates it today — same "shared contract,
+per-family population" pattern as the rest of `describeFit`), surfaced via
+both existing display sites: the readout-line tooltip and the Endpoint Models
+preview line (new `.endpoint-model-warning` block).
+
+**Guard:** model-emax tests pin all three cases — a step-only (placebo-vs-
+dosed) pathology pins EC50 low with a warning; a well-identified interior fit
+reports no flags/no warning; a step-sharp curve pins γ high independently of
+EC50. Neither display surface (tooltip `title`, Endpoint Models panel) is
+part of the visual-snapshot `capture()` shape, so all 17 baselines stayed
+byte-identical — verified, not assumed.
+
+## Bundled dataset: ICGIEMAX synthetic showcase endpoint (2026-09-19)
+
+A new continuous endpoint, `icgiemax`, baked into `apps/demo/data/icgi.csv`
+(and only there — `effICGI.csv` is a dormant, unused fallback, left
+untouched) — deterministic (seeded, reproducible), keyed to each row's REAL
+AUC value: E0=10, Emax=25, EC50=90, **γ=1.4** (deliberately non-1, so the
+"estimate γ" toggle has something genuine to recover), noise SD=3. With γ
+fixed (the default), the misspecified model compensates with an inflated
+Emax/EC50; toggling γ estimation recovers all four true parameters within
+noise — a deliberately instructive default/toggle contrast, not just a clean
+recovery demo.
+
+Wiring required (all data-driven, zero per-name special cases): the CSV
+column, `build-data.mjs`'s record mapping + interface field,
+`datasetContext.ts`'s `bundledRowsFromRecords` field pass-through, and
+`columnMapping.ts`'s `EFFICGI_DEFAULT_ROLES` entry (the bundled-reload path
+defaults an ABSENT column to role "ignore", so this entry is required even
+though the generic `guessColumnRole` heuristic would already classify
+"icgiemax" as an endpoint via its "icgi" prefix — that heuristic only applies
+to a freshly-uploaded CSV, not the bundled-reload shortcut). Endpoint color/
+dash/label all fall back to the existing generic palette/uppercase-id
+mechanisms with no new per-name entries — same precedent `icgi7` already
+established. The endpoint defaults to Linear (the generic continuous
+default), not to Emax — no per-column model-name special case either; the
+user picks Emax from Endpoint Models like any other endpoint.
+
+All 17 existing snapshots stayed byte-identical after adding the endpoint —
+confirms an available-but-unselected endpoint is fully inert to every
+existing default view.
