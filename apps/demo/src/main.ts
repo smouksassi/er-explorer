@@ -1762,7 +1762,14 @@ function curveFor(fit: EndpointFit, xs: number[], ys: number[], xDomain: [number
  * seam, so ADR-0013's "adapter only" contract is unaffected — a family that
  * skips this switch simply shows no equation, no wiring elsewhere breaks.
  */
-function describeFit(fit: EndpointFit): { equation: string; params: Array<{ label: string; value: number; se?: number }> } {
+function describeFit(fit: EndpointFit): {
+  equation: string;
+  params: Array<{ label: string; value: number; se?: number }>;
+  /** Universal slot (currently only Emax populates it): a family may flag
+   * that a parameter is poorly identified rather than presenting it as an
+   * ordinary point estimate. */
+  warning?: string;
+} {
   if (fit.kind === "emax") return describeEmaxFit(fit.model);
   if (fit.kind === "loess") {
     const m = fit.model;
@@ -1798,9 +1805,9 @@ function describeFit(fit: EndpointFit): { equation: string; params: Array<{ labe
 
 /** Plain-text rendering of {@link describeFit} for a `title` tooltip attribute. */
 function describeFitTooltip(fit: EndpointFit): string {
-  const { equation, params } = describeFit(fit);
+  const { equation, params, warning } = describeFit(fit);
   const lines = params.map((p) => `${p.label} = ${p.value.toFixed(3)}${p.se !== undefined ? ` (SE ${p.se.toFixed(3)})` : ""}`);
-  return [equation, ...lines].join("\n");
+  return [equation, ...lines, ...(warning ? [warning] : [])].join("\n");
 }
 
 /** Two-line fit callout: estimate, then optional bracketed CI (no "Fit" prefix — color encodes split vs bin). */
@@ -4791,11 +4798,14 @@ function pooledFitDescriptionHtml(endpoint: Endpoint): string {
   if (!metric) return "";
   const fitResult = tryFitForCohort(metric, endpoint, recordsWithEndpoint(endpoint));
   if (!fitResult) return "";
-  const { equation, params } = describeFit(fitResult.fit);
+  const { equation, params, warning } = describeFit(fitResult.fit);
   const paramText = params
     .map((p) => `${p.label} = ${p.value.toFixed(3)}${p.se !== undefined ? ` ± ${p.se.toFixed(3)}` : ""}`)
     .join(" &nbsp; ");
-  return `<div class="endpoint-model-equation muted">${escapeHtml(equation)} &nbsp; — &nbsp; ${paramText}</div>`;
+  const warningHtml = warning
+    ? `<div class="endpoint-model-warning">${escapeHtml(warning)}</div>`
+    : "";
+  return `<div class="endpoint-model-equation muted">${escapeHtml(equation)} &nbsp; — &nbsp; ${paramText}</div>${warningHtml}`;
 }
 
 function syncEndpointModelsUi(): void {

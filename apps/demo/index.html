@@ -173,6 +173,11 @@
   .emax-controls { display: flex; gap: 14px; font-weight: 400; }
   .emax-controls label { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
   .endpoint-model-equation { font-weight: 400; font-size: 11px; line-height: 1.4; }
+  .endpoint-model-warning {
+    grid-column: 1 / -1; font-weight: 600; font-size: 11px; line-height: 1.4;
+    color: #b45309; margin-top: 2px;
+  }
+  [data-theme="dark"] .endpoint-model-warning { color: #fbbf24; }
   .compare-norm-row input[type="number"] {
     width: 100%; border: 1px solid var(--stroke); border-radius: 8px; padding: 5px 6px;
     background: var(--elevated); color: var(--text); font-size: 12px;

@@ -159,6 +159,45 @@ describe("tQuantile975", () => {
   });
 });
 
+describe("fitEmax — boundary diagnostic (I11-adjacent: flag, never hide, a poorly-identified fit)", () => {
+  it("a genuinely flat dose-response pins EC50 to the LOWER grid edge, no warning when well-identified", () => {
+    // A placebo-vs-dosed STEP with no further graded trend among the doses
+    // themselves — exactly the real BRLS-vs-AUC pathology this diagnostic
+    // targets: any sufficiently small EC50 approximates the step equally
+    // well, so RSS keeps (trivially) improving as EC50 shrinks toward zero
+    // with no genuine interior optimum to settle on.
+    const xs = exposureGrid(30, 400);
+    const ys = xs.map((x, i) => (x === 0 ? 20 : 23) + noise(i));
+    const fit = fitEmax(xs, ys)!;
+    expect(fit).not.toBeNull();
+    expect(fit.ec50Boundary).toBe("lower");
+    expect(fit.gammaBoundary).toBeNull(); // γ not estimated here — never flagged
+    const { warning } = describeEmaxFit(fit);
+    expect(warning).toContain("EC50");
+    expect(warning).toContain("boundary");
+  });
+
+  it("a well-identified interior fit reports NO boundary flags and NO warning", () => {
+    const xs = exposureGrid(20, 500);
+    const ys = xs.map((x, i) => 10 + (40 * x) / (50 + x) + noise(i));
+    const fit = fitEmax(xs, ys)!;
+    expect(fit.ec50Boundary).toBeNull();
+    expect(fit.gammaBoundary).toBeNull();
+    expect(describeEmaxFit(fit).warning).toBeUndefined();
+  });
+
+  it("γ pinned to its grid edge is flagged independently of EC50", () => {
+    // A curve so steep it behaves like a step function - γ wants to run past
+    // the grid's upper bound (4) while EC50 stays well-identified.
+    const xs = exposureGrid(24, 300);
+    const ys = xs.map((x, i) => (x > 40 ? 60 : 0) + noise(i) * 0.2);
+    const fit = fitEmax(xs, ys, { estimateGamma: true })!;
+    expect(fit.gammaBoundary).toBe("upper");
+    const { warning } = describeEmaxFit(fit);
+    expect(warning).toContain("γ");
+  });
+});
+
 describe("describeEmaxFit — universal equation/parameter display", () => {
   it("plain Emax (γ fixed, E0 estimated): equation and all three params with SE", () => {
     const xs = exposureGrid(20, 500);

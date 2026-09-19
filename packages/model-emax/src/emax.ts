@@ -45,6 +45,12 @@ export interface EmaxFit {
   /** Covariance matrix over the ACTIVE parameters only, ordered as {@link paramOrder}. */
   cov: number[][];
   paramOrder: ParamKey[];
+  /** Non-null when the search pinned EC50 (or γ) against the edge of its grid
+   * rather than settling on an interior value — the honest signature of a
+   * poorly-identified parameter (a flat or edge-monotone RSS surface), not a
+   * numerical accident. `null` = the fit found a genuine interior optimum. */
+  ec50Boundary: "lower" | "upper" | null;
+  gammaBoundary: "lower" | "upper" | null;
 }
 
 export interface EmaxPrediction {
@@ -228,6 +234,19 @@ export function fitEmax(xs: number[], ys: number[], options?: EmaxOptions): Emax
   const final = rssAt(xs, ys, ec50, gamma, estimateE0);
   if (!final) return null;
 
+  // Boundary diagnostic: the golden-section refine only ever narrows within
+  // the neighborhood of the COARSE grid's best index (it never searches past
+  // ec50Grid[0]/[last] or gammaGrid[0]/[last]) — so a best index sitting AT
+  // either edge means the unconstrained optimum wants to go further and the
+  // search grid stopped it there. That is the honest signature of a poorly-
+  // identified parameter (a flat or monotone-to-the-edge RSS surface), not a
+  // numerical accident — surfaced to the caller rather than silently reported
+  // as an ordinary point estimate.
+  const ec50Boundary: "lower" | "upper" | null =
+    bestEc50Idx === 0 ? "lower" : bestEc50Idx === ec50Grid.length - 1 ? "upper" : null;
+  const gammaBoundary: "lower" | "upper" | null =
+    estimateGamma ? (bestGammaIdx === 0 ? "lower" : bestGammaIdx === gammaGrid.length - 1 ? "upper" : null) : null;
+
   const paramOrder: ParamKey[] = [];
   if (estimateE0) paramOrder.push("e0");
   paramOrder.push("emax", "ec50");
@@ -252,7 +271,9 @@ export function fitEmax(xs: number[], ys: number[], options?: EmaxOptions): Emax
     rss: final.rss,
     sigma,
     cov,
-    paramOrder
+    paramOrder,
+    ec50Boundary,
+    gammaBoundary
   };
 }
 
@@ -380,6 +401,7 @@ export function predictEmax(fit: EmaxFit, exposures: number[]): EmaxPrediction[]
 export function describeEmaxFit(fit: EmaxFit): {
   equation: string;
   params: Array<{ label: string; value: number; se?: number }>;
+  warning?: string;
 } {
   const e0Term = fit.estimateE0 ? "E0 + " : "";
   const hillTerm = fit.estimateGamma ? "x^γ / (EC50^γ + x^γ)" : "x / (EC50 + x)";
@@ -393,5 +415,13 @@ export function describeEmaxFit(fit: EmaxFit): {
   params.push({ label: "Emax", value: fit.emax, se: seOf("emax") });
   params.push({ label: "EC50", value: fit.ec50, se: seOf("ec50") });
   if (fit.estimateGamma) params.push({ label: "γ", value: fit.gamma, se: seOf("gamma") });
-  return { equation, params };
+
+  const pinned: string[] = [];
+  if (fit.ec50Boundary) pinned.push(`EC50 (${fit.ec50Boundary} edge)`);
+  if (fit.gammaBoundary) pinned.push(`γ (${fit.gammaBoundary} edge)`);
+  const warning = pinned.length
+    ? `⚠ ${pinned.join(", ")} pinned to the search boundary — this cohort does not clearly identify a saturation point; treat the estimate with caution.`
+    : undefined;
+
+  return { equation, params, warning };
 }
