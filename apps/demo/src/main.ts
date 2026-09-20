@@ -85,6 +85,7 @@ import {
   GROUP_KEY_SEPARATOR,
   dedupeFacetDimensions,
   distEndpointColorSplit,
+  endpointStripsAreDistinct,
   formatDistGroupId,
   resolveGrouping,
   resolveLinetype,
@@ -923,12 +924,16 @@ function syncAdvancedColorDistShapesUi(spec: ViewLayoutSpec | null): void {
     if (label) label.title = "Not used when color is dose (boxplots follow dose palette).";
     return;
   }
-  if (spec.color.kind === "endpoints" && layoutHasEndpointFacet(spec)) {
+  // Endpoints on COLUMNS: each strip already serves exactly one endpoint —
+  // nothing to split into (it wears that endpoint's color automatically, via
+  // constancy). Endpoints on ROWS still share ONE collapsed strip across
+  // several endpoints, so splitting it remains meaningful there — the same
+  // law the variable channel already gets with no facet-based exception.
+  if (spec.color.kind === "endpoints" && endpointStripsAreDistinct(spec)) {
     advancedColorDistShapesEl.disabled = true;
     advancedColorDistShapesEl.checked = false;
     if (label) {
-      label.title =
-        "One endpoint per panel — boxplots use that endpoint’s color. Split rows apply when several endpoints share one panel (Color: Endpoints, no endpoint facets).";
+      label.title = "One endpoint per panel — boxplots use that endpoint’s color automatically. Nothing to split.";
     }
     if (state.layoutMode === "advanced" && state.advancedViewLayout?.distribution.colorDistShapes) {
       state.advancedViewLayout = {
@@ -980,7 +985,9 @@ function updateAdvancedLayoutStatus(spec: ViewLayoutSpec | null): void {
     }
     if (spec.color.kind === "endpoints" && layoutHasEndpointFacet(spec)) {
       parts.push(
-        "Endpoints are faceted — curves/points use each panel's endpoint color; boxplot strips stay neutral (dose labels identify rows)."
+        endpointStripsAreDistinct(spec)
+          ? "Endpoints are faceted on columns — curves/points AND that column's boxplot strip use its own endpoint color automatically."
+          : "Endpoints are faceted on rows — curves/points use each panel's endpoint color; the shared boxplot strip stays neutral unless you turn on \"Color-split boxplots\"."
       );
     }
     const endpoints = selectedEndpoints();

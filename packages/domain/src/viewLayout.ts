@@ -126,6 +126,28 @@ export function layoutHasEndpointFacet(spec: ViewLayoutSpec): boolean {
 }
 
 /**
+ * True only when endpoints are faceted on COLUMNS — the one case where a dist
+ * strip genuinely serves a single endpoint, so per-endpoint identity survives
+ * the strip's own grouping key (mirrors `distCollapseKey`'s own
+ * `endpointsOnColumns` check; both derive from this one predicate).
+ *
+ * Endpoints on ROWS (or not faceted at all) still collapse multiple endpoints
+ * into ONE shared strip — but "collapsed" does not mean "cannot distinguish
+ * endpoints within it": exactly like the color=variable channel splits a
+ * shared strip into per-level sub-rows whenever more than one level is
+ * present, color=endpoints can split a shared strip into per-endpoint
+ * sub-rows whenever more than one endpoint shares it (surfacing genuine
+ * per-endpoint missingness differences the collapsed, unsplit strip
+ * otherwise hides). `layoutHasEndpointFacet` answers a broader question
+ * ("is endpoint a facet dimension anywhere") that over-blocks that split for
+ * the rows case; this narrower predicate is the one the split (and the
+ * "nothing to split" single-endpoint accent) should actually key off.
+ */
+export function endpointStripsAreDistinct(spec: ViewLayoutSpec): boolean {
+  return spec.colDimensions.some((d) => d.kind === "endpoints");
+}
+
+/**
  * Guided-style multi-endpoint overlay on one axes. Disabled when endpoints are already faceted —
  * use column/row facets to split endpoints instead.
  */
@@ -154,7 +176,16 @@ export function isGuidedCompareTopology(spec: ViewLayoutSpec): boolean {
 
 export type PanelEndpointMode = "single" | "multiColor";
 
-/** Whether this cell shows one endpoint or multiple curves colored by endpoint. */
+/** Whether this cell shows one endpoint or multiple curves colored by endpoint.
+ * A REAL scatter panel already carries `facetKey.endpoint` whenever endpoints
+ * are faceted at all (enumeration cross-products every declared dimension),
+ * so the second check above always resolves that case first; the third check
+ * only ever matters for a synthesized cell with no `facetKey.endpoint` of its
+ * own (the dist-strip readout's merged pseudo-panel) — there,
+ * `endpointStripsAreDistinct` (columns only) is the right question, not
+ * "is endpoint a facet dimension anywhere" (which wrongly forced "single" —
+ * no curves to color multi — even for a rows-faceted merged dist strip that
+ * genuinely spans several endpoints). */
 export function panelEndpointMode(
   spec: ViewLayoutSpec,
   facetKey: FacetKey,
@@ -162,14 +193,17 @@ export function panelEndpointMode(
 ): PanelEndpointMode {
   if (selectedEndpointCount <= 1) return "single";
   if (facetKey.endpoint) return "single";
-  if (layoutHasEndpointFacet(spec)) return "single";
+  if (endpointStripsAreDistinct(spec)) return "single";
   if (spec.color.kind === "endpoints") return "multiColor";
   return "single";
 }
 
-/** Side-by-side endpoint boxplots within each dose row (compare / color=endpoints + colorDistShapes). */
+/** Side-by-side endpoint boxplots within each dose row (compare / color=endpoints
+ * + colorDistShapes) — legal whenever a strip genuinely spans >1 endpoint
+ * (endpoints on rows, or not faceted at all); NOT when endpoints are on
+ * columns, where each strip already serves exactly one endpoint. */
 export function distEndpointColorSplit(spec: ViewLayoutSpec, selectedEndpointCount: number): boolean {
-  if (selectedEndpointCount < 2 || layoutHasEndpointFacet(spec)) return false;
+  if (selectedEndpointCount < 2 || endpointStripsAreDistinct(spec)) return false;
   return spec.color.kind === "endpoints" && spec.distribution.colorDistShapes;
 }
 

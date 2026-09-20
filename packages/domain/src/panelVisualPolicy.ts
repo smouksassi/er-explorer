@@ -1,5 +1,5 @@
 import type { ScatterPanelSpec, ViewLayoutSpec } from "./viewLayout";
-import { panelEndpointMode } from "./viewLayout";
+import { layoutHasEndpointFacet, panelEndpointMode } from "./viewLayout";
 
 /** How scatter points are colored for one panel. */
 export type ScatterPointColorSource = "dose" | "endpointMonochrome" | "endpointMulti" | "variable";
@@ -75,6 +75,14 @@ export function resolvePanelVisualPolicy(
   const multiCurve = curveEndpointIds.length > 1;
   const color = spec.color;
   const shapes = spec.distribution.colorDistShapes;
+  // Two genuinely different questions were sharing `multiCurve`: "does this
+  // curve/strip grouping span more than one endpoint" (distSplitMode,
+  // scatterPointColorSource — correct as `multiCurve` alone, endpoints on
+  // rows included) vs. "are multiple endpoint CURVES painted together on one
+  // shared, UNFACETED axis" (chrome neutrality, readout-fit omission — only
+  // true for the genuine overlay case; a rows-faceted collapsed strip has no
+  // such overlay to be redundant with, so it must NOT inherit this either).
+  const multiCurveOverlaid = multiCurve && !layoutHasEndpointFacet(spec);
 
   let scatterPointColorSource: ScatterPointColorSource = "dose";
   if (color.kind === "variable") scatterPointColorSource = "variable";
@@ -98,10 +106,10 @@ export function resolvePanelVisualPolicy(
 
   const useEndpointColorForProjections = color.kind === "endpoints";
   const legendUsesEndpointColors = color.kind === "endpoints" && selectedEndpointIds.length > 1;
-  const useNeutralDoseLabelsInChrome = color.kind === "endpoints" && multiCurve;
+  const useNeutralDoseLabelsInChrome = color.kind === "endpoints" && multiCurveOverlaid;
   const useNeutralDistShapes = false;
   const omitPerEndpointFitInReadout =
-    color.kind === "endpoints" && multiCurve && distSplitMode === "none";
+    color.kind === "endpoints" && multiCurveOverlaid && distSplitMode === "none";
   const distUsesEndpointColorWhenUnsplit =
     color.kind === "endpoints" && distSplitMode === "none" && !multiCurve;
 

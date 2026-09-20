@@ -471,3 +471,57 @@ user picks Emax from Endpoint Models like any other endpoint.
 All 17 existing snapshots stayed byte-identical after adding the endpoint —
 confirms an available-but-unselected endpoint is fully inert to every
 existing default view.
+
+## E3 re-challenge resolved: endpoint color-split legal on rows, not just unfaceted (2026-09-20)
+
+**User-confirmed inconsistency:** with endpoints on ROWS + color=Endpoints,
+"Color-split boxplots" was hard-disabled and the shared strip stayed neutral —
+yet the exact same shared strip split fine by a covariate (WT) in the same
+layout, and split fine by Endpoints when NOT faceted at all. The gate was
+`layoutHasEndpointFacet(spec)` — "is endpoint a facet dimension ANYWHERE" — a
+structural, name-based question, unlike the variable channel's gate-free,
+purely data-driven "how many levels are present in this strip's own scope."
+
+**Rule:** `endpointStripsAreDistinct(spec)` — true ONLY when endpoints are
+faceted on COLUMNS (mirrors `distCollapseKey`'s own check; both now derive
+from this one predicate) — replaces `layoutHasEndpointFacet` at the two sites
+that were answering "should split be legal here": `panelEndpointMode`'s
+third check and `distEndpointColorSplit`. Endpoints on columns → each strip
+already serves exactly one endpoint (constancy's "endpoint" palette wears it
+automatically, nothing to split). Endpoints on rows (or unfaceted) → the
+strip genuinely spans several endpoints → split is exactly as legal as the
+variable channel's, surfacing real per-endpoint missingness differences a
+collapsed unsplit strip otherwise hides (the aspiration `cellContext.ts`'s
+own docstring already stated: "only genuine missingness differences split
+strips").
+
+**The regression this surfaced, and its own general fix:** unblocking split
+via `panelEndpointMode` correctly made the readout's synthesized pseudo-panel
+report `multiCurve=true` for rows-faceted, collapsed strips — but TWO OTHER
+fields silently shared that same `multiCurve` input for an entirely different
+question ("are multiple endpoint curves genuinely overlaid on one shared,
+UNFACETED axis" — true only for the real guided-compare overlay, where the
+readout's fit lines would duplicate on-chart projection markers).
+`omitPerEndpointFitInReadout` and `useNeutralDoseLabelsInChrome` were both
+computed from bare `multiCurve`, so the fix for one question broke the
+other's answer for the SAME pseudo-panel — the shared-strip readout's fit
+lines briefly vanished (a live regression on s16, caught by the full
+snapshot compare, not the unit suite — no prior unit test exercised
+color=endpoints + rows-faceted + unsplit together). Resolved by naming the
+narrower question explicitly: `multiCurveOverlaid = multiCurve &&
+!layoutHasEndpointFacet(spec)`, used only by those two chrome/readout
+fields; `multiCurve` alone remains correct for `distSplitMode` and
+`scatterPointColorSource`. Two genuinely different questions now have two
+names, not one shared boolean silently serving both.
+
+**Guard:** `panelVisualPolicy.test.ts` — `endpointStripsAreDistinct` unit
+tests; `distEndpointColorSplit` legal-on-rows/illegal-on-columns cases;
+`resolveDistVisualContext` rows-faceted-splits vs columns-faceted-doesn't;
+the regression's own dedicated test (rows-faceted, color=endpoints, UNSPLIT
+→ `omitPerEndpointFitInReadout` and `useNeutralDoseSelectionAccent` both
+stay false). All 17 visual-snapshot baselines confirmed byte-identical
+(s16 diverged mid-fix on exactly the regression described above, then
+returned to byte-identical once corrected — verified, not assumed).
+**Prevention:** a boolean computed for one decision must not be silently
+reused for a different decision just because the two happen to coincide in
+today's test cases — name the question, not just the input.

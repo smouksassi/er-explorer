@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ViewLayoutSpec } from "./viewLayout";
+import { distEndpointColorSplit, endpointStripsAreDistinct } from "./viewLayout";
 import {
   resolveDistVisualContext,
   resolveLegendShowsEndpoints,
@@ -126,6 +127,30 @@ describe("resolveDistVisualContext", () => {
     expect(ctx.omitPerEndpointFitInReadout).toBe(false);
   });
 
+  // Regression (caught only by the FULL visual-snapshot battery, s16 — no
+  // prior unit test exercised color=endpoints + rows-faceted + unsplit
+  // together): fixing the split-eligibility question (multiCurve, above)
+  // accidentally also flipped `omitPerEndpointFitInReadout`, which shares the
+  // same `multiCurve` input but answers a DIFFERENT question ("are multiple
+  // endpoint curves genuinely overlaid on one shared axis" — true only when
+  // UNFACETED). A rows-faceted collapsed strip has no such overlay to be
+  // redundant with, so its fit lines must stay visible (cb27b3b's own fix).
+  it("collapsed endpoint-ROWS strip, color=endpoints, UNSPLIT: still reads out every endpoint's fit (not the overlay-omission rule)", () => {
+    const spec: ViewLayoutSpec = {
+      ...base,
+      rowDimensions: [{ kind: "endpoints", ids: ["brls", "prls"], order: ["brls", "prls"] }],
+      color: { kind: "endpoints" },
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: false }
+    };
+    const ctx = resolveDistVisualContext(
+      spec,
+      { compareEndpointIds: ["brls", "prls"], fallbackEndpointId: "brls" },
+      ["brls", "prls"]
+    );
+    expect(ctx.omitPerEndpointFitInReadout).toBe(false);
+    expect(ctx.useNeutralDoseSelectionAccent).toBe(false);
+  });
+
   it("per-column strip reads out ONLY its own endpoint (E3 P1)", () => {
     const spec: ViewLayoutSpec = {
       ...base,
@@ -139,6 +164,80 @@ describe("resolveDistVisualContext", () => {
       ["icgi", "brls"]
     );
     expect(ctx.readoutEndpointIds).toEqual(["brls"]);
+  });
+
+  // E3 re-challenge (user-confirmed 2026-09-19): a collapsed endpoint-ROWS
+  // strip still genuinely spans several endpoints — color-split should be as
+  // legal there as it already is unfaceted, exactly like the variable channel
+  // (no facet-based exception). `layoutHasEndpointFacet` over-blocked this;
+  // `endpointStripsAreDistinct` (columns only) is the right question.
+  it("endpoints on ROWS + colorDistShapes: the shared strip SPLITS by endpoint (fixed — was wrongly blocked)", () => {
+    const spec: ViewLayoutSpec = {
+      ...base,
+      rowDimensions: [{ kind: "endpoints", ids: ["brls", "prls"], order: ["brls", "prls"] }],
+      color: { kind: "endpoints" },
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: true }
+    };
+    const ctx = resolveDistVisualContext(
+      spec,
+      { compareEndpointIds: ["brls", "prls"], fallbackEndpointId: "brls" },
+      ["brls", "prls"]
+    );
+    expect(ctx.splitByEndpointIds).toEqual(["brls", "prls"]);
+    expect(ctx.readoutEndpointIds).toEqual(["brls", "prls"]);
+  });
+
+  it("endpoints on COLUMNS + colorDistShapes: still no split — each strip already has exactly one endpoint", () => {
+    const spec: ViewLayoutSpec = {
+      ...base,
+      colDimensions: [{ kind: "endpoints", ids: ["icgi", "brls"], order: ["icgi", "brls"] }],
+      color: { kind: "endpoints" },
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: true }
+    };
+    const ctx = resolveDistVisualContext(
+      spec,
+      { compareEndpointIds: ["brls"], fallbackEndpointId: "brls" },
+      ["icgi", "brls"]
+    );
+    expect(ctx.splitByEndpointIds).toEqual([]);
+  });
+});
+
+describe("endpointStripsAreDistinct", () => {
+  it("true only when endpoints are faceted on columns", () => {
+    expect(endpointStripsAreDistinct(base)).toBe(false);
+    expect(
+      endpointStripsAreDistinct({
+        ...base,
+        rowDimensions: [{ kind: "endpoints", ids: ["icgi", "brls"], order: ["icgi", "brls"] }]
+      })
+    ).toBe(false);
+    expect(
+      endpointStripsAreDistinct({
+        ...base,
+        colDimensions: [{ kind: "endpoints", ids: ["icgi", "brls"], order: ["icgi", "brls"] }]
+      })
+    ).toBe(true);
+  });
+});
+
+describe("distEndpointColorSplit — E3 re-challenge", () => {
+  it("legal with endpoints on rows (or unfaceted); illegal on columns", () => {
+    const onRows: ViewLayoutSpec = {
+      ...base,
+      rowDimensions: [{ kind: "endpoints", ids: ["icgi", "brls"], order: ["icgi", "brls"] }],
+      color: { kind: "endpoints" },
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: true }
+    };
+    const onColumns: ViewLayoutSpec = {
+      ...base,
+      colDimensions: [{ kind: "endpoints", ids: ["icgi", "brls"], order: ["icgi", "brls"] }],
+      color: { kind: "endpoints" },
+      distribution: { linkage: "mirror_scatter_grid", colorDistShapes: true }
+    };
+    expect(distEndpointColorSplit(onRows, 2)).toBe(true);
+    expect(distEndpointColorSplit(onColumns, 2)).toBe(false);
+    expect(distEndpointColorSplit(onRows, 1)).toBe(false); // nothing to split with <2 endpoints
   });
 });
 

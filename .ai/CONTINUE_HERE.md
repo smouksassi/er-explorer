@@ -278,9 +278,23 @@ count now; the old "177 vs 176" discrepancy is resolved (most likely a side
 effect of the QA-round-13 missing-as-zero bin fix or the later I9
 "(missing)"-level work, neither of which explicitly closed this backlog line
 at the time). No code change needed.
-NEXT: E3 strip-rule re-challenge — user opted to discuss now (session
-in progress); then eventually the deferred GAM-based binary loess redesign
-(see project memory).
+**E3 RE-CHALLENGE LANDED (2026-09-20):** user's sharp catch — endpoints on
+ROWS blocked "Color-split boxplots" entirely (hard hard-coded
+`layoutHasEndpointFacet` gate), while the SAME shared strip split fine by a
+covariate in the identical layout. New `endpointStripsAreDistinct(spec)`
+(true only for endpoints-on-COLUMNS) replaces the gate at `panelEndpointMode`
+and `distEndpointColorSplit`; rows-faceted collapsed strips can now split by
+endpoint exactly like the variable channel always could — no facet-based
+exception. Self-inflicted regression caught mid-fix (s16 diverged: the same
+`multiCurve` boolean was silently answering a SECOND, different question —
+"is this a genuine unfaceted overlay" — for `omitPerEndpointFitInReadout`/
+`useNeutralDoseLabelsInChrome`; split via `multiCurveOverlaid =
+multiCurve && !layoutHasEndpointFacet`). All 17 baselines confirmed
+byte-identical after the full fix; domain tests 49 (was 44). End-to-end
+verified live: rows-faceted icgi+icgiemax, checkbox now enabled, toggling it
+produces colored icgi/icgiemax split sub-rows.
+NEXT: eventually the deferred GAM-based binary loess redesign (see project
+memory) — no other queued backlog items.
 
 **User feedback 2026-08-24 (post-E2b screenshots, mid-visual-pass):**
 1. "grouping works" — incl. the constancy showcase: facet cols=crcl + color=crcl

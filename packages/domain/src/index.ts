@@ -81,6 +81,7 @@ export {
   dedupeFacetDimensions,
   distEndpointColorSplit,
   effectiveEndpointOverlay,
+  endpointStripsAreDistinct,
   ensureScaleBearingFacets,
   isGuidedCompareTopology,
   layoutHasEndpointFacet,

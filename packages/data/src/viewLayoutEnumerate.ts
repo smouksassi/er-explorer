@@ -7,7 +7,7 @@ import type {
   ScatterPanelSpec,
   ViewLayoutSpec
 } from "@er-explorer/domain";
-import { panelEndpointMode } from "@er-explorer/domain";
+import { endpointStripsAreDistinct, panelEndpointMode } from "@er-explorer/domain";
 import { getColumn, type LoadedDataset } from "./loadedDataset";
 import { isMissing } from "./rawValue";
 import { selectRecordIndices } from "./filters";
@@ -224,7 +224,7 @@ function facetKeyMatchesSubset(full: FacetKey, subset: FacetKey): boolean {
  * the derived outcome when no facets exist.
  */
 function distCollapseKey(spec: ViewLayoutSpec, panel: ScatterPanelSpec): string {
-  const endpointsOnColumns = spec.colDimensions.some((d) => d.kind === "endpoints");
+  const endpointsOnColumns = endpointStripsAreDistinct(spec);
   const parts = Object.keys(panel.facetKey)
     .filter((k) => (k === "endpoint" ? endpointsOnColumns : k !== "xMetric"))
     .sort()
