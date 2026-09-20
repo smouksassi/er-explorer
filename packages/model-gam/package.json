@@ -1,0 +1,26 @@
+{
+  "name": "@er-explorer/model-gam",
+  "version": "0.0.1",
+  "private": false,
+  "description": "Binomial GAM AnalysisModel plugin for ER Explorer - penalized cubic regression spline on the logit scale (mgcv bs=\"cr\" analog), bounded in (0,1) by construction.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    "import": "./dist/index.js",
+    "require": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm typecheck && vitest run",
+    "lint": "eslint . --ext .ts",
+    "clean": "rimraf dist tsconfig.build.tsbuildinfo tsconfig.tsbuildinfo"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "vitest": "^2.1.8"
+  },
+  "files": ["dist"],
+  "keywords": ["er-explorer", "analysis", "gam", "spline", "binomial", "plugin"],
+  "license": "MIT"
+}

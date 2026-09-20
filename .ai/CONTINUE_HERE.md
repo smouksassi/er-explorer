@@ -109,7 +109,7 @@ family) + CI fix + ICGIEMAX synthetic endpoint:** `f9bf215`→`99a1e45`.
   smooth, ggquickeda, `nls()` split by WT bin) — all converged cleanly,
   confirming it's genuinely well-behaved, unlike BRLS.
 
-### NEXT: binary loess needs a proper constrained redesign (not started)
+### IN PROGRESS: binary loess → GAM replacement (engine BUILT, not yet wired)
 
 **The problem, documented with real numbers (2026-09-20):** the current
 `model-loess` package fits a plain, unconstrained local regression on
@@ -173,13 +173,80 @@ constrained, e.g. local-likelihood/binomial) replacement.
    Emax-on-a-now-binary-endpoint (`fitForCohort`'s `isContinuousEndpoint`
    guard) — not a dedicated migration path.
 
-**Still genuinely open (not yet decided, revisit when design work starts):**
-package/file naming (`packages/model-gam`? `EndpointFit` kind `"gam"`?),
-exact basis type (thin-plate vs. cubic regression spline vs. something else),
-smoothing-parameter selection method (REML analog vs. GCV vs. a fixed
-default with a user override, mirroring Emax's γ/E0 toggles), and the exact
-snapshot/test plan. All deferred to the actual design pass — no code, no
-further decisions being pushed right now per explicit instruction.
+**RESOLVED at build time (2026-09-20) — the previously-open questions:**
+- **Package**: `packages/model-gam` (`@er-explorer/model-gam`), zero deps,
+  same shape as `model-emax`/`model-loess`. `EndpointFit` kind will be `"gam"`.
+- **Basis: cubic regression spline (`bs="cr"`), NOT mgcv's `bs="tp"` default.**
+  Deliberate. `cr` is defined by a closed-form knot-value parameterization
+  (Wood §5.3.1) that is reproducible exactly; `tp` requires an eigen-truncation
+  of a thin-plate penalty and is far likelier to be subtly wrong in a
+  reimplementation. Since "consistent with R" is the acceptance bar, the basis
+  that can be checked exactly wins over the one that is merely default. The R
+  cross-check call is therefore `s(x, bs="cr", k=…)`, not bare `s(x)`.
+  Knot placement reproduces mgcv's `place.knots()` *exactly*, including its
+  linear interpolation at fractional order-statistic indices (rounding to the
+  nearest distinct x is defensible on its own but silently desynchronizes
+  every R comparison — that was caught and fixed during the build).
+- **Smoothing-parameter selection: REML**, matching `method="REML"`. Search is
+  a 33-point log grid over a rescaled penalty then golden-section refinement —
+  the same deterministic, no-starting-values shape as Emax, chosen for the
+  same reason (no user-supplied initials that can silently pick a bad basin).
+  `options.lambda` fixes λ manually; that is both a real user-override hook and
+  what makes the "λ→∞ ⇒ straight logit line" test exact.
+- **Boundary reporting**: `GamFit.lambdaBoundary: "lower" | "upper" | null`.
+  `"upper"` is the informative one — it means the cohort supports NO curvature
+  and the fit is just logistic regression. `describeGamFit` emits the warning.
+
+**Engine status: BUILT AND GREEN.** 29 tests, ~250 ms, typecheck clean.
+Coverage includes the exact algebraic properties (basis interpolates the knot
+values to 1e-12; the penalty is exactly zero on any straight line; S is PSD of
+rank k−2; linear extrapolation outside the knots), recovery of a genuinely
+non-monotone logit, the λ→∞ ⇒ line collapse, determinism, every support guard,
+and — the whole point — estimate AND CI strictly inside (0,1) on the same
+pathological shape that made loess overshoot.
+
+**Two real bugs found and fixed during the build (kept here because both are
+easy to reintroduce):**
+1. `ETA_CLAMP` was ±30, flooring the IRLS weights near 1e-13. On a completely
+   separated cohort that put ~22 orders of magnitude inside one matrix and the
+   Cholesky failed outright, so a fit that should have been reported as
+   separated *vanished* instead. Now ±15 (p = 0.9999997 — nothing reportable is
+   lost, and a separated fit has no finite MLE anyway). This is a conditioning
+   control, not cosmetic clamping; do not "restore precision" by raising it.
+2. Golden-section refinement could return a λ where PIRLS fails, and `fitGam`
+   then returned null *despite already holding a valid grid optimum*. It now
+   keeps the grid best unless the refined λ both fits and scores better.
+   Refinement must never be able to lose a fit we already have.
+
+**R cross-check fixture** emitted to the session scratchpad:
+`gam_xcheck_data.csv` (400 rows, non-monotone truth), `gam_xcheck_ts_pred.csv`
+(41-point grid), `gam_xcheck.R` (runs mgcv with the TS engine's own knots,
+prints a side-by-side table, and contrasts loess leaving [0,1] on the same
+data). Reference fit: k=10, λ=2.670943e4, edf=4.650036, deviance=313.542816,
+interior λ, CI range [0.0288, 0.9780]. Note λ is reported on each
+implementation's own penalty scaling and need not match mgcv's `sp` digit for
+digit — **the curve and the edf are the comparison that matters.**
+
+**NEXT PHASE — integration. Can and should drop back to Sonnet.** The core
+algorithm (the part that genuinely warranted Opus) is done, tested, and frozen
+behind a small API: `fitGam` / `predictGam` / `predictGamAt` / `describeGamFit`
+plus the `GamFit` type. Integration is ordinary wiring against that surface and
+does NOT require re-reading or re-deriving the spline/REML internals — treat
+`packages/model-gam/src/gam.ts` as a black box with a stable contract. Remaining
+work, none of it started:
+1. Wire the `"gam"` kind into `EndpointFit` / `endpointAnalysis.ts` / the
+   Endpoint Models UI (mirror how `model-emax` was added — adapter only, zero
+   pipeline changes, per ADR-0013).
+2. `describeFit(fit)` in `apps/demo/src/main.ts`: add the `"gam"` branch,
+   surfacing `describeGamFit`'s equation/params/warning.
+3. REMOVE Loess from binary endpoints' options (decision 3 above). Stale
+   `"loess"` on a binary endpoint falls through to logistic — no migration path.
+4. Add `model-gam` to BOTH `apps/demo/scripts/verify-build.mjs` AND
+   `.github/workflows/deploy-demo.yml`. These keep SEPARATE package lists and
+   the workflow one has already broken CI once — update both or CI fails on a
+   fresh checkout.
+5. Freeze the "before" binary-loess snapshot (s18) BEFORE removing loess, then
+   add a snapshot pinning the constrained (0,1) shape after.
 
 **Vision item newly logged (2026-09-20, not the current work item — do not
 conflate): time-to-event / Kaplan–Meier is part of the long-term roadmap.**
@@ -195,10 +262,9 @@ ask "any additional tests needed"):**
 - Snapshot the CURRENT (soon-to-be-replaced) binary-loess visual output on
   icgi as an explicit "before" baseline (a new scenario, e.g. s18) BEFORE
   removing it, so the replacement has a clean diff to review.
-- R cross-check recipe to prepare: `mgcv::gam(y ~ s(x, k=...), family =
-  binomial, method = "REML")`, `predict(fit, type = "response", se.fit =
-  TRUE)` — decide the exact `k`/basis to match before implementing, the same
-  way `surface="direct"` was pinned down for continuous loess.
+- ~~R cross-check recipe to prepare~~ — DONE, see the fixture above. The basis
+  was pinned to `bs="cr"` with mgcv-exact knot placement, the same way
+  `surface="direct"` was pinned down for continuous loess.
 
 ### Git hygiene reminders (do not relearn these the hard way again)
 
