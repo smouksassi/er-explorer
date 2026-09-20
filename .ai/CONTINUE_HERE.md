@@ -133,49 +133,68 @@ legitimately exits [0,1]. This is mathematically correct behavior for an
 probability surface, which is why the user wants a GAM-based (or similarly
 constrained, e.g. local-likelihood/binomial) replacement.
 
-**Design questions to resolve before writing code (per the standing "plan
-before code" rule) — propose, don't build yet:**
-1. Which constrained family: a binomial local-likelihood smoother (the
-   direct GAM analog — logit-link local regression, closest in spirit to
-   `stats::loess` but bounded by construction) vs. a penalized-spline GAM
-   (e.g. mimicking R's `mgcv::gam(y ~ s(x), family=binomial)`) vs. something
-   simpler (e.g. a smoothed logistic-with-flexible-basis). The user's own
-   phrasing ("GAM-based") suggests the mgcv-style analog is the target to
-   match/cross-check against in R.
-2. Fitting strategy: does this need iteration (IRLS-style, since binomial
-   local-likelihood isn't closed-form the way loess's Gaussian case is), and
-   if so, what's the deterministic-no-starting-values equivalent for THIS
-   family (the Emax precedent — grid+refine — won't directly transfer to an
-   iterative penalized fit; likely needs its own well-justified deterministic
-   initialization, e.g. starting IRLS from the logistic GLM fit, which itself
-   has closed-form-ish reliable convergence).
-3. Does this become a NEW model family (`model-gam` package, a `kind:"gam"`
-   `EndpointFit` variant, restricted to binary endpoints — the mirror image
-   of Emax's continuous-only restriction) that COEXISTS with today's
-   unconstrained loess (letting the user pick either, loess kept for
-   continuous + as a legacy/comparison option on binary), or does it REPLACE
-   binary loess outright (loess becomes continuous-only, matching Emax's own
-   restriction, and a new family fills the binary-smoother role)? This is a
-   product decision for the user, not an engineering one.
-4. Whatever is built needs its own `describeFit`/`EMAX`-style boundary-
-   pinning-equivalent diagnostic if it has any tunable/searched parameter
-   (e.g. a smoothing penalty λ) that can hit a search edge, per I11's now-
-   established pattern (flag, never hide, a poorly-identified fit).
-5. Snapshot coverage: at least one scenario pinning the new family's curve
-   shape staying inside [0,1] by construction (not by axis-padding) on a
-   real binary endpoint + a small/tight-span subgroup analogous to the
-   sex=1 case above, so a future regression in the constraint mechanism is
-   caught immediately.
+**DECISIONS CONFIRMED by user (2026-09-20) — logged, nothing built yet:**
+1. **Family: penalized-spline GAM, mgcv-style — not local-likelihood.** User:
+   "I am more familiar with mgcv::gam, the idea is that the effect of AUC
+   might not be linear inside of the logit." Target shape:
+   `logit(p) = β₀ + f(x)` where `f` is a smooth term (regression-spline basis
+   + roughness penalty), the direct analog of
+   `mgcv::gam(y ~ s(x), family = binomial, method = "REML")`. NOT a
+   loess-style local-likelihood smoother — a genuine penalized-basis GAM.
+2. **Fitting algorithm: delegated to Claude, not specified by the user.**
+   User: "I don't really know what is a proper algorithm as long as we get
+   statistically sound results consistent with R results. Speed and
+   convergence are important." Hard constraints: (a) must match/cross-check
+   against real `mgcv::gam` output on real data — "statistically sound,
+   consistent with R" is the acceptance bar, not just internal self-
+   consistency; (b) fast; (c) reliably convergent. The exact numerical
+   approach (basis choice, penalized IRLS details, smoothing-parameter
+   selection) is Claude's to propose and justify at design time — still
+   "propose before code," just not a user-specified constraint.
+3. **REPLACEMENT, not a coexisting option.** User: "no we need to replace
+   the loess for binary as it can go beyond the limits and not really
+   logical. it is a replacement." Binary endpoints' Endpoint Models select
+   drops "Loess" entirely once this lands, replaced by the new GAM family.
+   Continuous endpoints are UNAFFECTED — they keep Linear / Loess / Emax
+   exactly as today (an unconstrained smoother is fine on a continuous
+   scale; the [0,1] problem is binary-specific).
+4. **Boundary-hit reporting: REQUIRED, confirmed.** User: "yes any time we
+   hit a boundary we need to report it and warn/inform the user." Same
+   pattern as Emax's `ec50Boundary`/`gammaBoundary` (I11 addendum) — if the
+   new family's search (smoothing parameter, basis dimension k, whatever
+   ends up being searched) hits its own boundary, `describeFit` must surface
+   a warning, never silently present a poorly-identified fit as ordinary.
+5. **No migration concern.** User: "we are still in the early stages, no
+   sessions are expected to be restored on loess on binary — I am the only
+   user so far and did not release anything yet in the wild." No
+   backward-compat/session-migration work needed. A stale `"loess"` model
+   choice loaded for a binary endpoint should simply fall through to the
+   generic default (logistic) — the SAME defensive pattern already built for
+   Emax-on-a-now-binary-endpoint (`fitForCohort`'s `isContinuousEndpoint`
+   guard) — not a dedicated migration path.
+
+**Still genuinely open (not yet decided, revisit when design work starts):**
+package/file naming (`packages/model-gam`? `EndpointFit` kind `"gam"`?),
+exact basis type (thin-plate vs. cubic regression spline vs. something else),
+smoothing-parameter selection method (REML analog vs. GCV vs. a fixed
+default with a user override, mirroring Emax's γ/E0 toggles), and the exact
+snapshot/test plan. All deferred to the actual design pass — no code, no
+further decisions being pushed right now per explicit instruction.
+
+**Vision item newly logged (2026-09-20, not the current work item — do not
+conflate): time-to-event / Kaplan–Meier is part of the long-term roadmap.**
+User: "remember that time to event kaplan meier are part of the vision." No
+scope, timeline, or design attached yet — this is a marker so a future
+family-adding session (a fifth-plus ADR-0013 family, presumably needing
+`renderer`'s already-scaffolded `StepStyle` curve style and a genuinely
+different observed-summary shape — censoring, not x/N or mean±CI) doesn't
+start from zero. Raise it explicitly once the binary-GAM replacement ships.
 
 **Additional tests to run before/while building (per the user's explicit
 ask "any additional tests needed"):**
-- Snapshot the CURRENT (soon-to-change) binary-loess visual output on icgi
-  as an explicit "before" baseline (a new scenario, e.g. s18) BEFORE writing
-  the new family, so the eventual cutover has a clean diff to review rather
-  than an untracked before/after.
-- Decide (with the user) whether existing sessions/snapshots that use
-  `loess` on a binary endpoint should auto-migrate to the new family or stay
-  on legacy loess — affects whether this is a breaking or additive change.
+- Snapshot the CURRENT (soon-to-be-replaced) binary-loess visual output on
+  icgi as an explicit "before" baseline (a new scenario, e.g. s18) BEFORE
+  removing it, so the replacement has a clean diff to review.
 - R cross-check recipe to prepare: `mgcv::gam(y ~ s(x, k=...), family =
   binomial, method = "REML")`, `predict(fit, type = "response", se.fit =
   TRUE)` — decide the exact `k`/basis to match before implementing, the same
