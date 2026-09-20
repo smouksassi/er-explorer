@@ -1,5 +1,204 @@
 # Continue here (session handoff)
 
+## ⭐ PROJECT STATE — READ THIS FIRST (checkpoint 2026-09-20)
+
+Everything below this section is the full historical log, kept for
+archaeology. This block is the complete, current, self-contained picture —
+read it, then only dip into the log below for the "why" behind a specific
+decision.
+
+### Verified-clean checkpoint (this exact commit, re-run just now)
+
+Full fresh-checkout simulation — every `dist/` and `*.tsbuildinfo` wiped,
+gitignored `apps/demo/src/data.generated.ts` regenerated from scratch,
+built in dependency order:
+
+| check | result |
+|---|---|
+| `node apps/demo/scripts/verify-build.mjs` | OK (8 packages + demo, clean) |
+| Unit tests, all 9 packages | **271 passed**, 0 failed (domain 49, analysis 14, model-linear 20, model-loess 9, model-emax 17, data 62, renderer 76, session-engine 17, demo 7) |
+| `pnpm --filter @er-explorer/demo smoke:ui` | ALL CHECKS PASSED (7 scenario groups incl. the I7 conformance matrix) |
+| `node apps/demo/scripts/visual-snapshot.mjs` | **ALL 17 MATCH** (s1–s17, byte-identical) |
+
+Working tree: clean except the always-untracked-in-spirit
+`claudetwoexposureoneendpoint.R` (tracked by git but NEVER staged — see git
+hygiene note below). Last commit: `19f5741`.
+
+**No known open bugs.** The confirmed-bug queue that existed at various
+points this multi-day session (linetype dash asymmetry, orphan projections,
+shared-strip readout, per-column strip endpoint color, the E3 rows-facet
+color-split block, the CRCL provenance mismatch) is fully closed — see the
+dated log entries below for each, and `.ai/INVARIANTS.md` for the permanent
+rules each one left behind.
+
+### Architecture map (packages)
+
+| package | role |
+|---|---|
+| `packages/domain` | Pure grammar/policy: `ViewLayoutSpec`, grouping (§J), linetype/color channels, `resolveCellContext`/`resolvePanelVisualPolicy` (the two parallel "what does this cell/strip look like" resolvers — see the E3 fix note below on why there are two and how they relate), invariant-bearing predicates (`endpointStripsAreDistinct`, `layoutHasEndpointFacet`, etc.) |
+| `packages/data` | `LoadedDataset`, column type inference, level/bin models (incl. the `(missing)` level, I9, and the recode registry), `enumerateScatterPanels`/`enumerateDistPanels` (facet grid + dist-strip collapse) |
+| `packages/analysis` | Family-agnostic selection→projection pipeline (`selectionProjection.ts`), `summarizeDistribution` (the tiered I11 five-number summary), legacy logistic/bootstrap stats |
+| `packages/model-linear` | OLS linear family: fit, Wald/bootstrap CI, mean-CI |
+| `packages/model-loess` | LOESS family: R `stats::loess`-matching local regression (gaussian, tricube), **currently legal-but-unconstrained on binary data — this is the next redesign, see below** |
+| `packages/model-emax` | Emax/Hill family: deterministic grid+golden-section fit (NO starting values ever), continuous-endpoints-only, boundary-pinned-parameter diagnostic |
+| `packages/renderer` | Pure SVG painting: `DistributionLayer`, `DoseProjectionLayer`, `FitLayer` (no dash/color policy of its own — obeys the caller verbatim), `ConfidenceRibbonLayer`, etc. |
+| `packages/session-engine` | `.erx` session serialize/parse |
+| `apps/demo` | The actual app: `main.ts` (~5.9k lines — paint, selection, endpoint models UI, readout), `index.html` (all UI + CSS), `data/icgi.csv` (bundled dataset, now with `ICGIEMAX`), `scripts/visual-snapshot.mjs` (s1–s17 byte-exact regression harness), `scripts/ui-smoke.mjs` |
+
+### The bundled dataset today
+
+`apps/demo/data/icgi.csv` — 704 rows, columns: `STUDY, ID, DOSE, GBDS, SEX,
+AGE, WT, RACE, CRCL, BRLS, PRLS, AUC, CMAX, ICGI, ICGI7, ICGI2, ICGI3,
+ICGIEMAX`. CRCL is 25% missing (176 rows) — confirmed matching the user's own
+R-side count. Endpoints: `icgi`/`icgi2`/`icgi3` (binary), `icgi7` (ordinal,
+treated as binary-ish today), `brls`/`prls` (continuous, real, genuinely
+near-flat vs. AUC — see the R cross-check note below), `icgiemax`
+(continuous, **synthetic**, deterministic/seeded, keyed to real AUC: E0=10,
+Emax=25, EC50=90, γ=1.4 — a well-identified showcase for the Emax family;
+defaults to Linear like any continuous endpoint, pick Emax from Endpoint
+Models yourself).
+
+### Full invariant list (see `.ai/INVARIANTS.md` for the complete prose + bug history of each)
+
+I1 one level model · I2 one color channel · I3 cohort = clicked ∩ panel ∩
+endpoint-finite · I4 curve association is structural (curveKey), never
+string-parsed · I5–I7 (family/adapter symmetry, ADR-0013) · I8 projection
+granularity = declared grouping, restated for §J · I9 explicit `(missing)`
+level, gray, ordered last · I10 grouping is statistics, channels are paint
+(constancy theorem) + linetype addendum + **dash-authority addendum**
+(FitLayer has no policy of its own) + **endpoint-accent-by-scope addendum**
+(strips/projections wear an endpoint's color iff constant over the MARK'S
+OWN scope, not the whole spec) · I11 unified minimum-support rule (N≥5 full
+five-number/box/fit, 2–4 → raw points + Min·Median·Max, 1 → single value;
+abstention is NaN, never fabricated) + **boundary-pinned-parameter addendum**
+(Emax: a search hitting its grid's edge is flagged, not presented as an
+ordinary estimate) · **E3 addendum** (`endpointStripsAreDistinct` — endpoint
+color-split is legal whenever a strip spans >1 endpoint, i.e. rows-faceted
+or unfaceted; illegal only on columns, where each strip already has exactly
+one) · **I8-adjacent** (orphan projections: no curve to ride ⇒ no render,
+ever — no fallback association).
+
+### Condensed slice history (chronological, full detail in the log below)
+
+**Grammar era (I1–I9, missing-level, level recoding, PK/non-PK, reference
+arms):** `fca1de7` → `b32b480`. **§J grouping model + E-sequence
+(E1–E6: grouping, painter convergence, per-column strips, guided presets,
+linetype, callout density):** `761d3b5` → `9936341`, polish `97747b2`.
+**Data-prep (level recode, reference arms, vestigial sweep):** `8a762c4`,
+`b32b480`, `6960e46`. **LOESS (3rd family):** `990d0ac`. **Unified
+minimum-support (I11):** `1814419`. **Dash authority, shared-strip readout,
+orphan projections, linetype law B, endpoint-accent-by-scope (4 bug-hunt
+slices from one user test pass):** `ffe2218`→`7934a20`. **Emax (4th
+family) + CI fix + ICGIEMAX synthetic endpoint:** `f9bf215`→`99a1e45`.
+**Hover-cue polish, CRCL provenance closure, E3 re-challenge:**
+`6d442a3`→`19f5741`.
+
+### R cross-checks performed this session (all independently confirmed)
+
+- **Loess** on real BRLS/AUC: `nls()` → singular gradient (fails);
+  `minpack.lm::nlsLM()` → converges to nonsensical EC50=−14 at RSS 52168,
+  *worse than a flat-line null* (RSS 17455); our grid+refine fit ties the
+  null (RSS 17448) with EC50 honestly pinned to the search boundary — now
+  flagged in the UI. Conclusion: BRLS genuinely has no dose-response signal
+  vs. AUC on either side; R's local optimizer fell into exactly the local-
+  optimum trap the deterministic design exists to avoid.
+- **Emax** on simulated well-identified data (E0=20/Emax=15/EC50=80): all
+  three parameters recovered within 1 SE, independently verified in R via
+  `nls()`/`nlsLM()` (CSV sent to user).
+- **ICGIEMAX**: independently fit in R three ways (ggplot2 loess-style
+  smooth, ggquickeda, `nls()` split by WT bin) — all converged cleanly,
+  confirming it's genuinely well-behaved, unlike BRLS.
+
+### NEXT: binary loess needs a proper constrained redesign (not started)
+
+**The problem, documented with real numbers (2026-09-20):** the current
+`model-loess` package fits a plain, unconstrained local regression on
+binary (0/1) data — legal by design (round-2 §I.4, "never clamp"; the axis
+pads instead of hiding the overshoot), but the *smoother itself* has no
+mechanism to respect [0,1] the way a logistic/GAM approach would. Concrete
+reproduction on the bundled `icgi`/`AUC` data:
+
+| config | point-estimate range | 95% CI range |
+|---|---|---|
+| Full N=704, R-default span=0.75 | 0.43 – 0.90 (in bounds) | 0.12 – **1.33** (upper CI over 1) |
+| sex=1 subgroup (N=282), span=0.5 | 0.29 – **1.07** (estimate itself over 1) | 0.13 – **1.89** |
+| 600mg+1200mg subgroup (N=387), span=0.5 | 0.45 – 0.87 (in bounds) | **−0.11** – 1.16 (lower CI under 0) |
+
+So at the R-default span the *point estimate* usually stays in range on
+well-powered cohorts (the axis-padding rule mostly just needs to handle the
+CI band), but on smaller/tighter-span subgroups — exactly the case the
+grouping/faceting machinery makes routine — the point estimate itself
+legitimately exits [0,1]. This is mathematically correct behavior for an
+*unconstrained local regression*, but it's the wrong smoother shape for a
+probability surface, which is why the user wants a GAM-based (or similarly
+constrained, e.g. local-likelihood/binomial) replacement.
+
+**Design questions to resolve before writing code (per the standing "plan
+before code" rule) — propose, don't build yet:**
+1. Which constrained family: a binomial local-likelihood smoother (the
+   direct GAM analog — logit-link local regression, closest in spirit to
+   `stats::loess` but bounded by construction) vs. a penalized-spline GAM
+   (e.g. mimicking R's `mgcv::gam(y ~ s(x), family=binomial)`) vs. something
+   simpler (e.g. a smoothed logistic-with-flexible-basis). The user's own
+   phrasing ("GAM-based") suggests the mgcv-style analog is the target to
+   match/cross-check against in R.
+2. Fitting strategy: does this need iteration (IRLS-style, since binomial
+   local-likelihood isn't closed-form the way loess's Gaussian case is), and
+   if so, what's the deterministic-no-starting-values equivalent for THIS
+   family (the Emax precedent — grid+refine — won't directly transfer to an
+   iterative penalized fit; likely needs its own well-justified deterministic
+   initialization, e.g. starting IRLS from the logistic GLM fit, which itself
+   has closed-form-ish reliable convergence).
+3. Does this become a NEW model family (`model-gam` package, a `kind:"gam"`
+   `EndpointFit` variant, restricted to binary endpoints — the mirror image
+   of Emax's continuous-only restriction) that COEXISTS with today's
+   unconstrained loess (letting the user pick either, loess kept for
+   continuous + as a legacy/comparison option on binary), or does it REPLACE
+   binary loess outright (loess becomes continuous-only, matching Emax's own
+   restriction, and a new family fills the binary-smoother role)? This is a
+   product decision for the user, not an engineering one.
+4. Whatever is built needs its own `describeFit`/`EMAX`-style boundary-
+   pinning-equivalent diagnostic if it has any tunable/searched parameter
+   (e.g. a smoothing penalty λ) that can hit a search edge, per I11's now-
+   established pattern (flag, never hide, a poorly-identified fit).
+5. Snapshot coverage: at least one scenario pinning the new family's curve
+   shape staying inside [0,1] by construction (not by axis-padding) on a
+   real binary endpoint + a small/tight-span subgroup analogous to the
+   sex=1 case above, so a future regression in the constraint mechanism is
+   caught immediately.
+
+**Additional tests to run before/while building (per the user's explicit
+ask "any additional tests needed"):**
+- Snapshot the CURRENT (soon-to-change) binary-loess visual output on icgi
+  as an explicit "before" baseline (a new scenario, e.g. s18) BEFORE writing
+  the new family, so the eventual cutover has a clean diff to review rather
+  than an untracked before/after.
+- Decide (with the user) whether existing sessions/snapshots that use
+  `loess` on a binary endpoint should auto-migrate to the new family or stay
+  on legacy loess — affects whether this is a breaking or additive change.
+- R cross-check recipe to prepare: `mgcv::gam(y ~ s(x, k=...), family =
+  binomial, method = "REML")`, `predict(fit, type = "response", se.fit =
+  TRUE)` — decide the exact `k`/basis to match before implementing, the same
+  way `surface="direct"` was pinned down for continuous loess.
+
+### Git hygiene reminders (do not relearn these the hard way again)
+
+- `claudetwoexposureoneendpoint.R` is TRACKED by git (not gitignored — an
+  earlier attempt to gitignore it was a no-op since git already tracks it)
+  but must NEVER be staged. Always `git add` explicit file paths, never
+  `git add -A` or `git add .`.
+- Both `apps/demo/scripts/verify-build.mjs` (local) and
+  `.github/workflows/deploy-demo.yml` (CI) maintain independent, hand-written
+  package build lists — a new `packages/model-*` needs to be added to BOTH
+  or the CI build fails with `Cannot find module` on a fresh checkout
+  (happened twice this session: model-loess/model-emax were both missing
+  from one or the other at different points).
+- `apps/demo/src/data.generated.ts` is gitignored; regenerate via
+  `node apps/demo/scripts/build-data.mjs` after touching
+  `apps/demo/data/icgi.csv`.
+
+---
+
 **Last updated:** 2026-08-24 — **E2a LANDED: grouping model cutover (§J / I10).**
 `grouping: { variableIds }` replaces `fitByColor` everywhere (UI "Group curves
 by" select; `resolveGrouping` migrates persisted legacy specs at
