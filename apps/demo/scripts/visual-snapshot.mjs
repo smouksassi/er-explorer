@@ -327,19 +327,25 @@ const SCENARIOS = [
     }
   },
   {
-    // LOESS family (ADR-0013 third family): loess on a CONTINUOUS endpoint
-    // (brls) AND on a BINARY endpoint (icgi — smoother never clamped, the
-    // probability axis pads); grouping by sex proves the pipelines stay
-    // family-blind; the pooled click exercises loess readout fits.
-    name: "s12-loess-binary-and-continuous",
+    // TWO SMOOTHER FAMILIES AT ONCE, one per data kind: loess on the
+    // CONTINUOUS endpoint (brls) and GAM on the BINARY one (icgi).
+    //
+    // This scenario used to run loess on BOTH. That is no longer offered:
+    // an unconstrained local regression has no mechanism to respect [0,1],
+    // and on real icgi subgroups its point estimate reached 1.07. The
+    // baseline diff on this scenario IS the loess→GAM before/after record for
+    // the binary panel. Everything else about the scenario is deliberately
+    // unchanged — grouping by sex still proves the pipelines stay
+    // family-blind, and the pooled click still exercises smoother readout fits.
+    name: "s12-smoothers-binary-gam-continuous-loess",
     run: async () => {
       await setEndpoints(["icgi", "brls"]);
       await page.locator('.nav-btn[data-rail="analysis"]').click();
       await page.evaluate(() => {
-        for (const ep of ["icgi", "brls"]) {
+        for (const [ep, model] of [["icgi", "gam"], ["brls", "loess"]]) {
           const sel = document.querySelector(`select[data-endpoint-model="${ep}"]`);
-          if (sel && sel.value !== "loess") {
-            sel.value = "loess";
+          if (sel && sel.value !== model) {
+            sel.value = model;
             sel.dispatchEvent(new Event("change", { bubbles: true }));
           }
         }
@@ -369,8 +375,8 @@ const SCENARIOS = [
       await setEndpoints(["icgi", "brls"]);
       await page.locator('.nav-btn[data-rail="analysis"]').click();
       await page.evaluate(() => {
-        // s12 left both endpoints on loess — restore the default families so
-        // this scenario exercises the logistic/linear guards.
+        // s12 left icgi on gam and brls on loess — restore the default
+        // families so this scenario exercises the logistic/linear guards.
         for (const [ep, model] of [["icgi", "logistic"], ["brls", "linear"]]) {
           const sel = document.querySelector(`select[data-endpoint-model="${ep}"]`);
           if (sel && sel.value !== model) {
@@ -487,6 +493,42 @@ const SCENARIOS = [
       await setSel("advancedColorBy", "sex");
       await setSel("advancedGroupCurves", "sex");
       await setSel("advancedLinetypeBy", "endpoints");
+      await resetSelection();
+      await settle();
+      await clickRow("1200 mg");
+      await settle();
+    }
+  },
+  {
+    // GAM (ADR-0013's FIFTH family, binary-only) — the loess replacement, in
+    // the configuration that made loess misbehave rather than a flattering one.
+    //
+    // icgi alone, unfaceted, grouped AND split by sex: on loess this is the
+    // exact shape whose sex=1 subgroup (N=282, span 0.5) produced a POINT
+    // ESTIMATE of 1.07 and a CI reaching 1.89. The GAM smooths on the logit
+    // scale and inverse-transforms, so every curve and band value here must
+    // land strictly inside (0,1) — that containment is what this baseline
+    // pins, and it is structural, not clamped.
+    //
+    // k is left at the mgcv default (10); the pooled click exercises the GAM
+    // readout fit line and the describeFit equation/edf/λ tooltip.
+    name: "s18-gam-binary-bounded",
+    run: async () => {
+      await setEndpoints(["icgi"]);
+      await page.locator('.nav-btn[data-rail="analysis"]').click();
+      await page.evaluate(() => {
+        const sel = document.querySelector('select[data-endpoint-model="icgi"]');
+        if (sel && sel.value !== "gam") {
+          sel.value = "gam";
+          sel.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+      await setMode("advanced");
+      await setFacets([], []);
+      await setSel("advancedColorBy", "sex");
+      await setSel("advancedGroupCurves", "sex");
+      await setSel("advancedLinetypeBy", "none");
+      await setCb("advancedColorDistShapes", false);
       await resetSelection();
       await settle();
       await clickRow("1200 mg");

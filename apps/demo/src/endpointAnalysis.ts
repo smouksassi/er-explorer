@@ -1,18 +1,49 @@
 import type { DatasetContext, EndpointId } from "./datasetContext";
 import type { PredictionResult } from "@er-explorer/analysis";
 
-/** "emax" is CONTINUOUS-endpoints-only (parked for binary — a nonlinear Emax
- * nested inside a nonlinear logit link needs more data than is typically
- * available; see `.ai/CONTINUE_HERE.md`). The Endpoint Models UI enforces
- * this by omitting the option for binary endpoints — nothing downstream
- * needs to re-check it. */
-export type EndpointAnalysisModel = "logistic" | "linear" | "loess" | "emax";
+export type EndpointAnalysisModel = "logistic" | "linear" | "loess" | "emax" | "gam";
+
+/**
+ * Which families a given endpoint DATA KIND may be fit with — the single
+ * declaration behind both the Endpoint Models option list and `fitForCohort`'s
+ * defensive fall-through. Eligibility is a declared property of the family,
+ * not a chain of conditionals at each use site.
+ *
+ * The two asymmetries are scientific, not incidental:
+ * - **"loess" is continuous-only.** An unconstrained local regression has no
+ *   mechanism to respect [0,1]; on real icgi/AUC subgroups the POINT ESTIMATE
+ *   reaches 1.07 and CI floors reach −0.11. Fine on a continuous scale, wrong
+ *   for a probability. Replaced on binary by "gam".
+ * - **"gam" is binary-only**, and **"emax" continuous-only.** The GAM smooths
+ *   on the logit scale, which only means something for a binomial response;
+ *   Emax is a nonlinear continuous-response curve, and nesting it inside a
+ *   logit link needs far more data than is typically available (parked — see
+ *   `.ai/CONTINUE_HERE.md`).
+ *
+ * Order here is the order the select renders.
+ */
+export const MODELS_BY_DATA_KIND: Record<"binary" | "continuous", readonly EndpointAnalysisModel[]> = {
+  binary: ["logistic", "gam"],
+  continuous: ["linear", "loess", "emax"]
+};
+
+export const MODEL_LABELS: Record<EndpointAnalysisModel, string> = {
+  logistic: "Logistic",
+  linear: "Linear",
+  loess: "Loess",
+  emax: "Emax",
+  gam: "GAM (spline)"
+};
 
 /**
  * The DATA KIND of an endpoint (binary responder vs continuous scale) — decides
  * the painter path (jitter, probability axis, x/N vs mean±CI observed
- * summaries) independently of which MODEL fits the curve (ADR-0013: loess is
- * legal on binary data; the observed layer stays endpoint-TYPE driven).
+ * summaries) independently of which MODEL fits the curve (ADR-0013: the
+ * observed layer stays endpoint-TYPE driven, so a binary endpoint reads as
+ * x/N proportions whether it is fit by Logistic or by GAM).
+ *
+ * Which models are *offered* for a data kind is a separate question — see
+ * {@link MODELS_BY_DATA_KIND}.
  */
 export function endpointDataKind(ds: DatasetContext, endpoint: EndpointId): "binary" | "continuous" {
   return inferDefaultEndpointModel(ds, endpoint) === "logistic" ? "binary" : "continuous";

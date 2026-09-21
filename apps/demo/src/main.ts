@@ -20,6 +20,7 @@ import {
 import { linearAnalysisModel, type LinearParams } from "@er-explorer/model-linear";
 import { fitLoess, predictLoess, predictLoessAt, type LoessFit } from "@er-explorer/model-loess";
 import { fitEmax, predictEmax, predictEmaxAt, describeEmaxFit, type EmaxFit } from "@er-explorer/model-emax";
+import { fitGam, predictGam, predictGamAt, describeGamFit, GAM_DEFAULT_K, type GamFit } from "@er-explorer/model-gam";
 import {
   SVGRenderer,
   GridLayer,
@@ -120,6 +121,8 @@ import { mountSortableChips, mountSortableFieldList } from "./sortableFieldList"
 import {
   type EndpointAnalysisModel,
   type EndpointNormScale,
+  MODELS_BY_DATA_KIND,
+  MODEL_LABELS,
   dataRangeForEndpoint,
   endpointDataKind,
   inferDefaultEndpointModel,
@@ -335,6 +338,14 @@ function loessSettingsFor(endpoint: Endpoint): { span: number; degree: 1 | 2 } {
  * baseline anchor: γ fixed at 1, E0 estimated). */
 function emaxSettingsFor(endpoint: Endpoint): { estimateGamma: boolean; estimateE0: boolean } {
   return state.emaxSettings[endpoint] ?? { estimateGamma: false, estimateE0: true };
+}
+
+/** Per-endpoint GAM tuning (user-owned). `k` is the basis dimension — the
+ * same knob mgcv's `s(x, k=…)` exposes, and GAM's analog of the loess span:
+ * the ceiling on how wiggly the curve may get. The smoothing parameter itself
+ * is chosen by REML, not by the user. Default matches mgcv's own default. */
+function gamSettingsFor(endpoint: Endpoint): { k: number } {
+  return state.gamSettings[endpoint] ?? { k: GAM_DEFAULT_K };
 }
 
 function ensureEndpointAnalysisDefaults(): void {
@@ -584,6 +595,9 @@ interface DemoState {
    * estimateGamma default false (γ fixed at 1); estimateE0 default true —
    * turn off when there is no placebo/SoC anchor (E0 fixed at 0). */
   emaxSettings: Record<string, { estimateGamma: boolean; estimateE0: boolean }>;
+  /** Per-endpoint GAM basis dimension (only read when that endpoint's model is
+   * "gam"). Auto-shrinks to the number of distinct exposures when smaller. */
+  gamSettings: Record<string, { k: number }>;
   endpointNormScales: Record<string, EndpointNormScale>;
   dataFilters: DataFilterRule[];
   compareDistByEndpoint: boolean;
@@ -628,6 +642,7 @@ const state: DemoState = {
   endpointModels: {},
   loessSettings: {},
   emaxSettings: {},
+  gamSettings: {},
   endpointNormScales: {},
   dataFilters: [],
   compareDistByEndpoint: true,
@@ -1220,7 +1235,8 @@ type EndpointFit =
   | { kind: "logistic"; model: LogisticModel }
   | { kind: "linear"; model: LinearParams }
   | { kind: "loess"; model: LoessFit }
-  | { kind: "emax"; model: EmaxFit };
+  | { kind: "emax"; model: EmaxFit }
+  | { kind: "gam"; model: GamFit };
 
 function fitFor(metric: ExposureMetric, endpoint: Endpoint): { fit: EndpointFit; xs: number[]; ys: number[] } {
   return fitForCohort(metric, endpoint, recordsWithEndpoint(endpoint));
@@ -1236,19 +1252,31 @@ function fitForCohort(
   const ys = indices.map((i) => endpointValue(i, endpoint));
   // The FAMILY decides the curve; the painter path is data-kind driven
   // elsewhere (ADR-0013 — no pipeline branching on family beyond this seam).
-  const family = endpointModelFor(endpoint);
+  //
+  // Eligibility is resolved ONCE from the declared table rather than with a
+  // per-family guard bolted onto each branch. A family this endpoint's data
+  // kind does not offer — a stale session's "loess" on a binary endpoint, or
+  // "emax"/"gam" on one whose kind flipped — falls through to that kind's
+  // native family (the table's first entry: logistic / linear). One rule
+  // covering every family, which is also why the loess→GAM replacement needs
+  // no migration path of its own.
+  const requested = endpointModelFor(endpoint);
+  const eligible = MODELS_BY_DATA_KIND[isContinuousEndpoint(endpoint) ? "continuous" : "binary"];
+  const family = eligible.includes(requested) ? requested : eligible[0]!;
   if (family === "loess") {
     const model = fitLoess(xs, ys, loessSettingsFor(endpoint));
     if (!model) throw new Error(`Too few points for loess (${metric}/${endpoint})`);
     return { fit: { kind: "loess", model }, xs, ys };
   }
-  // Emax is continuous-endpoints-only (parked for binary — see
-  // .ai/CONTINUE_HERE.md); a stale session's "emax" on a now-binary endpoint
-  // falls through to logistic rather than attempting continuous math on it.
-  if (family === "emax" && isContinuousEndpoint(endpoint)) {
+  if (family === "emax") {
     const model = fitEmax(xs, ys, emaxSettingsFor(endpoint));
     if (!model) throw new Error(`Too few points/doses for Emax (${metric}/${endpoint})`);
     return { fit: { kind: "emax", model }, xs, ys };
+  }
+  if (family === "gam") {
+    const model = fitGam(xs, ys, gamSettingsFor(endpoint));
+    if (!model) throw new Error(`Too few points/exposures for GAM (${metric}/${endpoint})`);
+    return { fit: { kind: "gam", model }, xs, ys };
   }
   if (family === "linear") {
     const outcome = linearAnalysisModel.fit({ exposures: xs, responses: ys });
@@ -1722,6 +1750,19 @@ function curveFor(fit: EndpointFit, xs: number[], ys: number[], xDomain: [number
     // satisfy without one — loess's inline-literal return type gets this for free.
     return { estimates: preds.map((e) => ({ ...e })), metadata: {} };
   }
+  if (fit.kind === "gam") {
+    // Interval computed on the LINK scale and inverse-transformed, so estimate
+    // and band are inside (0,1) by construction — the structural reason this
+    // family replaced loess on binary endpoints. Nothing here clamps.
+    const preds = predictGam(fit.model, dense);
+    if (state.ciMethod === "none") {
+      return { estimates: preds.map((e) => ({ ...e, lower: NaN, upper: NaN })), metadata: {} };
+    }
+    // Fresh literal copy for the same reason as Emax: a NAMED interface has no
+    // implicit index signature, so GamPrediction[] needs spreading to satisfy
+    // PredictionResult's Array<Record<string, number>>.
+    return { estimates: preds.map((e) => ({ ...e })), metadata: {} };
+  }
   if (fit.kind === "linear") {
     const surface = linearAnalysisModel.predict(fit.model);
     const points = surface.evaluate(dense);
@@ -1772,12 +1813,13 @@ function curveFor(fit: EndpointFit, xs: number[], ys: number[], xDomain: [number
 function describeFit(fit: EndpointFit): {
   equation: string;
   params: Array<{ label: string; value: number; se?: number }>;
-  /** Universal slot (currently only Emax populates it): a family may flag
-   * that a parameter is poorly identified rather than presenting it as an
-   * ordinary point estimate. */
+  /** Universal slot (Emax and GAM populate it): a family may flag that a
+   * parameter is poorly identified — typically pinned to its own search
+   * boundary — rather than presenting it as an ordinary point estimate. */
   warning?: string;
 } {
   if (fit.kind === "emax") return describeEmaxFit(fit.model);
+  if (fit.kind === "gam") return describeGamFit(fit.model);
   if (fit.kind === "loess") {
     const m = fit.model;
     return {
@@ -4539,9 +4581,11 @@ function updateReadout(
             ? predictLoessAt(fit.model, x).estimate
             : fit.kind === "emax"
               ? predictEmaxAt(fit.model, x).estimate
-              : fit.kind === "linear"
-                ? linearFamily.fittedAt(fit.model as never, x)
-                : logisticFamily.fittedAt(fit.model as never, x);
+              : fit.kind === "gam"
+                ? predictGamAt(fit.model, x).estimate
+                : fit.kind === "linear"
+                  ? linearFamily.fittedAt(fit.model as never, x)
+                  : logisticFamily.fittedAt(fit.model as never, x);
         const lineColor = spec?.color.kind === "endpoints" ? endpointColor(endpoint) : groupColor;
         const lineLabel = lineEndpoints.length > 1 || endpoints.length > 1 ? ds.endpointLabel(endpoint) : label;
         const endpointN = part.rows.filter((i) => Number.isFinite(endpointValue(i, endpoint))).length;
@@ -4825,40 +4869,48 @@ function syncEndpointModelsUi(): void {
   endpointModelsListEl.innerHTML = endpoints
     .map((e) => {
       const model = state.endpointModels[e] ?? inferDefaultEndpointModel(ds, e);
-      // Model options follow the DATA KIND (ADR-0013): binary endpoints choose
-      // Logistic or Loess; continuous choose Linear, Loess, or Emax (Emax is
-      // continuous-only — see .ai/CONTINUE_HERE.md). Loess/Emax expose their
-      // user-owned tuning per endpoint.
-      const continuous = endpointDataKind(ds, e) === "continuous";
-      const nativeOption = continuous
-        ? `<option value="linear" ${model === "linear" ? "selected" : ""}>Linear</option>`
-        : `<option value="logistic" ${model === "logistic" ? "selected" : ""}>Logistic</option>`;
-      const emaxOption = continuous
-        ? `<option value="emax" ${model === "emax" ? "selected" : ""}>Emax</option>`
-        : "";
+      // Model options follow the DATA KIND (ADR-0013), read straight off the
+      // declared eligibility table — no per-family conditionals here. Binary:
+      // Logistic, GAM. Continuous: Linear, Loess, Emax. Each family that has
+      // user-owned tuning renders its own controls below.
+      const kind = endpointDataKind(ds, e);
+      const offered = MODELS_BY_DATA_KIND[kind];
+      // A stale/ineligible stored choice must not silently render as the first
+      // option: show what fitForCohort will ACTUALLY fit (the native family).
+      const effectiveModel = offered.includes(model) ? model : offered[0]!;
+      const optionsHtml = offered
+        .map(
+          (m) =>
+            `<option value="${escapeAttr(m)}" ${effectiveModel === m ? "selected" : ""}>${escapeHtml(MODEL_LABELS[m])}</option>`
+        )
+        .join("");
       const loess = loessSettingsFor(e);
       const loessControls =
-        model === "loess"
+        effectiveModel === "loess"
           ? `<span class="loess-controls">span <input type="number" data-loess-span="${escapeAttr(e)}" value="${loess.span}" min="0.1" max="2" step="0.05" style="width:64px" />
              deg <select data-loess-degree="${escapeAttr(e)}" style="width:52px"><option value="1" ${loess.degree === 1 ? "selected" : ""}>1</option><option value="2" ${loess.degree === 2 ? "selected" : ""}>2</option></select></span>`
           : "";
       const emax = emaxSettingsFor(e);
       const emaxControls =
-        model === "emax"
+        effectiveModel === "emax"
           ? `<span class="emax-controls">
                <label><input type="checkbox" data-emax-gamma="${escapeAttr(e)}" ${emax.estimateGamma ? "checked" : ""} /> estimate γ (sigmoidicity)</label>
                <label><input type="checkbox" data-emax-e0="${escapeAttr(e)}" ${emax.estimateE0 ? "checked" : ""} /> estimate E0 (baseline)</label>
              </span>`
           : "";
+      const gam = gamSettingsFor(e);
+      const gamControls =
+        effectiveModel === "gam"
+          ? `<span class="gam-controls">k <input type="number" data-gam-k="${escapeAttr(e)}" value="${gam.k}" min="4" max="30" step="1" style="width:56px" /></span>`
+          : "";
       return `<div class="endpoint-model-row" data-endpoint="${escapeAttr(e)}">
         <span>${escapeHtml(ds.endpointLabel(e))}</span>
         <select data-endpoint-model="${escapeAttr(e)}">
-          ${nativeOption}
-          <option value="loess" ${model === "loess" ? "selected" : ""}>Loess</option>
-          ${emaxOption}
+          ${optionsHtml}
         </select>
         ${loessControls}
         ${emaxControls}
+        ${gamControls}
         ${pooledFitDescriptionHtml(e)}
       </div>`;
     })
@@ -4867,10 +4919,10 @@ function syncEndpointModelsUi(): void {
     sel.onchange = () => {
       const ep = sel.dataset.endpointModel as Endpoint | undefined;
       if (!ep) return;
-      const val =
-        sel.value === "linear" || sel.value === "loess" || sel.value === "emax"
-          ? (sel.value as EndpointAnalysisModel)
-          : "logistic";
+      // Validate against what this endpoint's data kind actually offers, not a
+      // hand-maintained literal list — the same table the options came from.
+      const offered = MODELS_BY_DATA_KIND[endpointDataKind(ds, ep)];
+      const val = offered.find((m) => m === sel.value) ?? offered[0]!;
       state.endpointModels[ep] = val;
       if (isContinuousEndpoint(ep)) ensureNormScaleForEndpoint(ep);
       syncCompareNormUi(selectedEndpoints(), guidedOverlayActive(selectedEndpoints().length));
@@ -4914,6 +4966,17 @@ function syncEndpointModelsUi(): void {
       const ep = inp.dataset.emaxE0 as Endpoint | undefined;
       if (!ep) return;
       state.emaxSettings[ep] = { ...emaxSettingsFor(ep), estimateE0: inp.checked };
+      syncEndpointModelsUi();
+      render();
+    };
+  });
+  endpointModelsListEl.querySelectorAll<HTMLInputElement>("input[data-gam-k]").forEach((inp) => {
+    inp.onchange = () => {
+      const ep = inp.dataset.gamK as Endpoint | undefined;
+      if (!ep) return;
+      const k = Math.round(Number(inp.value));
+      if (!Number.isFinite(k) || k < 4 || k > 30) return;
+      state.gamSettings[ep] = { ...gamSettingsFor(ep), k };
       syncEndpointModelsUi();
       render();
     };
@@ -5548,6 +5611,7 @@ function buildSessionState(): SessionState {
       endpointModels: { ...state.endpointModels },
       loessSettings: { ...state.loessSettings },
       emaxSettings: { ...state.emaxSettings },
+      gamSettings: { ...state.gamSettings },
       endpointNormScales: { ...state.endpointNormScales },
       dataFilters: state.dataFilters.map((r) => ({ ...r, values: [...r.values] })),
       compareDistByEndpoint: state.compareDistByEndpoint,
@@ -5756,6 +5820,10 @@ function loadSessionFromFile(file: File): void {
       const emaxRaw = session.settings["emaxSettings"];
       if (emaxRaw && typeof emaxRaw === "object" && !Array.isArray(emaxRaw)) {
         state.emaxSettings = { ...(emaxRaw as Record<string, { estimateGamma: boolean; estimateE0: boolean }>) };
+      }
+      const gamRaw = session.settings["gamSettings"];
+      if (gamRaw && typeof gamRaw === "object" && !Array.isArray(gamRaw)) {
+        state.gamSettings = { ...(gamRaw as Record<string, { k: number }>) };
       }
       const normRaw = session.settings["endpointNormScales"];
       if (normRaw && typeof normRaw === "object" && !Array.isArray(normRaw)) {

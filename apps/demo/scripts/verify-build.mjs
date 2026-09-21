@@ -19,7 +19,10 @@ function run(label, args) {
 // model-loess/model-emax were missing here (a latent gap: verify-build only
 // worked because a stale dist/ from an earlier manual `pnpm build` stuck
 // around — a fresh checkout would fail `tsc apps/demo` on either import).
-const packages = ["domain", "analysis", "model-linear", "model-loess", "model-emax", "data", "renderer", "session-engine"];
+// NOTE: .github/workflows/deploy-demo.yml keeps its OWN copy of this list.
+// Adding a package here and not there is exactly how CI broke once already —
+// update BOTH.
+const packages = ["domain", "analysis", "model-linear", "model-loess", "model-emax", "model-gam", "data", "renderer", "session-engine"];
 for (const pkg of packages) {
   run(`tsc packages/${pkg}`, ["-p", `packages/${pkg}/tsconfig.build.json`]);
 }

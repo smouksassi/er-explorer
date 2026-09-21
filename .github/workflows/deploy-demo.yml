@@ -58,6 +58,8 @@ jobs:
         run: node_modules/.bin/tsc -p packages/model-loess/tsconfig.build.json
       - name: Build packages/model-emax
         run: node_modules/.bin/tsc -p packages/model-emax/tsconfig.build.json
+      - name: Build packages/model-gam
+        run: node_modules/.bin/tsc -p packages/model-gam/tsconfig.build.json
       - name: Build packages/data
         run: node_modules/.bin/tsc -p packages/data/tsconfig.build.json
 

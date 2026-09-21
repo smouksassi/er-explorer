@@ -47,6 +47,9 @@ importers:
       '@er-explorer/model-emax':
         specifier: workspace:*
         version: link:../../packages/model-emax
+      '@er-explorer/model-gam':
+        specifier: workspace:*
+        version: link:../../packages/model-gam
       '@er-explorer/model-linear':
         specifier: workspace:*
         version: link:../../packages/model-linear

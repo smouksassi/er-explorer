@@ -109,7 +109,7 @@ family) + CI fix + ICGIEMAX synthetic endpoint:** `f9bf215`→`99a1e45`.
   smooth, ggquickeda, `nls()` split by WT bin) — all converged cleanly,
   confirming it's genuinely well-behaved, unlike BRLS.
 
-### IN PROGRESS: binary loess → GAM replacement (engine BUILT, not yet wired)
+### LANDED: binary loess → GAM replacement (engine + integration, 2026-09-21)
 
 **The problem, documented with real numbers (2026-09-20):** the current
 `model-loess` package fits a plain, unconstrained local regression on
@@ -227,26 +227,47 @@ interior λ, CI range [0.0288, 0.9780]. Note λ is reported on each
 implementation's own penalty scaling and need not match mgcv's `sp` digit for
 digit — **the curve and the edf are the comparison that matters.**
 
-**NEXT PHASE — integration. Can and should drop back to Sonnet.** The core
-algorithm (the part that genuinely warranted Opus) is done, tested, and frozen
-behind a small API: `fitGam` / `predictGam` / `predictGamAt` / `describeGamFit`
-plus the `GamFit` type. Integration is ordinary wiring against that surface and
-does NOT require re-reading or re-deriving the spline/REML internals — treat
-`packages/model-gam/src/gam.ts` as a black box with a stable contract. Remaining
-work, none of it started:
-1. Wire the `"gam"` kind into `EndpointFit` / `endpointAnalysis.ts` / the
-   Endpoint Models UI (mirror how `model-emax` was added — adapter only, zero
-   pipeline changes, per ADR-0013).
-2. `describeFit(fit)` in `apps/demo/src/main.ts`: add the `"gam"` branch,
-   surfacing `describeGamFit`'s equation/params/warning.
-3. REMOVE Loess from binary endpoints' options (decision 3 above). Stale
-   `"loess"` on a binary endpoint falls through to logistic — no migration path.
-4. Add `model-gam` to BOTH `apps/demo/scripts/verify-build.mjs` AND
-   `.github/workflows/deploy-demo.yml`. These keep SEPARATE package lists and
-   the workflow one has already broken CI once — update both or CI fails on a
-   fresh checkout.
-5. Freeze the "before" binary-loess snapshot (s18) BEFORE removing loess, then
-   add a snapshot pinning the constrained (0,1) shape after.
+**INTEGRATION LANDED 2026-09-21.** GAM is the FIFTH ADR-0013 family and the
+third consecutive confirmation that adding one needs an adapter only: the whole
+18-scenario snapshot battery moved in exactly ONE place (s12's binary panel,
+which is the loess→GAM change itself). s13–s17 were byte-identical.
+
+- `EndpointFit` gained `{ kind: "gam"; model: GamFit }`; `curveFor`,
+  `describeFit`, and the readout's `fitAt` each gained one branch.
+- **Eligibility is now a DECLARATION, not a chain of conditionals.**
+  `MODELS_BY_DATA_KIND` in `apps/demo/src/endpointAnalysis.ts` is the single
+  source for both the Endpoint Models option list and `fitForCohort`'s
+  fall-through: `binary: [logistic, gam]`, `continuous: [linear, loess, emax]`.
+  This REPLACED three separate ad-hoc guards (loess unguarded, emax with its
+  own `isContinuousEndpoint` check, the select's ternaries). An ineligible
+  stored choice resolves to the kind's native family — the table's first
+  entry — which is why the loess→GAM swap needs no migration path. Pinned by
+  `apps/demo/src/modelEligibility.test.ts`.
+- User-facing tuning: `k` (basis dimension), same per-endpoint pattern as loess
+  span/degree and the Emax toggles; `gamSettings` persists in the session.
+  λ itself is REML-selected, not user-set — deliberately.
+- Snapshots: s12 renamed to `s12-smoothers-binary-gam-continuous-loess`
+  (GAM on icgi, loess on brls — one smoother per data kind; the baseline was
+  `git mv`'d so the before/after reads as a content diff, not delete+add), and
+  s18 `s18-gam-binary-bounded` added as the focused containment case.
+
+**Measured before/after on real icgi/AUC (this is the acceptance evidence):**
+
+| cohort | loess span .75 | loess span .50 | GAM k=10 |
+|---|---|---|---|
+| Full N=704 | CI to **1.328** | CI **−0.008**–1.377 | est .441–.905, CI .208–.995 |
+| SEX=1 N=282 | est to **1.067** | est to **1.071** | est .301–.99999762, CI 7.8e-6–1.0 |
+| SEX=2 N=422 | CI to **1.076** | CI to **1.272** | est .518–.898, CI .442–.983 |
+
+Loess leaves [0,1] in every cohort; GAM in none.
+
+**One honest caveat, do not "fix" it by clamping:** on SEX=1 the upper CI
+prints as exactly `1`. That is float64 saturation of `logistic(η)` for large η,
+not an out-of-range value — the estimate there is 0.99999762 and the lower
+bound 7.8e-6. Cause: the top decile of that cohort's exposure holds **N=1**
+(a single event at AUC 342.7), so the band correctly says "no information out
+here." A CI spanning nearly (0,1) over an unsupported region is the right
+answer; 1.071 as a POINT ESTIMATE was not.
 
 **Vision item newly logged (2026-09-20, not the current work item — do not
 conflate): time-to-event / Kaplan–Meier is part of the long-term roadmap.**
@@ -259,9 +280,10 @@ start from zero. Raise it explicitly once the binary-GAM replacement ships.
 
 **Additional tests to run before/while building (per the user's explicit
 ask "any additional tests needed"):**
-- Snapshot the CURRENT (soon-to-be-replaced) binary-loess visual output on
-  icgi as an explicit "before" baseline (a new scenario, e.g. s18) BEFORE
-  removing it, so the replacement has a clean diff to review.
+- ~~Snapshot the CURRENT binary-loess output as an explicit "before"~~ — DONE
+  via the `git mv`'d s12 baseline (content diff, reviewed leaf-by-leaf: only
+  `readouts[0]` and `stacks[0].svg` moved; the continuous/loess panel was
+  byte-identical) plus the new s18.
 - ~~R cross-check recipe to prepare~~ — DONE, see the fixture above. The basis
   was pinned to `bs="cr"` with mgcv-exact knot placement, the same way
   `surface="direct"` was pinned down for continuous loess.
